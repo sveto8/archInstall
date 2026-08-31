@@ -135,37 +135,43 @@ fi
 
 log "Detecting the LUKS2 device..."
 
+command -v cryptsetup >/dev/null || die "cryptsetup is not installed."
+
 # Walk backwards from the root filesystem to the physical device.
 ROOT_BLK="$(findmnt -n -o SOURCE / | sed 's/\[.*\]//')"
 
 LUKS_DEVICE=""
+MAPPER_NAME=""
 
 if [[ "$ROOT_BLK" == /dev/mapper/* ]]; then
-    # Typical case: /dev/mapper/cryptroot -> underlying LUKS partition.
-    PKNAME="$(lsblk -no PKNAME "$ROOT_BLK" 2>/dev/null || true)"
-    if [[ -n "$PKNAME" ]]; then
-        LUKS_DEVICE="/dev/$PKNAME"
-    fi
+    MAPPER_NAME="${ROOT_BLK#/dev/mapper/}"
+elif [[ "$ROOT_BLK" == /dev/dm-* ]]; then
+    MAPPER_NAME="$(lsblk -no NAME "$ROOT_BLK" 2>/dev/null | head -n1)"
 fi
 
-# Fallback: inspect the whole block-device tree.
-if [[ -z "$LUKS_DEVICE" ]]; then
-    while read -r TYPE NAME; do
+# Primary: ask cryptsetup directly for the backing device of this mapping.
+# This is more reliable than lsblk's PKNAME column, which some lsblk
+# versions fail to populate when queried for a single device path
+# instead of the full dependency tree.
+if [[ -n "$MAPPER_NAME" ]] && cryptsetup status "$MAPPER_NAME" >/dev/null 2>&1; then
+    LUKS_DEVICE="$(cryptsetup status "$MAPPER_NAME" | awk -F': *' '/^[[:space:]]*device:/{print $2}')"
+fi
+
+# Fallback: walk the FULL lsblk dependency tree in one call (not a
+# per-device query) and read PKNAME straight out of that table.
+if [[ -z "$LUKS_DEVICE" || ! -b "$LUKS_DEVICE" ]]; then
+    LUKS_DEVICE=""
+    while read -r NAME TYPE PKNAME; do
         [[ "$TYPE" == "crypt" ]] || continue
-        if [[ -n "$NAME" ]]; then
-            CANDIDATE="$(lsblk -no PKNAME "/dev/$NAME" 2>/dev/null || true)"
-            if [[ -n "$CANDIDATE" ]]; then
-                LUKS_DEVICE="/dev/$CANDIDATE"
-                break
-            fi
-        fi
-    done < <(lsblk -rno TYPE,NAME)
+        [[ -z "$MAPPER_NAME" || "$NAME" == "$MAPPER_NAME" ]] || continue
+        [[ -n "$PKNAME" ]] || continue
+        LUKS_DEVICE="/dev/$PKNAME"
+        break
+    done < <(lsblk -rno NAME,TYPE,PKNAME)
 fi
 
 [[ -n "$LUKS_DEVICE" && -b "$LUKS_DEVICE" ]] || \
-    die "Could not determine the LUKS backing device."
-
-command -v cryptsetup >/dev/null || die "cryptsetup is not installed."
+    die "Could not determine the LUKS backing device. Try: cryptsetup status ${MAPPER_NAME:-<mapper-name>}"
 
 LUKS_UUID="$(cryptsetup luksUUID "$LUKS_DEVICE")"
 ROOT_BTRFS_UUID="$(findmnt -n -o UUID /)"
