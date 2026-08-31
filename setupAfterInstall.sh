@@ -418,7 +418,7 @@ cat >> "$MKINITCPIO_CONF" <<'EOF'
 # Added by setup-btrfs-snapper.sh
 # systemd-based initramfs + LUKS2 + Plymouth
 # ============================================================
-HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-plymouth sd-encrypt filesystems fsck)
+HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block plymouth sd-encrypt filesystems fsck)
 EOF
 
 # ---------------- GRUB CONFIG ----------------
