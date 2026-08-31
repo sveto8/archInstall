@@ -29,7 +29,8 @@ ESP_SIZE="1GiB"
 BOOT_SIZE="2GiB"                # rest of the disk goes to the LUKS/Btrfs partition
 HOSTNAME="monarch"
 TIMEZONE="Europe/Zagreb"
-LOCALE="en_US.UTF-8"
+LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
+LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the system
 KEYMAP="us"
 MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
 
@@ -273,6 +274,14 @@ info "All passwords set. The rest of the install runs unattended from here."
 
 log "Configuring the new system (chroot)..."
 
+# Build locale.gen commands for every locale in $LOCALES, fully expanded
+# here (not inside the heredoc) to avoid variable-scoping issues across
+# the chroot boundary.
+LOCALE_GEN_CMDS=""
+for loc in "${LOCALES[@]}"; do
+    LOCALE_GEN_CMDS+="grep -q '^${loc} UTF-8' /etc/locale.gen || { sed -i 's/^#${loc} UTF-8/${loc} UTF-8/' /etc/locale.gen; grep -q '^${loc} UTF-8' /etc/locale.gen || echo '${loc} UTF-8' >> /etc/locale.gen; }; "
+done
+
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
@@ -280,7 +289,7 @@ echo "$HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 hwclock --systohc
 
-sed -i "s/^#${LOCALE}/${LOCALE}/" /etc/locale.gen || echo "${LOCALE} UTF-8" >> /etc/locale.gen
+${LOCALE_GEN_CMDS}
 locale-gen
 echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
