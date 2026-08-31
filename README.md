@@ -24,6 +24,35 @@ LUKS2
 
 `/home` is intentionally **not** managed by Snapper — only `/` is snapshotted.
 
+## Getting the scripts onto the Arch ISO
+
+The live environment has network access (`iwctl` for Wi-Fi, wired usually
+works out of the box via dhcpcd). Download the raw file directly — not
+the GitHub web page URL (`github.com/.../blob/...`), which returns HTML,
+not the script:
+
+```bash
+curl -O https://raw.githubusercontent.com/<user>/<repo>/main/archInstall.sh
+chmod +x archInstall.sh
+./archInstall.sh
+```
+
+Rule of thumb: `github.com` → `raw.githubusercontent.com`, drop `/blob/`,
+keep `branch/path` as-is.
+
+If the repo is private, add an auth header with a
+[personal access token](https://github.com/settings/tokens) (never paste
+real tokens into chat, logs, or commit them — treat a leaked token as
+compromised and revoke it immediately):
+
+```bash
+curl -H "Authorization: token <GITHUB_PAT>" \
+     -O https://raw.githubusercontent.com/<user>/<repo>/main/archInstall.sh
+```
+
+If the repo is public (recommended for this use case — nothing in these
+scripts is sensitive), no auth header is needed.
+
 ## Order of operations
 
 ### 1. `archInstall.sh` — from the Arch ISO
