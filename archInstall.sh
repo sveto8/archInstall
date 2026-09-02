@@ -40,7 +40,7 @@ log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
 info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
 warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
 die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
-error() { printf '\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2 }
+error() { printf '\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; }
 
 trap 'die "Failed at line $LINENO."' ERR
 
