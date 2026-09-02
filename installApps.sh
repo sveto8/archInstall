@@ -79,6 +79,10 @@ AUR_PACKAGES=(
 
 # snx-rs (Check Point VPN client) isn't needed on every machine and is a
 # slow AUR build (Rust), so it's opt-in rather than installed by default.
+
+echo
+read "Install additional apps"
+
 echo
 read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " ANSWER
 if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
