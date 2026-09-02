@@ -537,10 +537,10 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
     [[ -n "\${HYPR_HOME}" ]] || HYPR_HOME="/root"
 
     if ! id -u "\${HYPR_USER}" >/dev/null 2>&1; then
-        info "User \${HYPR_USER} not found in chroot. Skipping Hyprland config."
+        echo "User \${HYPR_USER} not found in chroot. Skipping Hyprland config."
         :
     elif [[ ! -d "\${HYPR_HOME}" ]]; then
-        warn "Home directory \${HYPR_HOME} does not exist for \${HYPR_USER}. Skipping Hyprland config."
+        echo "Home directory \${HYPR_HOME} does not exist for \${HYPR_USER}. Skipping Hyprland config."
         :
     else
         install -d -m 0755 -o "\${HYPR_USER}" -g "\${HYPR_USER}" \
@@ -965,11 +965,9 @@ hl.on("hyprland.start", function()
 end)
 HYPRIDLE_AUTOSTART_EOF
 
-        # Screenshot directory.
         install -d -m 0755 -o "\${HYPR_USER}" -g "\${HYPR_USER}" \
             "\${HYPR_HOME}/Pictures/Screenshots"
 
-        # Generate standard XDG user directories.
         if command -v xdg-user-dirs-update >/dev/null 2>&1; then
             runuser -u "\${HYPR_USER}" -- xdg-user-dirs-update || true
         fi
@@ -981,8 +979,8 @@ HYPRIDLE_AUTOSTART_EOF
             "\${HYPR_HOME}/.config/hypridle" \
             "\${HYPR_HOME}/.config/hyprlock"
 
-        info "Hyprland default configuration installed for \${HYPR_USER}."
-        info "Config: \${HYPR_HOME}/.config/hypr/hyprland.lua"
+        echo "Hyprland default configuration installed for \${HYPR_USER}."
+        echo "Config: \${HYPR_HOME}/.config/hypr/hyprland.lua"
     fi
 fi
 
