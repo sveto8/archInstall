@@ -34,7 +34,8 @@ the GitHub web page URL (`github.com/.../blob/...`), which returns HTML,
 not the script:
 
 ```bash
-curl -O https://raw.githubusercontent.com/<user>/<repo>/main/archInstall.sh
+curl -O https://raw.githubusercontent.com/sveto8/archInstallAndConfigureScripts
+/main/archInstall.sh
 chmod +x archInstall.sh
 ./archInstall.sh
 ```
@@ -49,7 +50,8 @@ compromised and revoke it immediately):
 
 ```bash
 curl -H "Authorization: token <GITHUB_PAT>" \
-     -O https://raw.githubusercontent.com/<user>/<repo>/main/archInstall.sh
+     -O https://raw.githubusercontent.com/sveto8/archInstallAndConfigureScripts
+/main/archInstall.sh
 ```
 
 If the repo is public (recommended for this use case — nothing in these
