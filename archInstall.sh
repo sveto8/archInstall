@@ -26,7 +26,7 @@ set -o errtrace
 # ---------------- CONFIGURATION (edit before running) ----------------
 
 ESP_SIZE="1GiB"
-BOOT_SIZE="2GiB"                # rest of the disk goes to the LUKS/Btrfs partition
+BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
 HOSTNAME="monarch"
 TIMEZONE="Europe/Zagreb"
 LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
