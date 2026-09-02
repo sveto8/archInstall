@@ -210,6 +210,8 @@ log "Formatting ESP and /boot..."
 
 mkfs.fat -F32 -n EFI "$ESP"
 mkfs.ext4 -F -L boot "$BOOTPART"
+sync
+udevadm settle
 
 # ---------------- LUKS2 ----------------
 
@@ -340,8 +342,12 @@ mkinitcpio -P
 
 sed -i -E 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet"/' /etc/default/grub
 
-grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=GRUB --recheck
+grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck
 grub-mkconfig -o /boot/grub/grub.cfg
+
+if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
+    echo "==> WARNING: /boot/grub/grub.cfg has no menuentry -- GRUB will likely drop to a rescue shell on boot." >&2
+fi
 
 if [[ -n "${DM_SERVICE}" ]]; then
     systemctl enable ${DM_SERVICE}
