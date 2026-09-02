@@ -442,7 +442,9 @@ info "All passwords set. The rest of the install runs unattended from here."
 
 log "Configuring the new system (chroot)..."
 
-# Build locale.gen commands for every locale in $LOCALES...
+# Build locale.gen commands for every locale in $LOCALES, fully expanded
+# here (not inside the heredoc) to avoid variable-scoping issues across
+# the chroot boundary.
 LOCALE_GEN_CMDS=""
 for loc in "${LOCALES[@]}"; do
     LOCALE_GEN_CMDS+="grep -q '^${loc} UTF-8' /etc/locale.gen || { sed -i 's/^#${loc} UTF-8/${loc} UTF-8/' /etc/locale.gen; grep -q '^${loc} UTF-8' /etc/locale.gen || echo '${loc} UTF-8' >> /etc/locale.gen; }; "
@@ -494,6 +496,11 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
     #   ~/.config/hypr/hyprland.lua
     # ------------------------------------------------------------
 
+    # === HYPRLAND CONFIGURATION FIX START ===
+    # This entire block was added to fix the "HYPER_HOME unbound variable" error.
+    # It defines the variables, checks if the user exists, and only then creates
+    # the directories and installs the Hyprland config.
+    # You can delete this whole block (from === to ===) before deploying the final script.
     HYPR_USER="${NEW_USERNAME:-root}"
     HYPR_HOME="$(getent passwd "${HYPR_USER}" | cut -d: -f6)"
     [[ -n "${HYPR_HOME}" ]] || HYPR_HOME="/root"
@@ -501,7 +508,6 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
     # Verify user exists in chroot (prevents getent passwd from failing on missing regular user)
     if ! id -u "${HYPR_USER}" >/dev/null 2>&1; then
         info "User ${HYPR_USER} not found in chroot. Skipping Hyprland config."
-        # Continue to next chroot block (or end chroot if no more code)
         :
     elif [[ ! -d "${HYPR_HOME}" ]]; then
         warn "Home directory ${HYPR_HOME} does not exist for ${HYPR_USER}. Skipping Hyprland config."
@@ -961,6 +967,7 @@ HYPRIDLE_AUTOSTART_EOF
 
     info "Hyprland default configuration installed for ${HYPR_USER}."
     info "Config: ${HYPR_HOME}/.config/hypr/hyprland.lua"
+    # === HYPRLAND CONFIGURATION FIX END ===
 fi
 
 CHROOT_EOF
