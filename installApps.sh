@@ -51,6 +51,7 @@ fi
 # AUR_PACKAGES  -> yay (not in official repos)
 
 REPO_PACKAGES=(
+    jdk11-openjdk
     guake
     terminator
     meld
