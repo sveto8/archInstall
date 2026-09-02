@@ -1,12 +1,14 @@
-# Arch Linux: LUKS2 + Btrfs + Snapper install scripts
+# Arch Linux: LUKS2 + Btrfs + Snapper + apps install scripts
 
-Two scripts that together take a machine from an Arch ISO boot to a fully
-configured, encrypted, snapshotted Arch install with GRUB, grub-btrfs,
-Snapper and (optionally) a Plymouth boot theme.
+Three scripts that together take a machine from an Arch ISO boot to a
+fully configured, encrypted, snapshotted Arch install with GRUB,
+grub-btrfs, Snapper, a Plymouth boot theme, and a personal application
+set.
 
 ```
 archInstall.sh        Phase 0 — run from the Arch ISO live environment
 setupAfterInstall.sh  Phase 1 — run on the new system, after first boot
+installApps.sh         Phase 2 — run as your regular user, once at the desktop
 ```
 
 ## Resulting layout
@@ -116,24 +118,71 @@ equivalent manual install) already produced the layout above.
 12. Prints a final status report (filesystems, subvolumes, LUKS status,
     Snapper config/snapshots, timers, Plymouth theme, GRUB cmdline)
 
-## Requirements between the two scripts
+### 3. `installApps.sh` — at the desktop, as your regular user
+
+Run this **as your normal user, not root/sudo** — `makepkg`/`yay` refuse
+to run as root. It installs applications on top of the base system from
+the two scripts above; it doesn't touch partitioning, LUKS, Snapper, or
+GRUB at all.
+
+1. Refuses to run as root; checks `sudo` access
+2. Bootstraps `yay` if missing (`base-devel` + `git` via `pacman`, then
+   `yay` itself built from AUR with `makepkg`)
+3. Installs official-repo packages via plain `pacman`, and AUR-only
+   packages via `yay` — current list:
+   - **Repo:** `guake`, `terminator`, `meld`, `qmmp`, `jdk11-openjdk`,
+     `intellij-idea-community-edition`, `code` (open-source VS Code
+     build, no MS branding/telemetry), `remmina`, `kolourpaint`,
+     `mission-center`, `hplip` + `cups` + `system-config-printer`
+     (HP/general printer support)
+   - **AUR:** `ferdium-bin`, `google-chrome`, `sublime-text-4`,
+     `peazip-gtk2`, `wps-office` + `ttf-wps-fonts` (OpenOffice
+     replacement — OpenOffice itself is unmaintained upstream and its
+     AUR package has a history of maintainer issues), `snx-rs` (Check
+     Point VPN client, Rust — slow to build, this is expected)
+4. Prints the current package list, then asks for any extra packages
+   (space-separated) to add for this run
+5. Every package — list-defined or typed in at step 4 — is checked with
+   `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
+   skipped with a warning instead of aborting the whole run. Genuine
+   install failures (found, but errored) are also collected and
+   reported, not fatal to the rest of the run
+6. Sets OpenJDK 11 as the default JVM (`archlinux-java set`)
+7. Enables the CUPS printing service
+8. Final summary: what installed, what was skipped/failed, and manual
+   next steps (`hp-setup` for the actual printer, F5 VPN — no package
+   exists for this, download it from your organization's portal)
+
+You can re-run `installApps.sh` any time later to add more software —
+it's idempotent (`--needed` skips already-installed packages) and asks
+for extras every time.
+
+## Requirements between the scripts
 
 `setupAfterInstall.sh` assumes the exact layout `archInstall.sh`
 produces (mountpoints, subvolume names, LUKS2, `cryptroot` mapper name).
 If you set up the base system manually instead of using
 `archInstall.sh`, make sure it matches that layout before running
-`setupAfterInstall.sh`.
+`setupAfterInstall.sh`. `installApps.sh` has no such dependency — it
+only needs a working `pacman` + `sudo`, so it also works on a machine
+that wasn't set up with the other two scripts.
 
 ## Notes
 
-- Both scripts are interactive and ask for confirmation before any
-  destructive action (`WIPE` typed confirmation in `archInstall.sh`,
-  `[y/N]` in `setupAfterInstall.sh`).
-- Both scripts back up what they change and are safe to re-read before
-  running (`bash -n script.sh` for a syntax-only check).
+- `archInstall.sh` and `setupAfterInstall.sh` are interactive and ask
+  for confirmation before any destructive action (`WIPE` typed
+  confirmation in `archInstall.sh`, `[y/N]` in `setupAfterInstall.sh`).
+  `installApps.sh` doesn't touch disks/boot config at all, so it only
+  confirms the package list, not a destructive action.
+- All three scripts back up what they change (where relevant) and are
+  safe to re-read before running (`bash -n script.sh` for a
+  syntax-only check).
 - CPU microcode (`amd-ucode` / `intel-ucode`) is auto-detected from
-  `/proc/cpuinfo` in both scripts — useful if you run these on more than
-  one machine with different CPU vendors.
+  `/proc/cpuinfo` in `archInstall.sh` and `setupAfterInstall.sh` —
+  useful if you run these on more than one machine with different CPU
+  vendors.
 - Disk selection in `archInstall.sh` is interactive (`lsblk` listing +
   prompt) — nothing is hardcoded, so the same script works whether the
   disk is `/dev/sda`, `/dev/nvme0n1`, `/dev/vda`, etc.
+- `installApps.sh` must run as your regular user (not root/sudo) —
+  `makepkg` and `yay` both refuse to build AUR packages as root.
