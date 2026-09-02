@@ -195,8 +195,146 @@ case "$DE_CHOICE" in
         fi
         DM_SERVICE="sddm.service"
         ;;
-    *)
+    3)
+        DE_NAME="Hyprland ($INSTALL_MODE)"
+
+        if [[ "$INSTALL_MODE" == "full" ]]; then
+            DE_PACKAGES=(
+                # --- Hyprland ---
+                hyprland
+
+                # --- Desktop / UI ---
+                waybar
+                rofi-wayland
+                swaybg
+                hyprpaper
+                hyprlock
+                hypridle
+
+                # --- Terminal ---
+                kitty
+
+                # --- File manager ---
+                thunar
+                thunar-archive-plugin
+                thunar-volman
+
+                # --- Network ---
+                network-manager-applet
+
+                # --- Audio ---
+                pavucontrol
+                pipewire
+                pipewire-alsa
+                pipewire-pulse
+                wireplumber
+
+                # --- Portals ---
+                xdg-desktop-portal
+                xdg-desktop-portal-hyprland
+                xdg-desktop-portal-gtk
+
+                # --- Authentication / permissions ---
+                polkit
+                polkit-gnome
+
+                # --- Notifications ---
+                mako
+
+                # --- Clipboard ---
+                wl-clipboard
+
+                # --- Screenshots ---
+                grim
+                slurp
+
+                # --- Brightness ---
+                brightnessctl
+
+                # --- Bluetooth ---
+                blueman
+
+                # --- Fonts / icons ---
+                ttf-dejavu
+                ttf-liberation
+                noto-fonts
+                noto-fonts-emoji
+
+                # --- Login manager ---
+                sddm
+            )
+        else
+            DE_PACKAGES=(
+                # --- Core Hyprland ---
+                hyprland
+                waybar
+                rofi-wayland
+                kitty
+
+                # --- File manager ---
+                thunar
+
+                # --- Network ---
+                network-manager-applet
+
+                # --- Audio ---
+                pipewire
+                pipewire-pulse
+                wireplumber
+                pavucontrol
+
+                # --- Portals ---
+                xdg-desktop-portal
+                xdg-desktop-portal-hyprland
+                xdg-desktop-portal-gtk
+
+                # --- Authentication ---
+                polkit
+                polkit-gnome
+
+                # --- Notifications ---
+                mako
+
+                # --- Clipboard ---
+                wl-clipboard
+
+                # --- Screenshots ---
+                grim
+                slurp
+
+                # --- Brightness ---
+                brightnessctl
+
+                # --- Bluetooth ---
+                blueman
+
+                # --- Fonts ---
+                noto-fonts
+                noto-fonts-emoji
+
+                # --- Login manager ---
+                sddm
+            )
+        fi
+
+        DM_SERVICE="sddm.service"
+        ;;
+
+    4)
         DE_NAME="none"
+        ;;
+
+    *)
+        warn "Invalid desktop environment choice. Using GNOME."
+        DE_NAME="GNOME ($INSTALL_MODE)"
+
+        DE_PACKAGES=(
+            gnome
+            gnome-tweaks
+            gdm
+        )
+
+        DM_SERVICE="gdm.service"
         ;;
 esac
 info "Desktop environment: $DE_NAME"
