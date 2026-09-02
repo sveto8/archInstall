@@ -66,9 +66,26 @@ read -r -p "Disk to install onto (e.g. /dev/sda, /dev/nvme0n1): " DEVICE
 [[ -n "$DEVICE" ]] || die "No disk entered."
 [[ -b "$DEVICE" ]] || die "$DEVICE is not a block device."
 
-# Refuse to run against something that is currently mounted (e.g. the live USB itself).
+# Refuse to run against something that is currently mounted (e.g. the live USB itself),
+# but offer to clean up leftover mounts from a previous, interrupted run of this script.
 if lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -q .; then
-    die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
+    warn "$DEVICE (or a partition on it) has active mounts, possibly left over from a previous run:"
+    lsblk "$DEVICE"
+    echo
+    read -r -p "Unmount everything under $DEVICE and continue? [y/N] " UNMOUNT_ANSWER
+    if [[ "$UNMOUNT_ANSWER" =~ ^[Yy]$ ]]; then
+        log "Unmounting leftover mounts..."
+        umount -R /mnt 2>/dev/null || true
+        cryptsetup close cryptroot 2>/dev/null || true
+        sleep 1
+        STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -v '^$' || true)"
+        if [[ -n "$STILL_MOUNTED" ]]; then
+            die "Could not fully unmount $DEVICE. Unmount manually (umount -R /mnt; cryptsetup close cryptroot) and re-run."
+        fi
+        info "Unmounted and closed cryptroot successfully."
+    else
+        die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
+    fi
 fi
 
 # partition suffix: /dev/nvme0n1 -> nvme0n1p1, /dev/sda -> sda1
@@ -180,7 +197,12 @@ sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot"      "$DEVICE"
 sgdisk -n3:0:0             -t3:8309 -c3:"cryptroot" "$DEVICE"
 
 partprobe "$DEVICE"
-sleep 2
+udevadm settle
+sleep 3
+
+for p in "$ESP" "$BOOTPART" "$LUKSPART"; do
+    [[ -b "$p" ]] || die "$p does not exist yet -- the kernel may not have re-read the partition table. Try running 'partprobe $DEVICE' manually, then re-run this script."
+done
 
 # ---------------- FORMAT ESP + /boot ----------------
 
@@ -193,8 +215,12 @@ mkfs.ext4 -F -L boot "$BOOTPART"
 
 log "Creating LUKS2 container on $LUKSPART..."
 info "You will be prompted for a passphrase (twice: format + open)."
+info "When asked to confirm, type YES in capital letters exactly."
 
-cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"
+until cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; do
+    warn "luksFormat did not complete (wrong confirmation, passphrase mismatch, etc). Try again."
+done
+
 cryptsetup open "$LUKSPART" cryptroot
 
 LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
@@ -304,7 +330,7 @@ systemctl enable NetworkManager
 
 # Minimal systemd-based initramfs so the system can boot and unlock LUKS.
 # setup-btrfs-snapper.sh will overwrite this HOOKS line with the full
-# version (adds sd-plymouth) after first boot.
+# version (adds the plymouth hook) after first boot.
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
 cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
 
