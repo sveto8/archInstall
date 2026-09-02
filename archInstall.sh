@@ -142,6 +142,21 @@ else
     MAKE_SUDO="no"
 fi
 
+# ---------------- ROOT PASSWORD ----------------
+#
+# No separate question here: if a sudo-enabled user was just created,
+# root stays locked automatically (use sudo instead). A root password
+# is only requested if there's no sudo user, since otherwise nothing
+# could log into the system at all.
+
+if [[ -n "$NEW_USERNAME" && "$MAKE_SUDO" == "yes" ]]; then
+    SET_ROOT_PASSWORD="no"
+    info "Sudo-enabled user created -- root account stays locked (no root password)."
+else
+    SET_ROOT_PASSWORD="yes"
+    info "No sudo-enabled user configured -- you'll be asked to set a root password so you can still log in."
+fi
+
 # ---------------- DESKTOP ENVIRONMENT ----------------
 
 echo
@@ -291,10 +306,14 @@ if [[ -n "${NEW_USERNAME}" ]]; then
     done
 fi
 
-log "Set the root password now:"
-until arch-chroot /mnt passwd; do
-    echo "Passwords did not match or were rejected -- try again."
-done
+if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
+    log "Set the root password now:"
+    until arch-chroot /mnt passwd; do
+        echo "Passwords did not match or were rejected -- try again."
+    done
+else
+    info "Skipping root password as requested -- root account stays locked."
+fi
 
 info "All passwords set. The rest of the install runs unattended from here."
 
