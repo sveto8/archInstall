@@ -327,27 +327,27 @@ info "Desktop environment: $DE_NAME"
 log "Wiping and partitioning $DEVICE..."
 
 echo
-echo "==> Brisanje postojećih filesystem potpisa..."
+echo "==> Wiping existing filesystem signatures..."
 wipefs -af "$DEVICE"
 
 echo
-echo "==> Brisanje postojeće GPT/MBR particijske tablice..."
+echo "==> Wiping existing GPT/MBR partition table..."
 sgdisk --zap-all "$DEVICE"
 
 echo
-echo "==> Kreiranje EFI particije (${ESP_SIZE})..."
+echo "==> Creating EFI partition (${ESP_SIZE})..."
 sgdisk -n1:0:+${ESP_SIZE} -t1:ef00 -c1:"EFI" "$DEVICE"
 
 echo
-echo "==> Kreiranje boot particije (${BOOT_SIZE})..."
+echo "==> Creating boot partition (${BOOT_SIZE})..."
 sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot" "$DEVICE"
 
 echo
-echo "==> Kreiranje root particije (ostatak diska)..."
+echo "==> Creating root partition (remaining disk space)..."
 sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
 
 echo
-echo "==> Particioniranje diska završeno."
+echo "==> Disk partitioning completed."
 
 #wipefs -af "$DEVICE"
 #sgdisk --zap-all "$DEVICE"
