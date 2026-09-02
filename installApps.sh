@@ -83,7 +83,6 @@ AUR_PACKAGES=(
 echo
 read "Install additional apps"
 echo
-echo
 read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " ANSWER
 if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(snx-rs)
