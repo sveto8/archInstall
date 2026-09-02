@@ -138,18 +138,20 @@ GRUB at all.
    - **AUR:** `ferdium-bin`, `google-chrome`, `sublime-text-4`,
      `peazip-gtk2`, `wps-office` + `ttf-wps-fonts` (OpenOffice
      replacement — OpenOffice itself is unmaintained upstream and its
-     AUR package has a history of maintainer issues), `snx-rs` (Check
-     Point VPN client, Rust — slow to build, this is expected)
-4. Prints the current package list, then asks for any extra packages
+     AUR package has a history of maintainer issues)
+4. Asks `[y/N]` whether to also install `snx-rs` (Check Point VPN
+   client, AUR, slow Rust build) — opt-in since it's not needed on
+   every machine
+5. Prints the current package list, then asks for any extra packages
    (space-separated) to add for this run
-5. Every package — list-defined or typed in at step 4 — is checked with
+6. Every package — list-defined or typed in at step 5 — is checked with
    `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
    skipped with a warning instead of aborting the whole run. Genuine
    install failures (found, but errored) are also collected and
    reported, not fatal to the rest of the run
-6. Sets OpenJDK 11 as the default JVM (`archlinux-java set`)
-7. Enables the CUPS printing service
-8. Final summary: what installed, what was skipped/failed, and manual
+7. Sets OpenJDK 11 as the default JVM (`archlinux-java set`)
+8. Enables the CUPS printing service
+9. Final summary: what installed, what was skipped/failed, and manual
    next steps (`hp-setup` for the actual printer, F5 VPN — no package
    exists for this, download it from your organization's portal)
 
