@@ -530,20 +530,12 @@ fi
 if [[ "${DE_CHOICE}" == "3" ]]; then
     # ------------------------------------------------------------
     # Hyprland default configuration
-    # Hyprland 0.55+ uses Lua configuration:
-    #   ~/.config/hypr/hyprland.lua
     # ------------------------------------------------------------
 
-    # === HYPRLAND CONFIGURATION FIX START ===
-    # This entire block was added to fix the "HYPER_HOME unbound variable" error.
-    # It defines the variables, checks if the user exists, and only then creates
-    # the directories and installs the Hyprland config.
-    # You can delete this whole block (from === to ===) before deploying the final script.
     HYPR_USER="${NEW_USERNAME:-root}"
     HYPR_HOME="\$(getent passwd \"\${HYPR_USER}\" | cut -d: -f6)"
     [[ -n "\${HYPR_HOME}" ]] || HYPR_HOME="/root"
 
-    # Verify user exists in chroot (prevents getent passwd from failing on missing regular user)
     if ! id -u "\${HYPR_USER}" >/dev/null 2>&1; then
         info "User \${HYPR_USER} not found in chroot. Skipping Hyprland config."
         :
@@ -551,7 +543,6 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
         warn "Home directory \${HYPR_HOME} does not exist for \${HYPR_USER}. Skipping Hyprland config."
         :
     else
-        # Safe directory creation (this line was missing and caused the error)
         install -d -m 0755 -o "\${HYPR_USER}" -g "\${HYPR_USER}" \
             "\${HYPR_HOME}/.config/hypr" \
             "\${HYPR_HOME}/.config/waybar" \
@@ -559,8 +550,6 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
             "\${HYPR_HOME}/.config/hypridle" \
             "\${HYPR_HOME}/.config/hyprlock"
 
-        # ... (rest of the Hyprland config files, using escaped variables)
-        # For example:
         cat > "\${HYPR_HOME}/.config/hypr/hyprland.lua" <<'HYPRLUA_EOF'
 -- ============================================================
 -- Hyprland default configuration
@@ -806,7 +795,7 @@ hl.bind("XF86MonBrightnessDown",
 -- Screenshot
 -- ------------------------------------------------------------
 hl.bind("PRINT", hl.dsp.exec_cmd(
-    "grim -g \"$(slurp)\" ~/Pictures/Screenshots/$(date +%Y-%m-%d_%H-%M-%S).png"
+    "grim -g \"\$(slurp)\" ~/Pictures/Screenshots/\$(date +%Y-%m-%d_%H-%M-%S).png"
 ))
 
 -- ------------------------------------------------------------
@@ -825,10 +814,7 @@ hl.bind("XF86AudioPrev",
     { locked = true })
 HYPRLUA_EOF
 
-    # ------------------------------------------------------------
-    # Waybar configuration
-    # ------------------------------------------------------------
-    cat > "${HYPR_HOME}/.config/waybar/config.jsonc" <<'WAYBAR_EOF'
+        cat > "\${HYPR_HOME}/.config/waybar/config.jsonc" <<'WAYBAR_EOF'
 {
     "layer": "top",
     "position": "top",
@@ -885,7 +871,7 @@ HYPRLUA_EOF
 }
 WAYBAR_EOF
 
-    cat > "${HYPR_HOME}/.config/waybar/style.css" <<'WAYBAR_CSS_EOF'
+        cat > "\${HYPR_HOME}/.config/waybar/style.css" <<'WAYBAR_CSS_EOF'
 * {
     font-family: "Noto Sans", sans-serif;
     font-size: 13px;
@@ -916,10 +902,7 @@ window#waybar {
 }
 WAYBAR_CSS_EOF
 
-    # ------------------------------------------------------------
-    # Hyprlock configuration
-    # ------------------------------------------------------------
-    cat > "${HYPR_HOME}/.config/hypr/hyprlock.conf" <<'HYPRLOCK_EOF'
+        cat > "\${HYPR_HOME}/.config/hypr/hyprlock.conf" <<'HYPRLOCK_EOF'
 background {
     monitor =
     color = rgba(17, 19, 24, 1.0)
@@ -945,7 +928,7 @@ input-field {
 
 label {
     monitor =
-    text = cmd[update:1000] echo "$(date '+%A, %d %B %Y  %H:%M')"
+    text = cmd[update:1000] echo "\$(date '+%A, %d %B %Y  %H:%M')"
     color = rgba(192, 202, 245, 1.0)
     font_size = 28
     position = 0, 80
@@ -954,10 +937,7 @@ label {
 }
 HYPRLOCK_EOF
 
-    # ------------------------------------------------------------
-    # Hypridle configuration
-    # ------------------------------------------------------------
-    cat > "${HYPR_HOME}/.config/hypr/hypridle.conf" <<'HYPRIDLE_EOF'
+        cat > "\${HYPR_HOME}/.config/hypr/hypridle.conf" <<'HYPRIDLE_EOF'
 general {
     lock_cmd = pidof hyprlock || hyprlock
     before_sleep_cmd = loginctl lock-session
@@ -1003,7 +983,6 @@ HYPRIDLE_AUTOSTART_EOF
 
         info "Hyprland default configuration installed for \${HYPR_USER}."
         info "Config: \${HYPR_HOME}/.config/hypr/hyprland.lua"
-        # === HYPRLAND CONFIGURATION FIX END ===
     fi
 fi
 
