@@ -188,14 +188,24 @@ fi
 
 # ---------------- POST-INSTALL: DEFAULT JAVA ----------------
 
-log "Setting OpenJDK 11 as the default JVM..."
+log "Checking OpenJDK 11..."
 
-JAVA11_ENV="$(archlinux-java list 2>/dev/null | grep -m1 '11' | awk '{print $1}' || true)"
-if [[ -n "$JAVA11_ENV" ]]; then
-    sudo archlinux-java set "$JAVA11_ENV"
-    info "Default Java: $(archlinux-java get)"
+if archlinux-java get 2>/dev/null | grep -q '^java-11-openjdk$'; then
+    info "OpenJDK 11 is already the default JVM: $(archlinux-java get)"
 else
-    warn "Could not find a Java 11 environment via 'archlinux-java list'. Set it manually: sudo archlinux-java set <env>"
+    JAVA11_ENV="$(archlinux-java list 2>/dev/null | grep -E '^java-11-openjdk' | awk '{print $1}' | head -n1)"
+
+    if [[ -n "$JAVA11_ENV" ]]; then
+        log "Setting OpenJDK 11 as the default JVM..."
+        sudo archlinux-java set "$JAVA11_ENV"
+        info "Default Java: $(archlinux-java get)"
+    elif [[ -d /usr/lib/jvm/java-11-openjdk ]]; then
+        log "Setting OpenJDK 11 as the default JVM..."
+        sudo archlinux-java set java-11-openjdk
+        info "Default Java: $(archlinux-java get)"
+    else
+        warn "OpenJDK 11 is not installed."
+    fi
 fi
 
 # ---------------- POST-INSTALL: PRINTING ----------------
