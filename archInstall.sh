@@ -163,7 +163,8 @@ echo
 echo "Desktop environment:"
 echo "  1) GNOME"
 echo "  2) KDE Plasma"
-echo "  3) None (CLI only)"
+echo "  3) Hyprland"
+echo "  4) None (CLI only)"
 read -r -p "Choice [1]: " DE_CHOICE
 DE_CHOICE="${DE_CHOICE:-1}"
 
@@ -171,7 +172,7 @@ DE_PACKAGES=()
 DM_SERVICE=""
 INSTALL_MODE=""
 
-if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" ]]; then
+if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" ]]; then
     read -r -p "Full install or minimal? [F/m]: " INSTALL_MODE
     [[ "$INSTALL_MODE" =~ ^[Mm]$ ]] && INSTALL_MODE="minimal" || INSTALL_MODE="full"
 fi
@@ -202,19 +203,17 @@ case "$DE_CHOICE" in
             DE_PACKAGES=(
                 # --- Hyprland ---
                 hyprland
+                hyprpaper
+                hyprpicker
+                hyprlock
+                hypridle
 
                 # --- Desktop / UI ---
                 waybar
                 rofi-wayland
-                swaybg
-                hyprpaper
-                hyprlock
-                hypridle
 
-                # --- Terminal ---
+                # --- Terminal / file manager ---
                 kitty
-
-                # --- File manager ---
                 thunar
                 thunar-archive-plugin
                 thunar-volman
@@ -223,96 +222,80 @@ case "$DE_CHOICE" in
                 network-manager-applet
 
                 # --- Audio ---
-                pavucontrol
                 pipewire
                 pipewire-alsa
                 pipewire-pulse
                 wireplumber
+                pavucontrol
 
-                # --- Portals ---
+                # --- Wayland / portals ---
                 xdg-desktop-portal
                 xdg-desktop-portal-hyprland
                 xdg-desktop-portal-gtk
+                qt5-wayland
+                qt6-wayland
 
                 # --- Authentication / permissions ---
                 polkit
                 polkit-gnome
 
-                # --- Notifications ---
+                # --- Notifications / clipboard ---
                 mako
-
-                # --- Clipboard ---
                 wl-clipboard
 
-                # --- Screenshots ---
+                # --- Screenshots / brightness ---
                 grim
                 slurp
-
-                # --- Brightness ---
                 brightnessctl
 
                 # --- Bluetooth ---
                 blueman
 
-                # --- Fonts / icons ---
+                # --- Media keys ---
+                playerctl
+
+                # --- Fonts ---
                 ttf-dejavu
                 ttf-liberation
                 noto-fonts
                 noto-fonts-emoji
+
+                # --- XDG user directories ---
+                xdg-user-dirs
 
                 # --- Login manager ---
                 sddm
             )
         else
             DE_PACKAGES=(
-                # --- Core Hyprland ---
                 hyprland
+                hyprpaper
+                hyprlock
+                hypridle
                 waybar
                 rofi-wayland
                 kitty
-
-                # --- File manager ---
                 thunar
-
-                # --- Network ---
                 network-manager-applet
-
-                # --- Audio ---
                 pipewire
                 pipewire-pulse
                 wireplumber
                 pavucontrol
-
-                # --- Portals ---
                 xdg-desktop-portal
                 xdg-desktop-portal-hyprland
                 xdg-desktop-portal-gtk
-
-                # --- Authentication ---
+                qt5-wayland
+                qt6-wayland
                 polkit
                 polkit-gnome
-
-                # --- Notifications ---
                 mako
-
-                # --- Clipboard ---
                 wl-clipboard
-
-                # --- Screenshots ---
                 grim
                 slurp
-
-                # --- Brightness ---
                 brightnessctl
-
-                # --- Bluetooth ---
-                blueman
-
-                # --- Fonts ---
                 noto-fonts
                 noto-fonts-emoji
-
-                # --- Login manager ---
+                xdg-user-dirs
                 sddm
             )
         fi
@@ -506,9 +489,470 @@ if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
     echo "==> WARNING: /boot/grub/grub.cfg has no menuentry -- GRUB will likely drop to a rescue shell on boot." >&2
 fi
 
-if [[ -n "${DM_SERVICE}" ]]; then
-    systemctl enable ${DM_SERVICE}
+if [[ "${DE_CHOICE}" == "3" ]]; then
+    # ------------------------------------------------------------
+    # Hyprland default configuration
+    # Hyprland 0.55+ uses Lua configuration:
+    #   ~/.config/hypr/hyprland.lua
+    # ------------------------------------------------------------
+
+    HYPR_USER="${NEW_USERNAME:-root}"
+    HYPR_HOME="$(getent passwd "${HYPR_USER}" | cut -d: -f6)"
+    [[ -n "${HYPR_HOME}" ]] || HYPR_HOME="/root"
+
+    install -d -m 0755 -o "${HYPR_USER}" -g "${HYPR_USER}" \
+        "${HYPR_HOME}/.config/hypr" \
+        "${HYPR_HOME}/.config/waybar" \
+        "${HYPR_HOME}/.config/rofi" \
+        "${HYPR_HOME}/.config/hypridle" \
+        "${HYPR_HOME}/.config/hyprlock"
+
+    cat > "${HYPR_HOME}/.config/hypr/hyprland.lua" <<'HYPRLUA_EOF'
+-- ============================================================
+-- Hyprland default configuration
+-- Generated by the Arch installation script.
+-- Hyprland 0.55+ / Lua configuration
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- Monitor
+-- ------------------------------------------------------------
+-- "preferred" lets Hyprland automatically use the monitor's
+-- preferred/native mode. This avoids hard-coding a resolution.
+hl.monitor({
+    output = "",
+    mode = "preferred",
+    position = "auto",
+    scale = "auto",
+})
+
+-- ------------------------------------------------------------
+-- Programs
+-- ------------------------------------------------------------
+local terminal = "kitty"
+local fileManager = "thunar"
+local launcher = "rofi -show drun"
+
+-- ------------------------------------------------------------
+-- Environment
+-- ------------------------------------------------------------
+hl.env("XCURSOR_SIZE", "24")
+hl.env("HYPRCURSOR_SIZE", "24")
+hl.env("XDG_CURRENT_DESKTOP", "Hyprland")
+hl.env("XDG_SESSION_TYPE", "wayland")
+
+-- ------------------------------------------------------------
+-- Look & Feel
+-- ------------------------------------------------------------
+hl.config({
+    general = {
+        gaps_in = 5,
+        gaps_out = 12,
+        border_size = 2,
+        resize_on_border = false,
+        allow_tearing = false,
+        layout = "dwindle",
+        col = {
+            active_border = {
+                colors = { "rgba(7aa2f7ff)", "rgba(bb9af7ff)" },
+                angle = 45,
+            },
+            inactive_border = "rgba(565f89aa)",
+        },
+    },
+
+    decoration = {
+        rounding = 8,
+        rounding_power = 2,
+
+        active_opacity = 1.0,
+        inactive_opacity = 0.96,
+
+        shadow = {
+            enabled = true,
+            range = 6,
+            render_power = 3,
+            color = 0xee000000,
+        },
+
+        blur = {
+            enabled = true,
+            size = 4,
+            passes = 2,
+            vibrancy = 0.15,
+        },
+    },
+
+    input = {
+        kb_layout = "us",
+        kb_variant = "",
+        kb_model = "",
+        kb_options = "",
+        kb_rules = "",
+        follow_mouse = 1,
+        sensitivity = 0,
+        touchpad = {
+            natural_scroll = false,
+        },
+    },
+
+    dwindle = {
+        preserve_split = true,
+    },
+
+    misc = {
+        force_default_wallpaper = -1,
+        disable_hyprland_logo = false,
+    },
+})
+
+-- ------------------------------------------------------------
+-- Animations
+-- ------------------------------------------------------------
+hl.config({
+    animations = {
+        enabled = true,
+    },
+})
+
+hl.curve("easeOutQuint", {
+    type = "bezier",
+    points = { {0.23, 1}, {0.32, 1} },
+})
+
+hl.curve("easeInOutCubic", {
+    type = "bezier",
+    points = { {0.65, 0.05}, {0.36, 1} },
+})
+
+hl.animation({
+    leaf = "global",
+    enabled = true,
+    speed = 10,
+    bezier = "default",
+})
+
+hl.animation({
+    leaf = "windows",
+    enabled = true,
+    speed = 5,
+    bezier = "easeOutQuint",
+})
+
+hl.animation({
+    leaf = "windowsIn",
+    enabled = true,
+    speed = 4,
+    bezier = "easeOutQuint",
+    style = "popin 80%",
+})
+
+hl.animation({
+    leaf = "windowsOut",
+    enabled = true,
+    speed = 3,
+    bezier = "easeOutQuint",
+    style = "popin 80%",
+})
+
+hl.animation({
+    leaf = "fadeIn",
+    enabled = true,
+    speed = 3,
+    bezier = "easeOutQuint",
+})
+
+hl.animation({
+    leaf = "fadeOut",
+    enabled = true,
+    speed = 3,
+    bezier = "easeOutQuint",
+})
+
+-- ------------------------------------------------------------
+-- Autostart
+-- ------------------------------------------------------------
+hl.on("hyprland.start", function()
+    hl.exec_cmd("waybar")
+    hl.exec_cmd("mako")
+    hl.exec_cmd("nm-applet")
+    hl.exec_cmd("swaybg -c 111318")
+end)
+
+-- ------------------------------------------------------------
+-- Basic keybindings
+-- ------------------------------------------------------------
+local mainMod = "SUPER"
+
+-- Terminal / launcher / file manager
+hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))
+hl.bind(mainMod .. " + R", hl.dsp.exec_cmd(launcher))
+hl.bind(mainMod .. " + E", hl.dsp.exec_cmd(fileManager))
+
+-- Close / fullscreen / float
+hl.bind(mainMod .. " + C", hl.dsp.window.kill())
+hl.bind(mainMod .. " + F", hl.dsp.window.fullscreen())
+hl.bind(mainMod .. " + SPACE", hl.dsp.window.float())
+
+-- Reload / exit
+hl.bind(mainMod .. " + SHIFT + R", hl.dsp.exec_cmd("hyprctl reload"))
+hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("hyprctl dispatch exit"))
+
+-- Focus
+hl.bind(mainMod .. " + LEFT", hl.dsp.focus("l"))
+hl.bind(mainMod .. " + RIGHT", hl.dsp.focus("r"))
+hl.bind(mainMod .. " + UP", hl.dsp.focus("u"))
+hl.bind(mainMod .. " + DOWN", hl.dsp.focus("d"))
+
+-- Move window
+hl.bind(mainMod .. " + SHIFT + LEFT", hl.dsp.window.move({ direction = "l" }))
+hl.bind(mainMod .. " + SHIFT + RIGHT", hl.dsp.window.move({ direction = "r" }))
+hl.bind(mainMod .. " + SHIFT + UP", hl.dsp.window.move({ direction = "u" }))
+hl.bind(mainMod .. " + SHIFT + DOWN", hl.dsp.window.move({ direction = "d" }))
+
+-- Resize / move with mouse
+hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })
+hl.bind(mainMod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
+
+-- Workspaces 1-10
+for i = 1, 10 do
+    hl.bind(mainMod .. " + " .. i, hl.workspace(i))
+    hl.bind(mainMod .. " + SHIFT + " .. i, hl.dsp.window.move({ workspace = i }))
+end
+
+-- Workspace scrolling
+hl.bind(mainMod .. " + mouse_down", hl.dsp.focus({ workspace = "e+1" }))
+hl.bind(mainMod .. " + mouse_up", hl.dsp.focus({ workspace = "e-1" }))
+
+-- ------------------------------------------------------------
+-- Audio keys
+-- ------------------------------------------------------------
+hl.bind("XF86AudioRaiseVolume",
+    hl.dsp.exec_cmd("wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+"),
+    { locked = true, repeating = true })
+
+hl.bind("XF86AudioLowerVolume",
+    hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"),
+    { locked = true, repeating = true })
+
+hl.bind("XF86AudioMute",
+    hl.dsp.exec_cmd("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"),
+    { locked = true })
+
+-- ------------------------------------------------------------
+-- Brightness keys
+-- ------------------------------------------------------------
+hl.bind("XF86MonBrightnessUp",
+    hl.dsp.exec_cmd("brightnessctl set 5%+"),
+    { locked = true, repeating = true })
+
+hl.bind("XF86MonBrightnessDown",
+    hl.dsp.exec_cmd("brightnessctl set 5%-"),
+    { locked = true, repeating = true })
+
+-- ------------------------------------------------------------
+-- Screenshot
+-- ------------------------------------------------------------
+hl.bind("PRINT", hl.dsp.exec_cmd(
+    "grim -g \"$(slurp)\" ~/Pictures/Screenshots/$(date +%Y-%m-%d_%H-%M-%S).png"
+))
+
+-- ------------------------------------------------------------
+-- Media keys
+-- ------------------------------------------------------------
+hl.bind("XF86AudioPlay",
+    hl.dsp.exec_cmd("playerctl play-pause"),
+    { locked = true })
+
+hl.bind("XF86AudioNext",
+    hl.dsp.exec_cmd("playerctl next"),
+    { locked = true })
+
+hl.bind("XF86AudioPrev",
+    hl.dsp.exec_cmd("playerctl previous"),
+    { locked = true })
+HYPRLUA_EOF
+
+    # ------------------------------------------------------------
+    # Waybar configuration
+    # ------------------------------------------------------------
+    cat > "${HYPR_HOME}/.config/waybar/config.jsonc" <<'WAYBAR_EOF'
+{
+    "layer": "top",
+    "position": "top",
+    "height": 30,
+    "spacing": 4,
+
+    "modules-left": [
+        "hyprland/workspaces"
+    ],
+
+    "modules-center": [
+        "clock"
+    ],
+
+    "modules-right": [
+        "network",
+        "pulseaudio",
+        "battery",
+        "tray"
+    ],
+
+    "hyprland/workspaces": {
+        "disable-scroll": true,
+        "all-outputs": true,
+        "on-click": "activate"
+    },
+
+    "clock": {
+        "format": "{:%Y-%m-%d  %H:%M}",
+        "tooltip-format": "{:%A, %d %B %Y}"
+    },
+
+    "network": {
+        "format-wifi": "  {essid}",
+        "format-ethernet": "󰈀  {ipaddr}",
+        "format-disconnected": "󰤮  Disconnected",
+        "tooltip-format": "{ifname}: {ipaddr}"
+    },
+
+    "pulseaudio": {
+        "format": "  {volume}%",
+        "format-muted": "  Muted",
+        "on-click": "pavucontrol"
+    },
+
+    "battery": {
+        "format": "  {capacity}%",
+        "format-charging": "  {capacity}%"
+    },
+
+    "tray": {
+        "spacing": 8
+    }
+}
+WAYBAR_EOF
+
+    cat > "${HYPR_HOME}/.config/waybar/style.css" <<'WAYBAR_CSS_EOF'
+* {
+    font-family: "Noto Sans", sans-serif;
+    font-size: 13px;
+}
+
+window#waybar {
+    background: rgba(17, 19, 24, 0.92);
+    color: #c0caf5;
+}
+
+#workspaces button {
+    padding: 0 8px;
+    color: #7982a9;
+    background: transparent;
+    border: none;
+}
+
+#workspaces button.active {
+    color: #7aa2f7;
+}
+
+#clock,
+#network,
+#pulseaudio,
+#battery,
+#tray {
+    padding: 0 10px;
+}
+WAYBAR_CSS_EOF
+
+    # ------------------------------------------------------------
+    # Hyprlock configuration
+    # ------------------------------------------------------------
+    cat > "${HYPR_HOME}/.config/hypr/hyprlock.conf" <<'HYPRLOCK_EOF'
+background {
+    monitor =
+    color = rgba(17, 19, 24, 1.0)
+}
+
+input-field {
+    monitor =
+    size = 250, 50
+    outline_thickness = 2
+    dots_size = 0.2
+    dots_spacing = 0.2
+    dots_center = true
+    outer_color = rgba(122, 162, 247, 1.0)
+    inner_color = rgba(31, 35, 48, 1.0)
+    font_color = rgba(192, 202, 245, 1.0)
+    fade_on_empty = false
+    placeholder_text = <i>Password...</i>
+    hide_input = false
+    position = 0, -80
+    halign = center
+    valign = center
+}
+
+label {
+    monitor =
+    text = cmd[update:1000] echo "$(date '+%A, %d %B %Y  %H:%M')"
+    color = rgba(192, 202, 245, 1.0)
+    font_size = 28
+    position = 0, 80
+    halign = center
+    valign = center
+}
+HYPRLOCK_EOF
+
+    # ------------------------------------------------------------
+    # Hypridle configuration
+    # ------------------------------------------------------------
+    cat > "${HYPR_HOME}/.config/hypr/hypridle.conf" <<'HYPRIDLE_EOF'
+general {
+    lock_cmd = pidof hyprlock || hyprlock
+    before_sleep_cmd = loginctl lock-session
+    after_sleep_cmd = hyprctl dispatch dpms on
+}
+
+listener {
+    timeout = 600
+    on-timeout = loginctl lock-session
+}
+
+listener {
+    timeout = 900
+    on-timeout = hyprctl dispatch dpms off
+    on-resume = hyprctl dispatch dpms on
+}
+HYPRIDLE_EOF
+
+    # Start idle management on login.
+    cat >> "${HYPR_HOME}/.config/hypr/hyprland.lua" <<'HYPRIDLE_AUTOSTART_EOF'
+
+-- Start idle management.
+hl.on("hyprland.start", function()
+    hl.exec_cmd("hypridle")
+end)
+HYPRIDLE_AUTOSTART_EOF
+
+    # Screenshot directory.
+    install -d -m 0755 -o "${HYPR_USER}" -g "${HYPR_USER}" \
+        "${HYPR_HOME}/Pictures/Screenshots"
+
+    # Generate standard XDG user directories.
+    if command -v xdg-user-dirs-update >/dev/null 2>&1; then
+        runuser -u "${HYPR_USER}" -- xdg-user-dirs-update || true
+    fi
+
+    chown -R "${HYPR_USER}:${HYPR_USER}" \
+        "${HYPR_HOME}/.config/hypr" \
+        "${HYPR_HOME}/.config/waybar" \
+        "${HYPR_HOME}/.config/rofi" \
+        "${HYPR_HOME}/.config/hypridle" \
+        "${HYPR_HOME}/.config/hyprlock"
+
+    info "Hyprland default configuration installed for ${HYPR_USER}."
+    info "Config: ${HYPR_HOME}/.config/hypr/hyprland.lua"
 fi
+
 CHROOT_EOF
 
 # ---------------- DONE ----------------
@@ -522,7 +966,9 @@ echo "============================================================"
 echo "1. umount -R /mnt"
 echo "2. cryptsetup close cryptroot"
 echo "3. reboot, remove the install media"
-echo "4. Log in, then copy setup-btrfs-snapper.sh to the new system"
+echo "4. Log in. If Hyprland was selected, SDDM will provide a Hyprland session."
+echo "5. If Hyprland was selected, its default config is in ~/.config/hypr/hyprland.lua."
+echo "6. Copy setup-btrfs-snapper.sh to the new system"
 echo "   and run it as root (or via sudo) to finish Snapper, quota,"
 echo "   grub-btrfs, fstrim.timer and the Plymouth theme."
 echo "============================================================"
