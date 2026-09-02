@@ -494,10 +494,6 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
     #   ~/.config/hypr/hyprland.lua
     # ------------------------------------------------------------
 
-    # === HYPRLAND CONFIGURATION FIX START ===
-    # This block fixes the "HYPER_HOME unbound variable" error on line 453.
-    # We define HYPR_USER and HYPR_HOME first, then perform checks, then create directories.
-    # Only this entire block is new – you can delete it before deploying the final script.
     HYPR_USER="${NEW_USERNAME:-root}"
     HYPR_HOME="$(getent passwd "${HYPR_USER}" | cut -d: -f6)"
     [[ -n "${HYPR_HOME}" ]] || HYPR_HOME="/root"
@@ -965,7 +961,6 @@ HYPRIDLE_AUTOSTART_EOF
 
     info "Hyprland default configuration installed for ${HYPR_USER}."
     info "Config: ${HYPR_HOME}/.config/hypr/hyprland.lua"
-    # === HYPRLAND CONFIGURATION FIX END ===
 fi
 
 CHROOT_EOF
