@@ -69,6 +69,7 @@ REPO_PACKAGES=(
 )
 
 AUR_PACKAGES=(
+    f5vpn-ng
     ferdium-bin
     google-chrome
     sublime-text-4
