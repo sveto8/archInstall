@@ -61,6 +61,7 @@ REPO_PACKAGES=(
     remmina
     kolourpaint
     mission-center
+    stow
     hplip                               # HP printer support
     cups                                 # printing system
     system-config-printer               # GUI printer management
