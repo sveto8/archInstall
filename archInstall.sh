@@ -375,14 +375,28 @@ udevadm settle
 # ---------------- LUKS2 ----------------
 
 log "Creating LUKS2 container on $LUKSPART..."
-info "You will be prompted for a passphrase (twice: format + open)."
-info "When asked to confirm, type YES in capital letters exactly."
+info "You will be prompted for a passphrase."
+info "You must type YES in capital letters exactly."
 
-until cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; do
-    warn "luksFormat did not complete (wrong confirmation, passphrase mismatch, etc). Try again."
+for attempt in 1 2 3; do
+    if cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; then
+        break
+    fi
+
+    if [[ "$attempt" -eq 3 ]]; then
+        error "LUKS2 formatting failed after 3 attempts. Aborting."
+        exit 1
+    fi
+
+    warn "LUKS2 formatting was cancelled or confirmation was incorrect."
+    warn "Please try again. Attempt $((attempt + 1)) of 3."
 done
 
-cryptsetup open "$LUKSPART" cryptroot
+log "Opening LUKS2 container..."
+cryptsetup open "$LUKSPART" cryptroot || {
+    error "Failed to open LUKS2 container."
+    exit 1
+}
 
 LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
 info "LUKS UUID: $LUKS_UUID"
