@@ -9,10 +9,10 @@ set -o errtrace
 # archInstall.sh + setupAfterInstall.sh have already been run and
 # you're on your normal desktop. makepkg/yay refuse to run as root.
 #
-# Installs official-repo + AUR packages via yay (bootstrapped if
-# missing), tolerates individual package failures (reports them at
-# the end instead of aborting the whole run), and does a few bits of
-# post-install config (default JDK, CUPS).
+# Official-repo packages are installed with plain pacman; anything
+# not in the official repos goes through yay (AUR). yay is only
+# bootstrapped (via pacman + makepkg) to handle that AUR subset --
+# it isn't used for packages pacman already provides.
 # ============================================================
 
 log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
@@ -31,7 +31,7 @@ command -v pacman >/dev/null || die "pacman not found -- is this an Arch system?
 log "Checking sudo access (you may be asked for your password)..."
 sudo -v || die "sudo access is required."
 
-# ---------------- BOOTSTRAP YAY ----------------
+# ---------------- BOOTSTRAP YAY (for the AUR packages below) ----------------
 
 sudo pacman -S --needed --noconfirm base-devel git
 
@@ -45,56 +45,126 @@ else
     info "yay already installed."
 fi
 
-# ---------------- PACKAGE LIST ----------------
+# ---------------- PACKAGE LISTS ----------------
 #
-# yay resolves official-repo and AUR packages the same way, so both
-# kinds live in one list. Comment out anything you don't want.
+# REPO_PACKAGES -> plain pacman (official repos)
+# AUR_PACKAGES  -> yay (not in official repos)
 
-PACKAGES=(
-    guake                              # repo
-    terminator                         # repo
-    ferdium-bin                        # AUR
-    google-chrome                      # AUR
-    sublime-text-4                     # AUR
-    meld                                # repo
-    qmmp                                # repo
-    jdk11-openjdk                      # repo
-    intellij-idea-community-edition    # repo
-    code                                # AUR (official MS build, full Marketplace access)
-    remmina                            # repo
-    kolourpaint                        # repo
-    mission-center                     # repo
-    hplip                              # repo -- HP printer support
-    cups                                # repo -- printing system
-    system-config-printer              # repo -- GUI printer management
-    peazip-gtk2                        # AUR
-    wps-office                          # AUR
-    ttf-wps-fonts                       # AUR
+REPO_PACKAGES=(
+    guake
+    terminator
+    meld
+    qmmp
+    jdk11-openjdk
+    intellij-idea-community-edition
+    code                                # open-source build of VS Code, no MS branding/telemetry
+    remmina
+    kolourpaint
+    mission-center
+    hplip                               # HP printer support
+    cups                                 # printing system
+    system-config-printer               # GUI printer management
 )
 
-# openoffice-bin is AUR, unmaintained upstream, and LibreOffice is the
-# actively maintained fork the community recommends instead. Ask before
-# installing it rather than pulling it in silently.
-INSTALL_OPENOFFICE="no"
+AUR_PACKAGES=(
+    ferdium-bin
+    google-chrome
+    sublime-text-4
+    peazip-gtk2
+    wps-office                          # OpenOffice replacement (OpenOffice is unmaintained upstream)
+    ttf-wps-fonts
+    snx-rs                              # Check Point SNX VPN client (Rust) -- slow build, be patient
+)
+
+# ---------------- EXTRA PACKAGES ----------------
+
 echo
-read -r -p "Install openoffice-bin (AUR, unmaintained -- consider libreoffice-fresh instead)? [y/N] " ANSWER
-[[ "$ANSWER" =~ ^[Yy]$ ]] && INSTALL_OPENOFFICE="yes"
-[[ "$INSTALL_OPENOFFICE" == "yes" ]] && PACKAGES+=("openoffice-bin")
+echo "Current package list:"
+echo "  repo (pacman): ${REPO_PACKAGES[*]}"
+echo "  AUR (yay):     ${AUR_PACKAGES[*]}"
+echo
+read -r -p "Any extra packages to add (space-separated, blank to skip): " -a EXTRA_PACKAGES
 
-# ---------------- INSTALL ----------------
+# ---------------- HELPERS ----------------
 
-log "Installing ${#PACKAGES[@]} packages..."
+# Checks whether a package name exists (official repo OR AUR) before we
+# attempt to install it, so a typo/renamed/removed package is skipped
+# with a clear message instead of failing mid-transaction.
+package_exists() {
+    local pkg="$1"
+    pacman -Si "$pkg" >/dev/null 2>&1 && return 0
+    yay -Si "$pkg" >/dev/null 2>&1 && return 0
+    return 1
+}
 
 FAILED=()
+SKIPPED=()
 
-for pkg in "${PACKAGES[@]}"; do
-    echo
-    info "==> $pkg"
+install_repo() {
+    local pkg="$1"
+    if ! pacman -Si "$pkg" >/dev/null 2>&1; then
+        warn "$pkg not found in official repos -- skipping."
+        SKIPPED+=("$pkg")
+        return
+    fi
+    if ! sudo pacman -S --needed --noconfirm "$pkg"; then
+        warn "$pkg failed to install -- continuing with the rest."
+        FAILED+=("$pkg")
+    fi
+}
+
+install_aur() {
+    local pkg="$1"
+    if ! package_exists "$pkg"; then
+        warn "$pkg not found (repo or AUR) -- skipping."
+        SKIPPED+=("$pkg")
+        return
+    fi
     if ! yay -S --needed --noconfirm "$pkg"; then
         warn "$pkg failed to install -- continuing with the rest."
         FAILED+=("$pkg")
     fi
+}
+
+# ---------------- INSTALL: REPO ----------------
+
+log "Installing official-repo packages via pacman..."
+
+for pkg in "${REPO_PACKAGES[@]}"; do
+    echo
+    info "==> $pkg"
+    install_repo "$pkg"
 done
+
+# ---------------- INSTALL: AUR ----------------
+
+log "Installing AUR packages via yay..."
+
+for pkg in "${AUR_PACKAGES[@]}"; do
+    echo
+    info "==> $pkg"
+    install_aur "$pkg"
+done
+
+# ---------------- INSTALL: EXTRA (user-supplied) ----------------
+
+if [[ "${#EXTRA_PACKAGES[@]}" -gt 0 ]]; then
+    log "Installing extra packages you added..."
+    for pkg in "${EXTRA_PACKAGES[@]}"; do
+        echo
+        info "==> $pkg"
+        if ! package_exists "$pkg"; then
+            warn "$pkg does not exist in the official repos or AUR -- skipping (check the name)."
+            SKIPPED+=("$pkg")
+            continue
+        fi
+        if pacman -Si "$pkg" >/dev/null 2>&1; then
+            install_repo "$pkg"
+        else
+            install_aur "$pkg"
+        fi
+    done
+fi
 
 # ---------------- POST-INSTALL: DEFAULT JAVA ----------------
 
@@ -124,17 +194,26 @@ echo
 echo "============================================================"
 echo " SUMMARY"
 echo "============================================================"
-if [[ "${#FAILED[@]}" -eq 0 ]]; then
+if [[ "${#FAILED[@]}" -eq 0 && "${#SKIPPED[@]}" -eq 0 ]]; then
     echo "All packages installed successfully."
 else
-    echo "These packages FAILED and were skipped:"
-    for pkg in "${FAILED[@]}"; do
-        echo "  - $pkg"
-    done
-    echo "Re-run 'yay -S <package>' individually to see the actual error."
+    if [[ "${#SKIPPED[@]}" -gt 0 ]]; then
+        echo "SKIPPED (package name not found):"
+        for pkg in "${SKIPPED[@]}"; do
+            echo "  - $pkg"
+        done
+    fi
+    if [[ "${#FAILED[@]}" -gt 0 ]]; then
+        echo "FAILED (found, but install errored):"
+        for pkg in "${FAILED[@]}"; do
+            echo "  - $pkg"
+        done
+        echo "Re-run 'yay -S <package>' or 'sudo pacman -S <package>' individually to see the actual error."
+    fi
 fi
 echo
 echo "Manual steps still needed:"
+echo "  - snx-rs: takes a while to build from source, this is expected."
 echo "  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB."
 echo "  - F5 VPN: no Arch/AUR package exists for this -- download the client from your"
 echo "    organization's F5 BIG-IP APM portal and follow their install instructions."
