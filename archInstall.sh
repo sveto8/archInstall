@@ -528,21 +528,15 @@ if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
 fi
 
 if [[ "${DE_CHOICE}" == "3" ]]; then
-    # ------------------------------------------------------------
-    # Hyprland default configuration
-    # ------------------------------------------------------------
-
     HYPR_USER="${NEW_USERNAME:-root}"
 
-    # Check if the user exists in the chroot
     if ! id -u "${HYPR_USER}" >/dev/null 2>&1; then
-        echo "User ${HYPR_USER} not found in chroot. Skipping Hyprland config."
+        echo "User ${HYPR_USER} not found. Skipping Hyprland config."
     else
-        # Now safely get the home directory (getent will succeed)
         HYPR_HOME="$(getent passwd "${HYPR_USER}" | cut -d: -f6)"
         [[ -n "${HYPR_HOME}" ]] || HYPR_HOME="/root"
 
-        # Create config directories
+        # Stvori direktorije
         install -d -m 0755 -o "${HYPR_USER}" -g "${HYPR_USER}" \
             "${HYPR_HOME}/.config/hypr" \
             "${HYPR_HOME}/.config/waybar" \
@@ -550,7 +544,7 @@ if [[ "${DE_CHOICE}" == "3" ]]; then
             "${HYPR_HOME}/.config/hypridle" \
             "${HYPR_HOME}/.config/hyprlock"
 
-        # Write hyprland.lua (all command substitutions escaped)
+        # Napiši hyprland.lua (bez backslash unutar <<'...')
         cat > "${HYPR_HOME}/.config/hypr/hyprland.lua" <<'HYPRLUA_EOF'
 -- ============================================================
 -- Hyprland default configuration
@@ -969,25 +963,15 @@ hl.on("hyprland.start", function()
 end)
 HYPRIDLE_AUTOSTART_EOF
 
-        # Screenshots directory
+        # Screenshots direktorij
         install -d -m 0755 -o "${HYPR_USER}" -g "${HYPR_USER}" \
             "${HYPR_HOME}/Pictures/Screenshots"
 
-        # XDG user dirs (ignore failure)
-        if command -v xdg-user-dirs-update >/dev/null 2>&1; then
-            runuser -u "${HYPR_USER}" -- xdg-user-dirs-update || true
-        fi
-
-        # Set ownership
+        # Postavi vlasništvo (ignoriraj greške)
         chown -R "${HYPR_USER}:${HYPR_USER}" \
-            "${HYPR_HOME}/.config/hypr" \
-            "${HYPR_HOME}/.config/waybar" \
-            "${HYPR_HOME}/.config/rofi" \
-            "${HYPR_HOME}/.config/hypridle" \
-            "${HYPR_HOME}/.config/hyprlock" 2>/dev/null || true
+            "${HYPR_HOME}/.config" 2>/dev/null || true
 
-        echo "Hyprland default configuration installed for ${HYPR_USER}."
-        echo "Config: ${HYPR_HOME}/.config/hypr/hyprland.lua"
+        echo "Hyprland config installed for ${HYPR_USER}."
     fi
 fi
 
