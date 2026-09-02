@@ -326,11 +326,34 @@ info "Desktop environment: $DE_NAME"
 
 log "Wiping and partitioning $DEVICE..."
 
+echo
+echo "==> Brisanje postojećih filesystem potpisa..."
 wipefs -af "$DEVICE"
+
+echo
+echo "==> Brisanje postojeće GPT/MBR particijske tablice..."
 sgdisk --zap-all "$DEVICE"
-sgdisk -n1:0:+${ESP_SIZE}  -t1:ef00 -c1:"EFI"       "$DEVICE"
-sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot"      "$DEVICE"
-sgdisk -n3:0:0             -t3:8309 -c3:"cryptroot" "$DEVICE"
+
+echo
+echo "==> Kreiranje EFI particije (${ESP_SIZE})..."
+sgdisk -n1:0:+${ESP_SIZE} -t1:ef00 -c1:"EFI" "$DEVICE"
+
+echo
+echo "==> Kreiranje boot particije (${BOOT_SIZE})..."
+sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot" "$DEVICE"
+
+echo
+echo "==> Kreiranje root particije (ostatak diska)..."
+sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
+
+echo
+echo "==> Particioniranje diska završeno."
+
+#wipefs -af "$DEVICE"
+#sgdisk --zap-all "$DEVICE"
+#sgdisk -n1:0:+${ESP_SIZE}  -t1:ef00 -c1:"EFI"       "$DEVICE"
+#sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot"      "$DEVICE"
+#sgdisk -n3:0:0             -t3:8309 -c3:"cryptroot" "$DEVICE"
 
 partprobe "$DEVICE"
 udevadm settle
