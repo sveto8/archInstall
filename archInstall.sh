@@ -508,6 +508,10 @@ HOSTS_EOF
 
 systemctl enable NetworkManager
 
+if [[ -n "${DM_SERVICE}" ]]; then
+    systemctl enable "${DM_SERVICE}"
+fi
+
 # Minimal systemd-based initramfs so the system can boot and unlock LUKS.
 # setup-btrfs-snapper.sh will overwrite this HOOKS line with the full
 # version (adds the plymouth hook) after first boot.
