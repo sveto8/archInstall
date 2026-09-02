@@ -71,7 +71,7 @@ AUR_PACKAGES=(
     ferdium-bin
     google-chrome
     sublime-text-4
-    peazip-gtk2
+    peazip
     wps-office                          # OpenOffice replacement (OpenOffice is unmaintained upstream)
     ttf-wps-fonts
 )
@@ -82,6 +82,13 @@ echo
 read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " ANSWER
 if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(snx-rs)
+fi
+
+# WPS Office install or not
+echo
+read -r -p "Install wps-office? [y/N] " ANSWER
+if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+    AUR_PACKAGES+=(wps-office ttf-wps-fonts)
 fi
 
 # ---------------- EXTRA PACKAGES ----------------
