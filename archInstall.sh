@@ -342,7 +342,7 @@ mkinitcpio -P
 
 sed -i -E 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet"/' /etc/default/grub
 
-grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck
+grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
 if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
