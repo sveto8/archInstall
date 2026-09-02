@@ -73,8 +73,15 @@ AUR_PACKAGES=(
     peazip-gtk2
     wps-office                          # OpenOffice replacement (OpenOffice is unmaintained upstream)
     ttf-wps-fonts
-    snx-rs                              # Check Point SNX VPN client (Rust) -- slow build, be patient
 )
+
+# snx-rs (Check Point VPN client) isn't needed on every machine and is a
+# slow AUR build (Rust), so it's opt-in rather than installed by default.
+echo
+read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " ANSWER
+if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+    AUR_PACKAGES+=(snx-rs)
+fi
 
 # ---------------- EXTRA PACKAGES ----------------
 
@@ -213,7 +220,9 @@ else
 fi
 echo
 echo "Manual steps still needed:"
-echo "  - snx-rs: takes a while to build from source, this is expected."
+if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+    echo "  - snx-rs: takes a while to build from source, this is expected."
+fi
 echo "  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB."
 echo "  - F5 VPN: no Arch/AUR package exists for this -- download the client from your"
 echo "    organization's F5 BIG-IP APM portal and follow their install instructions."
