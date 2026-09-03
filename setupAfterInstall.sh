@@ -299,23 +299,40 @@ log "Installing Poly-dark GRUB theme..."
 mkdir -p "/boot/grub/themes"
 
 # Download the complete theme archive
-log "Downloading Poly dark GRUB theme from GitHub..."
+log "Downloading Poly-dark GRUB theme from GitHub..."
 
-# Download the tar.xz archive
-if curl -fsSL -o "/tmp/poly-dark-master.tar.xz" "https://github.com/sveto8/archInstall/raw/main/poly-dark-master.tar.xz"; then
+# Download the tar.xz archive (correct filename from your repo)
+if curl -fsSL -o "/tmp/poly-dark.tar.xz" "https://github.com/sveto8/archInstall/raw/main/poly-dark.tar.xz"; then
     log "Extracting theme..."
     
     # Remove old theme if exists
     rm -rf "/boot/grub/themes/Poly-dark"
+    rm -rf "/boot/grub/themes/poly-dark"
+    rm -rf "/boot/grub/themes/poly-dark-master"
     
     # Extract to /boot/grub/themes/
-    tar -xf "/tmp/poly-dark-master.tar.xz" -C "/boot/grub/themes/"
+    tar -xf "/tmp/poly-dark.tar.xz" -C "/boot/grub/themes/"
+    
+    # Find the extracted directory (might be poly-dark, Poly-dark, or poly-dark-master)
+    EXTRACTED_DIR=""
+    if [[ -d "/boot/grub/themes/poly-dark" ]]; then
+        EXTRACTED_DIR="/boot/grub/themes/poly-dark"
+    elif [[ -d "/boot/grub/themes/Poly-dark" ]]; then
+        EXTRACTED_DIR="/boot/grub/themes/Poly-dark"
+    elif [[ -d "/boot/grub/themes/poly-dark-master" ]]; then
+        EXTRACTED_DIR="/boot/grub/themes/poly-dark-master"
+    fi
+    
+    if [[ -n "$EXTRACTED_DIR" && "$EXTRACTED_DIR" != "/boot/grub/themes/Poly-dark" ]]; then
+        log "Renaming $EXTRACTED_DIR to /boot/grub/themes/Poly-dark"
+        mv "$EXTRACTED_DIR" "/boot/grub/themes/Poly-dark"
+    fi
     
     # Set permissions
     chmod -R 755 "/boot/grub/themes/Poly-dark"
     
     # Clean up
-    rm -f "/tmp/poly-dark-master.tar.xz"
+    rm -f "/tmp/poly-dark.tar.xz"
     
     log "Theme installed to /boot/grub/themes/Poly-dark"
     
@@ -342,7 +359,7 @@ if curl -fsSL -o "/tmp/poly-dark-master.tar.xz" "https://github.com/sveto8/archI
     log "GRUB theme installed successfully."
 else
     warn "Could not download theme archive."
-    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/poly-dark-master.tar.xz"
+    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/poly-dark.tar.xz"
     warn "Skipping GRUB theme installation."
 fi
 
