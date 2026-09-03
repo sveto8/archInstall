@@ -95,8 +95,8 @@ if [[ "$INSTALL_WPS" =~ ^[Yy]$ ]]; then
 fi
 
 echo
-read -r -p "Install Only office (AUR)? [y/N] " INSTALL_WPS
-if [[ "$INSTALL_WPS" =~ ^[Yy]$ ]]; then
+read -r -p "Install OnlyOffice (AUR)? [y/N] " INSTALL_ONLYOFFICE
+if [[ "$INSTALL_ONLYOFFICE" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(onlyoffice-bin)
 fi
 
