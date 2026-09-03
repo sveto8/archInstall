@@ -67,8 +67,11 @@ configured) state.
 2. Lists disks (`lsblk`) and asks which one to install onto
 3. Confirms with a typed `WIPE` before touching anything
 4. Asks for a regular username (optional) and whether it should have sudo
-5. Asks for a desktop environment: GNOME, KDE Plasma, or none — and,
-   if one is chosen, full or minimal package set
+5. Asks for a desktop environment: GNOME, KDE Plasma, Hyprland, or none —
+   and, if one is chosen, full or minimal package set. Choosing Hyprland
+   also writes a default `hyprland.lua` config (keybinds, waybar,
+   hyprlock, hypridle) into the new user's home directory during the
+   unattended chroot step
 6. Partitions the disk: ESP → `/efi`, ext4 → `/boot`, LUKS2 → Btrfs
 7. Creates the `@`, `@home`, `@snapshots` subvolumes and mounts them
 8. `pacstrap`s the base system (+ microcode package auto-detected from
@@ -188,3 +191,8 @@ that wasn't set up with the other two scripts.
   disk is `/dev/sda`, `/dev/nvme0n1`, `/dev/vda`, etc.
 - `installApps.sh` must run as your regular user (not root/sudo) —
   `makepkg` and `yay` both refuse to build AUR packages as root.
+- The Hyprland option in `archInstall.sh` writes `~/.config/hypr/hyprland.lua`
+  (Hyprland 0.55+ uses Lua for its config instead of the older
+  `hyprland.conf` format). Treat the generated config as a starting
+  point, not a finished setup — review it against the official example
+  at `hyprwm/Hyprland/example/hyprland.lua` before relying on it.
