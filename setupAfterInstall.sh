@@ -298,26 +298,33 @@ log "Installing Xenlism GRUB theme..."
 # Create themes directory
 mkdir -p "/boot/grub/themes"
 
-# Download the complete theme directory as tar.gz
+# Download the complete theme archive
 log "Downloading Xenlism GRUB theme from GitHub..."
 
-# Download the entire directory as tar.gz
-if curl -fsSL -o "/tmp/Xenlism-Arch.tar.gz" "https://github.com/sveto8/archInstall/raw/main/grub-theme/Xenlism-Arch.tar.gz" 2>/dev/null; then
+# Download the tar.xz archive
+if curl -fsSL -o "/tmp/Xenlism-Arch.tar.xz" "https://github.com/sveto8/archInstall/raw/main/Xenlism-Arch.tar.xz"; then
     log "Extracting theme..."
     
     # Remove old theme if exists
     rm -rf "/boot/grub/themes/Xenlism-Arch"
     
     # Extract to /boot/grub/themes/
-    tar -xzf "/tmp/Xenlism-Arch.tar.gz" -C "/boot/grub/themes/"
+    tar -xf "/tmp/Xenlism-Arch.tar.xz" -C "/boot/grub/themes/"
     
     # Set permissions
     chmod -R 755 "/boot/grub/themes/Xenlism-Arch"
     
     # Clean up
-    rm -f "/tmp/Xenlism-Arch.tar.gz"
+    rm -f "/tmp/Xenlism-Arch.tar.xz"
     
     log "Theme installed to /boot/grub/themes/Xenlism-Arch"
+    
+    # Verify installation
+    if [[ -f "/boot/grub/themes/Xenlism-Arch/theme.txt" ]]; then
+        log "Theme files verified successfully."
+    else
+        warn "theme.txt not found! Theme may not work correctly."
+    fi
     
     # Set theme in /etc/default/grub
     log "Setting Xenlism-Arch as default GRUB theme..."
@@ -335,7 +342,7 @@ if curl -fsSL -o "/tmp/Xenlism-Arch.tar.gz" "https://github.com/sveto8/archInsta
     log "GRUB theme installed successfully."
 else
     warn "Could not download theme archive."
-    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/grub-theme/Xenlism-Arch.tar.gz"
+    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/Xenlism-Arch.tar.xz"
     warn "Skipping GRUB theme installation."
 fi
 
