@@ -239,3 +239,4 @@ can run in either order.
   GRUB-THEMES - downloaded from:
   https://github.com/xenlism/Grub-themes
   https://www.gnome-look.org/p/1230780
+  https://www.gnome-look.org/p/1482847
