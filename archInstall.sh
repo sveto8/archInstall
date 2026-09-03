@@ -325,6 +325,8 @@ for loc in "${LOCALES[@]}"; do
     LOCALE_GEN_CMDS+="grep -q '^${loc} UTF-8' /etc/locale.gen || { sed -i 's/^#${loc} UTF-8/${loc} UTF-8/' /etc/locale.gen; grep -q '^${loc} UTF-8' /etc/locale.gen || echo '${loc} UTF-8' >> /etc/locale.gen; }; "
 done
 
+# ---------------- CHROOT CONFIGURATION (unattended) ---------------- 
+
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
@@ -340,14 +342,12 @@ echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 cat >> /etc/hosts <<HOSTS_EOF
 127.0.0.1   localhost
 ::1         localhost
-127.0.1.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
 
 systemctl enable NetworkManager
 
-# Minimal systemd-based initramfs so the system can boot and unlock LUKS.
-# setup-btrfs-snapper.sh will overwrite this HOOKS line with the full
-# version (adds the plymouth hook) after first boot.
+# Minimal systemd-based initramfs
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
 cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
 
@@ -355,7 +355,7 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
-sed -i -E 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet"/' /etc/default/grub
+sed -i -E 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet"' /etc/default/grub
 
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
