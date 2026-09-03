@@ -298,128 +298,29 @@ log "Installing Xenlism GRUB theme..."
 # Create themes directory
 mkdir -p "/boot/grub/themes"
 
-# Download the theme from GitHub
-GRUB_THEME_TMP="/tmp/xenlism-grub-theme"
-GRUB_THEME_REPO="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-theme/Xenlism-Arch"
+# Download and extract the complete theme archive
+log "Downloading Xenlism GRUB theme from GitHub..."
 
-log "Downloading GRUB theme from GitHub..."
-rm -rf "$GRUB_THEME_TMP"
-mkdir -p "$GRUB_THEME_TMP"
-
-# List of all files to download (based on your GitHub structure)
-THEME_FILES=(
-    "background.png"
-    "dejavu_32.pfz"
-    "dejavu_sans_12.pfz"
-    "dejavu_sans_14.pfz"
-    "dejavu_sans_16.pfz"
-    "dejavu_sans_24.pfz"
-    "dejavu_sans_48.pfz"
-    "select_c.png"
-    "select_e.png"
-    "select_w.png"
-    "theme.txt"
-    "xenlism.png"
-)
-
-# Download each file
-log "Downloading theme files..."
-for file in "${THEME_FILES[@]}"; do
-    echo -n "  $file ... "
-    if curl -fsSL -o "${GRUB_THEME_TMP}/${file}" "${GRUB_THEME_REPO}/${file}" 2>/dev/null; then
-        echo -e "${GREEN}OK${NC}"
-    else
-        echo -e "${YELLOW}FAIL${NC}"
-    fi
-done
-
-# Download the icons directory (all icons)
-log "Downloading icons directory..."
-ICONS_DIR="${GRUB_THEME_TMP}/icons"
-mkdir -p "$ICONS_DIR"
-
-# List of icon files (common GRUB icons)
-ICON_FILES=(
-    "arch.png"
-    "back.png"
-    "centos.png"
-    "debian.png"
-    "efi.png"
-    "fedora.png"
-    "gentoo.png"
-    "linux.png"
-    "osx.png"
-    "reboot.png"
-    "shutdown.png"
-    "ubuntu.png"
-    "uefi.png"
-    "windows.png"
-)
-
-for icon in "${ICON_FILES[@]}"; do
-    echo -n "  icons/$icon ... "
-    if curl -fsSL -o "${ICONS_DIR}/${icon}" "${GRUB_THEME_REPO}/icons/${icon}" 2>/dev/null; then
-        echo -e "${GREEN}OK${NC}"
-    fi
-done
-
-# Also try to download any other PNG files in icons directory
-echo -n "  icons/other icons ... "
-if curl -fsSL -o "${ICONS_DIR}/other-icons.txt" "${GRUB_THEME_REPO}/icons/list.txt" 2>/dev/null; then
-    # If there's a list, download them
-    if [[ -f "${ICONS_DIR}/other-icons.txt" ]]; then
-        while IFS= read -r icon_file; do
-            [[ -z "$icon_file" ]] && continue
-            curl -fsSL -o "${ICONS_DIR}/${icon_file}" "${GRUB_THEME_REPO}/icons/${icon_file}" 2>/dev/null || true
-        done < "${ICONS_DIR}/other-icons.txt"
-        rm -f "${ICONS_DIR}/other-icons.txt"
-    fi
-    echo -e "${GREEN}OK${NC}"
-else
-    # Try to download common additional icons
-    ADDITIONAL_ICONS=(
-        "debian.png"
-        "elementary.png"
-        "generic.png"
-        "linuxmint.png"
-        "suse.png"
-        "ubuntu.png"
-        "void.png"
-    )
-    for icon in "${ADDITIONAL_ICONS[@]}"; do
-        curl -fsSL -o "${ICONS_DIR}/${icon}" "${GRUB_THEME_REPO}/icons/${icon}" 2>/dev/null || true
-    done
-    echo -e "${YELLOW}DONE (limited)${NC}"
-fi
-
-# Check if theme was downloaded successfully
-if [[ -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
-    log "Installing theme to $GRUB_THEME_DIR..."
+# Download the entire directory as tar.gz
+if curl -fsSL -o "/tmp/Xenlism-Arch.tar.gz" "https://github.com/sveto8/archInstall/raw/main/grub-theme/Xenlism-Arch.tar.gz" 2>/dev/null; then
+    log "Extracting theme..."
     
     # Remove old theme if exists
-    rm -rf "$GRUB_THEME_DIR"
-    mkdir -p "$GRUB_THEME_DIR"
+    rm -rf "/boot/grub/themes/Xenlism-Arch"
     
-    # Copy all files and directories
-    cp -a "${GRUB_THEME_TMP}/." "$GRUB_THEME_DIR/"
+    # Extract to /boot/grub/themes/
+    tar -xzf "/tmp/Xenlism-Arch.tar.gz" -C "/boot/grub/themes/"
     
-    # Set correct permissions
-    chmod -R 755 "$GRUB_THEME_DIR"
+    # Set permissions
+    chmod -R 755 "/boot/grub/themes/Xenlism-Arch"
     
-    # Verify installation
-    if [[ -f "${GRUB_THEME_DIR}/theme.txt" ]]; then
-        log "Theme files installed successfully."
-        log "Files in theme: $(ls -la ${GRUB_THEME_DIR} | wc -l) files"
-        
-        if [[ -d "${GRUB_THEME_DIR}/icons" ]]; then
-            log "Icons directory found with $(ls -1 ${GRUB_THEME_DIR}/icons | wc -l) icons."
-        else
-            warn "Icons directory not found!"
-        fi
-    fi
+    # Clean up
+    rm -f "/tmp/Xenlism-Arch.tar.gz"
+    
+    log "Theme installed to /boot/grub/themes/Xenlism-Arch"
     
     # Set theme in /etc/default/grub
-    log "Setting $GRUB_THEME_NAME as default GRUB theme..."
+    log "Setting Xenlism-Arch as default GRUB theme..."
     
     # Backup grub config
     cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
@@ -429,16 +330,13 @@ if [[ -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
     sed -i '/^GRUB_BACKGROUND=/d' /etc/default/grub
     
     # Add new GRUB_THEME line
-    echo "GRUB_THEME=\"${GRUB_THEME_DIR}/theme.txt\"" >> /etc/default/grub
+    echo 'GRUB_THEME="/boot/grub/themes/Xenlism-Arch/theme.txt"' >> /etc/default/grub
     
-    log "GRUB theme $GRUB_THEME_NAME installed successfully."
+    log "GRUB theme installed successfully."
 else
-    warn "Could not download GRUB theme. Theme files not found."
-    warn "Skipping GRUB theme installation."
+    warn "Could not download theme archive. Skipping GRUB theme installation."
+    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/grub-theme/Xenlism-Arch.tar.gz"
 fi
-
-# Clean up
-rm -rf "$GRUB_THEME_TMP"
 
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
 
