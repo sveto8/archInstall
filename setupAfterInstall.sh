@@ -300,45 +300,96 @@ mkdir -p "/boot/grub/themes"
 
 # Download the theme from GitHub
 GRUB_THEME_TMP="/tmp/xenlism-grub-theme"
+GRUB_THEME_REPO="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-theme/Xenlism-Arch"
 
 log "Downloading GRUB theme from GitHub..."
 rm -rf "$GRUB_THEME_TMP"
 mkdir -p "$GRUB_THEME_TMP"
 
-# Download all files from the theme directory
+# List of all files to download (based on your GitHub structure)
 THEME_FILES=(
-    "theme.txt"
-    "background.jpg"
     "background.png"
+    "dejavu_32.pfz"
+    "dejavu_sans_12.pfz"
+    "dejavu_sans_14.pfz"
+    "dejavu_sans_16.pfz"
+    "dejavu_sans_24.pfz"
+    "dejavu_sans_48.pfz"
+    "select_c.png"
+    "select_e.png"
+    "select_w.png"
+    "theme.txt"
     "xenlism.png"
-    "logo.png"
 )
 
-# Try to download each file
+# Download each file
+log "Downloading theme files..."
 for file in "${THEME_FILES[@]}"; do
-    echo -n "  Downloading $file ... "
+    echo -n "  $file ... "
     if curl -fsSL -o "${GRUB_THEME_TMP}/${file}" "${GRUB_THEME_REPO}/${file}" 2>/dev/null; then
         echo -e "${GREEN}OK${NC}"
     else
-        echo -e "${YELLOW}SKIP (not found)${NC}"
+        echo -e "${YELLOW}FAIL${NC}"
     fi
 done
 
-# Also try to download the icons directory
-if curl -fsSL -o "${GRUB_THEME_TMP}/icons.tar.gz" "${GRUB_THEME_REPO}/icons.tar.gz" 2>/dev/null; then
-    tar -xzf "${GRUB_THEME_TMP}/icons.tar.gz" -C "$GRUB_THEME_TMP" 2>/dev/null
-    rm -f "${GRUB_THEME_TMP}/icons.tar.gz"
-    echo -e "  Icons: ${GREEN}OK${NC}"
-fi
+# Download the icons directory (all icons)
+log "Downloading icons directory..."
+ICONS_DIR="${GRUB_THEME_TMP}/icons"
+mkdir -p "$ICONS_DIR"
 
-# Alternative: try to download as a complete archive
-if [[ ! -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
-    log "Trying to download theme as archive..."
-    if curl -fsSL -o "${GRUB_THEME_TMP}/theme.tar.gz" "${GRUB_THEME_REPO}/../Xenlism-Arch.tar.gz" 2>/dev/null; then
-        tar -xzf "${GRUB_THEME_TMP}/theme.tar.gz" -C "$GRUB_THEME_TMP" --strip-components=1 2>/dev/null
-        rm -f "${GRUB_THEME_TMP}/theme.tar.gz"
-        echo -e "  Archive download: ${GREEN}OK${NC}"
+# List of icon files (common GRUB icons)
+ICON_FILES=(
+    "arch.png"
+    "back.png"
+    "centos.png"
+    "debian.png"
+    "efi.png"
+    "fedora.png"
+    "gentoo.png"
+    "linux.png"
+    "osx.png"
+    "reboot.png"
+    "shutdown.png"
+    "ubuntu.png"
+    "uefi.png"
+    "windows.png"
+)
+
+for icon in "${ICON_FILES[@]}"; do
+    echo -n "  icons/$icon ... "
+    if curl -fsSL -o "${ICONS_DIR}/${icon}" "${GRUB_THEME_REPO}/icons/${icon}" 2>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
     fi
+done
+
+# Also try to download any other PNG files in icons directory
+echo -n "  icons/other icons ... "
+if curl -fsSL -o "${ICONS_DIR}/other-icons.txt" "${GRUB_THEME_REPO}/icons/list.txt" 2>/dev/null; then
+    # If there's a list, download them
+    if [[ -f "${ICONS_DIR}/other-icons.txt" ]]; then
+        while IFS= read -r icon_file; do
+            [[ -z "$icon_file" ]] && continue
+            curl -fsSL -o "${ICONS_DIR}/${icon_file}" "${GRUB_THEME_REPO}/icons/${icon_file}" 2>/dev/null || true
+        done < "${ICONS_DIR}/other-icons.txt"
+        rm -f "${ICONS_DIR}/other-icons.txt"
+    fi
+    echo -e "${GREEN}OK${NC}"
+else
+    # Try to download common additional icons
+    ADDITIONAL_ICONS=(
+        "debian.png"
+        "elementary.png"
+        "generic.png"
+        "linuxmint.png"
+        "suse.png"
+        "ubuntu.png"
+        "void.png"
+    )
+    for icon in "${ADDITIONAL_ICONS[@]}"; do
+        curl -fsSL -o "${ICONS_DIR}/${icon}" "${GRUB_THEME_REPO}/icons/${icon}" 2>/dev/null || true
+    done
+    echo -e "${YELLOW}DONE (limited)${NC}"
 fi
 
 # Check if theme was downloaded successfully
@@ -349,11 +400,23 @@ if [[ -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
     rm -rf "$GRUB_THEME_DIR"
     mkdir -p "$GRUB_THEME_DIR"
     
-    # Copy all files
+    # Copy all files and directories
     cp -a "${GRUB_THEME_TMP}/." "$GRUB_THEME_DIR/"
     
     # Set correct permissions
     chmod -R 755 "$GRUB_THEME_DIR"
+    
+    # Verify installation
+    if [[ -f "${GRUB_THEME_DIR}/theme.txt" ]]; then
+        log "Theme files installed successfully."
+        log "Files in theme: $(ls -la ${GRUB_THEME_DIR} | wc -l) files"
+        
+        if [[ -d "${GRUB_THEME_DIR}/icons" ]]; then
+            log "Icons directory found with $(ls -1 ${GRUB_THEME_DIR}/icons | wc -l) icons."
+        else
+            warn "Icons directory not found!"
+        fi
+    fi
     
     # Set theme in /etc/default/grub
     log "Setting $GRUB_THEME_NAME as default GRUB theme..."
@@ -370,7 +433,7 @@ if [[ -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
     
     log "GRUB theme $GRUB_THEME_NAME installed successfully."
 else
-    warn "Could not download GRUB theme. Theme files not found at $GRUB_THEME_REPO"
+    warn "Could not download GRUB theme. Theme files not found."
     warn "Skipping GRUB theme installation."
 fi
 
@@ -595,6 +658,16 @@ if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT"; then
         "$GRUB_DEFAULT"
 else
     echo 'GRUB_CMDLINE_LINUX_DEFAULT="'"$NEW_CMDLINE"'"' >> "$GRUB_DEFAULT"
+fi
+
+# Verify GRUB theme is set
+if grep -q '^GRUB_THEME=' /etc/default/grub; then
+    THEME_PATH=$(grep '^GRUB_THEME=' /etc/default/grub | cut -d= -f2 | tr -d '"')
+    if [[ -f "$THEME_PATH" ]]; then
+        log "GRUB theme configured: $THEME_PATH"
+    else
+        warn "GRUB theme file not found: $THEME_PATH"
+    fi
 fi
 
 # ---------------- GRUB INSTALL ----------------
