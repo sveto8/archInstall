@@ -72,6 +72,13 @@ GRUB_THEME_REPO="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-
 GRUB_THEME_NAME="Xenlism-Arch"
 GRUB_THEME_DIR="/boot/grub/themes/${GRUB_THEME_NAME}"
 
+# ---------------- COLORS ----------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
 # ------------------------------------------------
 
 SCRIPT_NAME="$(basename "$0")"
@@ -321,7 +328,7 @@ done
 if curl -fsSL -o "${GRUB_THEME_TMP}/icons.tar.gz" "${GRUB_THEME_REPO}/icons.tar.gz" 2>/dev/null; then
     tar -xzf "${GRUB_THEME_TMP}/icons.tar.gz" -C "$GRUB_THEME_TMP" 2>/dev/null
     rm -f "${GRUB_THEME_TMP}/icons.tar.gz"
-    echo "  Icons: OK"
+    echo -e "  Icons: ${GREEN}OK${NC}"
 fi
 
 # Alternative: try to download as a complete archive
@@ -330,7 +337,7 @@ if [[ ! -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
     if curl -fsSL -o "${GRUB_THEME_TMP}/theme.tar.gz" "${GRUB_THEME_REPO}/../Xenlism-Arch.tar.gz" 2>/dev/null; then
         tar -xzf "${GRUB_THEME_TMP}/theme.tar.gz" -C "$GRUB_THEME_TMP" --strip-components=1 2>/dev/null
         rm -f "${GRUB_THEME_TMP}/theme.tar.gz"
-        echo "  Archive download: OK"
+        echo -e "  Archive download: ${GREEN}OK${NC}"
     fi
 fi
 
