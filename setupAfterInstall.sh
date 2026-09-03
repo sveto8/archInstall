@@ -293,7 +293,7 @@ pacman -S --needed --noconfirm "${PACKAGES[@]}"
 
 # ---------------- GRUB THEME INSTALL ----------------
 
-log "Installing Xenlism GRUB theme..."
+log "Installing Poly-dark GRUB theme..."
 
 # Create themes directory
 mkdir -p "/boot/grub/themes"
@@ -302,7 +302,7 @@ mkdir -p "/boot/grub/themes"
 log "Downloading Poly dark GRUB theme from GitHub..."
 
 # Download the tar.xz archive
-if curl -fsSL -o "/tmp/Xenlism-Arch.tar.xz" "https://github.com/sveto8/archInstall/raw/main/poly-dark-master.tar.xz"; then
+if curl -fsSL -o "/tmp/poly-dark-master.tar.xz" "https://github.com/sveto8/archInstall/raw/main/poly-dark-master.tar.xz"; then
     log "Extracting theme..."
     
     # Remove old theme if exists
