@@ -298,7 +298,7 @@ log "Installing Xenlism GRUB theme..."
 # Create themes directory
 mkdir -p "/boot/grub/themes"
 
-# Download and extract the complete theme archive
+# Download the complete theme directory as tar.gz
 log "Downloading Xenlism GRUB theme from GitHub..."
 
 # Download the entire directory as tar.gz
@@ -334,8 +334,9 @@ if curl -fsSL -o "/tmp/Xenlism-Arch.tar.gz" "https://github.com/sveto8/archInsta
     
     log "GRUB theme installed successfully."
 else
-    warn "Could not download theme archive. Skipping GRUB theme installation."
+    warn "Could not download theme archive."
     warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/grub-theme/Xenlism-Arch.tar.gz"
+    warn "Skipping GRUB theme installation."
 fi
 
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
