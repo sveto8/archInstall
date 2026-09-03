@@ -67,10 +67,8 @@ ENABLE_OS_PROBER="no"
 PLYMOUTH_REPO="https://github.com/yucellmustafa/plymouth-linux.git"
 PLYMOUTH_THEME="linux-penguin"
 
-# GRUB Theme
-GRUB_THEME_REPO="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-theme/Xenlism-Arch"
-GRUB_THEME_NAME="Xenlism-Arch"
-GRUB_THEME_DIR="/boot/grub/themes/${GRUB_THEME_NAME}"
+# GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
+# / poly-dark / none), not hardcoded here.
 
 # ---------------- COLORS ----------------
 RED='\033[0;31m'
@@ -208,6 +206,27 @@ else
 fi
 info "Microcode:  ${UCODE_PKG:-none detected}"
 
+# ---------------- GRUB THEME ----------------
+
+GRUB_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-themes"
+
+echo
+echo "GRUB boot menu theme:"
+echo "  1) Xenlism-Arch"
+echo "  2) arch-linux"
+echo "  3) poly-dark"
+echo "  4) None / skip"
+read -r -p "Choice [4]: " GRUB_THEME_CHOICE
+GRUB_THEME_CHOICE="${GRUB_THEME_CHOICE:-4}"
+
+case "$GRUB_THEME_CHOICE" in
+    1) GRUB_THEME_NAME="Xenlism-Arch" ;;
+    2) GRUB_THEME_NAME="arch-linux" ;;
+    3) GRUB_THEME_NAME="poly-dark" ;;
+    *) GRUB_THEME_NAME="" ;;
+esac
+info "GRUB theme: ${GRUB_THEME_NAME:-none}"
+
 # ---------------- CONFIRM ----------------
 
 printf '\n'
@@ -222,7 +241,7 @@ printf '%s\n' "Snapshots   : $SNAP_SOURCE"
 printf '%s\n' "Boot        : $(findmnt -n -o SOURCE /boot)"
 printf '%s\n' "EFI         : $(findmnt -n -o SOURCE /efi)"
 printf '%s\n' "Microcode   : ${UCODE_PKG:-none}"
-printf '%s\n' "GRUB Theme  : $GRUB_THEME_NAME (will be downloaded)"
+printf '%s\n' "GRUB Theme  : ${GRUB_THEME_NAME:-none}"
 printf '%s\n' "============================================================"
 printf '\n'
 printf '%s\n' "The script will configure:"
@@ -235,7 +254,9 @@ printf '%s\n' "  * snap-pac pre/post pacman snapshots"
 printf '%s\n' "  * boot + daily snapshots"
 printf '%s\n' "  * automatic cleanup"
 printf '%s\n' "  * fstrim.timer (periodic TRIM instead of online discard)"
-printf '%s\n' "  * Xenlism GRUB theme (downloaded from GitHub)"
+if [[ -n "$GRUB_THEME_NAME" ]]; then
+    printf '%s\n' "  * GRUB theme: $GRUB_THEME_NAME (downloaded from GitHub)"
+fi
 if [[ "$ENABLE_BTRFS_QUOTA" == "yes" ]]; then
     printf '%s\n' "  * Btrfs quota support (qgroups)"
 else
@@ -293,74 +314,39 @@ pacman -S --needed --noconfirm "${PACKAGES[@]}"
 
 # ---------------- GRUB THEME INSTALL ----------------
 
-log "Installing Poly-dark GRUB theme..."
+if [[ -n "$GRUB_THEME_NAME" ]]; then
+    log "Installing GRUB theme: $GRUB_THEME_NAME..."
 
-# Create themes directory
-mkdir -p "/boot/grub/themes"
+    mkdir -p /boot/grub/themes
 
-# Download the complete theme archive
-log "Downloading Poly-dark GRUB theme from GitHub..."
+    GRUB_THEME_ARCHIVE="/tmp/${GRUB_THEME_NAME}.tar.xz"
+    GRUB_THEME_URL="${GRUB_THEMES_BASE_URL}/${GRUB_THEME_NAME}.tar.xz"
 
-# Download the tar.xz archive (correct filename from your repo)
-if curl -fsSL -o "/tmp/poly-dark.tar.xz" "https://github.com/sveto8/archInstall/raw/main/poly-dark.tar.xz"; then
-    log "Extracting theme..."
-    
-    # Remove old theme if exists
-    rm -rf "/boot/grub/themes/Poly-dark"
-    rm -rf "/boot/grub/themes/poly-dark"
-    rm -rf "/boot/grub/themes/poly-dark-master"
-    
-    # Extract to /boot/grub/themes/
-    tar -xf "/tmp/poly-dark.tar.xz" -C "/boot/grub/themes/"
-    
-    # Find the extracted directory (might be poly-dark, Poly-dark, or poly-dark-master)
-    EXTRACTED_DIR=""
-    if [[ -d "/boot/grub/themes/poly-dark" ]]; then
-        EXTRACTED_DIR="/boot/grub/themes/poly-dark"
-    elif [[ -d "/boot/grub/themes/Poly-dark" ]]; then
-        EXTRACTED_DIR="/boot/grub/themes/Poly-dark"
-    elif [[ -d "/boot/grub/themes/poly-dark-master" ]]; then
-        EXTRACTED_DIR="/boot/grub/themes/poly-dark-master"
-    fi
-    
-    if [[ -n "$EXTRACTED_DIR" && "$EXTRACTED_DIR" != "/boot/grub/themes/Poly-dark" ]]; then
-        log "Renaming $EXTRACTED_DIR to /boot/grub/themes/Poly-dark"
-        mv "$EXTRACTED_DIR" "/boot/grub/themes/Poly-dark"
-    fi
-    
-    # Set permissions
-    chmod -R 755 "/boot/grub/themes/Poly-dark"
-    
-    # Clean up
-    rm -f "/tmp/poly-dark.tar.xz"
-    
-    log "Theme installed to /boot/grub/themes/Poly-dark"
-    
-    # Verify installation
-    if [[ -f "/boot/grub/themes/Poly-dark/theme.txt" ]]; then
-        log "Theme files verified successfully."
+    if curl -fsSL -o "$GRUB_THEME_ARCHIVE" "$GRUB_THEME_URL"; then
+        log "Extracting theme..."
+
+        rm -rf "/boot/grub/themes/${GRUB_THEME_NAME}"
+        tar -xf "$GRUB_THEME_ARCHIVE" -C /boot/grub/themes/
+        rm -f "$GRUB_THEME_ARCHIVE"
+
+        if [[ -f "/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt" ]]; then
+            chmod -R 755 "/boot/grub/themes/${GRUB_THEME_NAME}"
+            info "Theme files verified: /boot/grub/themes/${GRUB_THEME_NAME}/theme.txt"
+
+            cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
+            sed -i '/^GRUB_THEME=/d;/^GRUB_BACKGROUND=/d' /etc/default/grub
+            echo "GRUB_THEME=\"/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt\"" >> /etc/default/grub
+
+            log "GRUB theme installed and set: $GRUB_THEME_NAME"
+        else
+            warn "theme.txt not found after extracting $GRUB_THEME_NAME -- archive layout unexpected. Skipping GRUB_THEME."
+        fi
     else
-        warn "theme.txt not found! Theme may not work correctly."
+        warn "Could not download $GRUB_THEME_URL"
+        warn "Check that the archive exists at that path in the repo. Skipping GRUB theme installation."
     fi
-    
-    # Set theme in /etc/default/grub
-    log "Setting Poly-dark as default GRUB theme..."
-    
-    # Backup grub config
-    cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
-    
-    # Remove existing GRUB_THEME or GRUB_BACKGROUND lines
-    sed -i '/^GRUB_THEME=/d' /etc/default/grub
-    sed -i '/^GRUB_BACKGROUND=/d' /etc/default/grub
-    
-    # Add new GRUB_THEME line
-    echo 'GRUB_THEME="/boot/grub/themes/Poly-dark/theme.txt"' >> /etc/default/grub
-    
-    log "GRUB theme installed successfully."
 else
-    warn "Could not download theme archive."
-    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/poly-dark.tar.xz"
-    warn "Skipping GRUB theme installation."
+    info "No GRUB theme selected -- skipping."
 fi
 
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
@@ -691,8 +677,8 @@ grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
 echo
 echo "--- GRUB theme ---"
 grep '^GRUB_THEME=' /etc/default/grub || true
-if [[ -f "$GRUB_THEME_DIR/theme.txt" ]]; then
-    echo "GRUB theme installed at: $GRUB_THEME_DIR"
+if [[ -n "$GRUB_THEME_NAME" && -f "/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt" ]]; then
+    echo "GRUB theme installed at: /boot/grub/themes/${GRUB_THEME_NAME}"
 else
     echo "GRUB theme not installed."
 fi
