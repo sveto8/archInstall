@@ -233,3 +233,7 @@ can run in either order.
   `hyprland.conf` format). Treat the generated config as a starting
   point, not a finished setup — review it against the official example
   at `hyprwm/Hyprland/example/hyprland.lua` before relying on it.
+
+
+
+  GRUB-THEME - downloaded from - https://github.com/xenlism/Grub-themes
