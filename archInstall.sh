@@ -368,7 +368,21 @@ CHROOT_EOF
 
 # ---------------- DONE ----------------
 
+# ========================================================
+# Installation complete – final message
+# ========================================================
 log "Base install complete."
+
+if [[ -d "/arch-setup" ]]; then
+    log "Copying the script to the installed Arch..."
+    cp "$0" "/arch-setup/arch-manager.sh"
+    echo -e "${YELLOW}=======================================${NC}"
+    echo -e "${GREEN}Arch has been installed!${NC}"
+    echo -e "${YELLOW}=======================================${NC}"
+    echo -e "${GREEN}After reboot, run:${NC}"
+    echo -e "${CYAN}  arch-manager.sh${NC}"
+    echo -e "${YELLOW} (or ${GREEN}sudo reboot${NC} and then ${CYAN}arch-manager.sh)${NC}"
+fi
 
 echo
 echo "============================================================"
@@ -378,9 +392,9 @@ echo "1. umount -R /mnt"
 echo "2. cryptsetup close cryptroot"
 echo "3. reboot, remove the install media"
 echo "4. Log in (CLI only -- no desktop environment yet)."
-echo "5. Run setup-btrfs-snapper.sh as root (or via sudo) to finish Snapper,"
-echo "   quota, grub-btrfs, fstrim.timer and the Plymouth theme."
-echo "6. Run installDE.sh as root (or via sudo) to install a desktop"
-echo "   environment (GNOME, KDE Plasma, Hyprland, or skip it)."
-echo "7. Run installApps.sh as your regular user to install applications."
+echo "5. After login, run 'arch-manager.sh' (it will automatically"
+echo "   run setupAfterInstall.sh, installDE.sh and installApps.sh)."
+echo "6. Run installDE.sh only if you want to skip the menu"
+echo "   (GNOME, KDE Plasma, Hyprland or skip it)."
+echo "7. Run installApps.sh as your regular user."
 echo "============================================================"
