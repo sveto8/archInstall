@@ -37,6 +37,26 @@ LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the
 KEYMAP="us"
 MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
 
+# ---------------- CONFIGURATION (edit before running) ----------------
+
+ESP_SIZE="1GiB"
+BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
+HOSTNAME="monarch"
+TIMEZONE="Europe/Zagreb"
+LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
+LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the system
+KEYMAP="us"
+MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
+
+# ---------------- COLORS ----------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# -----------------------------------------------------------------------
 # -----------------------------------------------------------------------
 
 log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
@@ -394,25 +414,27 @@ if [[ -n "$MANAGER_SCRIPT" && -f "$MANAGER_SCRIPT" ]]; then
         chmod +x /mnt/archInstall/scripts/*.sh 2>/dev/null || true
     fi
     
-    echo -e "\n${YELLOW}=======================================${NC}"
-    echo -e "${GREEN}✓ Arch has been installed successfully!${NC}"
-    echo -e "${YELLOW}=======================================${NC}"
-    echo -e "${GREEN}After reboot, run:${NC}"
-    echo -e "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
-    echo -e "${YELLOW}  (or as root: ${CYAN}/archInstall/arch-manager.sh${YELLOW})${NC}"
-    echo -e ""
-    echo -e "${GREEN}All scripts are available in:${NC}"
-    echo -e "${CYAN}  /archInstall/scripts/${NC}"
+    printf '\n'
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}After reboot, run:${NC}"
+    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+    printf '%s\n' "${YELLOW}  (or as root: ${CYAN}/archInstall/arch-manager.sh${YELLOW})${NC}"
+    printf '\n'
+    printf '%s\n' "${GREEN}All scripts are available in:${NC}"
+    printf '%s\n' "${CYAN}  /archInstall/scripts/${NC}"
 else
-    echo -e "\n${YELLOW}=======================================${NC}"
-    echo -e "${GREEN}✓ Arch has been installed successfully!${NC}"
-    echo -e "${YELLOW}=======================================${NC}"
-    echo -e "${RED}WARNING: arch-manager.sh not found!${NC}"
-    echo -e "${YELLOW}After reboot, download it again:${NC}"
-    echo -e "${CYAN}  sudo mkdir -p /archInstall${NC}"
-    echo -e "${CYAN}  sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh${NC}"
-    echo -e "${CYAN}  sudo chmod +x /archInstall/arch-manager.sh${NC}"
-    echo -e "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+    printf '\n'
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${RED}WARNING: arch-manager.sh not found!${NC}"
+    printf '%s\n' "${YELLOW}After reboot, download it again:${NC}"
+    printf '%s\n' "${CYAN}  sudo mkdir -p /archInstall${NC}"
+    printf '%s\n' "${CYAN}  sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh${NC}"
+    printf '%s\n' "${CYAN}  sudo chmod +x /archInstall/arch-manager.sh${NC}"
+    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
 fi
 
 echo
