@@ -56,7 +56,6 @@ REPO_PACKAGES=(
     terminator
     meld
     qmmp
-    jdk11-openjdk
     intellij-idea-community-edition
     code                                # open-source build of VS Code, no MS branding/telemetry
     remmina
@@ -69,30 +68,28 @@ REPO_PACKAGES=(
 )
 
 AUR_PACKAGES=(
-    f5vpn-ng
+    f5vpn-ng                             # F5 BIG-IP APM VPN client (F5's own renamed build; can be finicky across libwebkit2gtk/libxml2 updates)
     ferdium-bin
     google-chrome
     sublime-text-4
     peazip
-    wps-office                          # OpenOffice replacement (OpenOffice is unmaintained upstream)
-    ttf-wps-fonts
 )
 
-# snx-rs (Check Point VPN client) isn't needed on every machine and is a
-# slow AUR build (Rust), so it's opt-in rather than installed by default.
+# snx-rs (Check Point VPN client) and wps-office (OpenOffice replacement --
+# OpenOffice itself is unmaintained upstream) aren't needed on every
+# machine, and both are opt-in rather than installed by default.
 
 echo
 echo "Install additional apps"
 echo
-read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " ANSWER
-if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
+if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(snx-rs)
 fi
 
-# WPS Office install or not
 echo
-read -r -p "Install wps-office? [y/N] " ANSWER
-if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+read -r -p "Install WPS Office (AUR, replaces OpenOffice)? [y/N] " INSTALL_WPS
+if [[ "$INSTALL_WPS" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(wps-office ttf-wps-fonts)
 fi
 
@@ -237,10 +234,11 @@ else
 fi
 echo
 echo "Manual steps still needed:"
-if [[ "$ANSWER" =~ ^[Yy]$ ]]; then
+if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
     echo "  - snx-rs: takes a while to build from source, this is expected."
 fi
 echo "  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB."
-echo "  - F5 VPN: no Arch/AUR package exists for this -- download the client from your"
-echo "    organization's F5 BIG-IP APM portal and follow their install instructions."
+echo "  - F5 VPN (f5vpn-ng): if it fails to build or launch, check the AUR comment page --"
+echo "    this package tracks F5's own client releases and occasionally needs a library"
+echo "    fix (libxml2/webkit2gtk) after a system update."
 echo "============================================================"
