@@ -21,6 +21,11 @@ set -o errtrace
 #
 # After this script finishes, reboot into the new system and run
 # setup-btrfs-snapper.sh as root to finish Snapper/GRUB/Plymouth/quota.
+#
+# Desktop environment (asked interactively): GNOME, KDE Plasma, Hyprland,
+# or none. If Hyprland is chosen, a default hyprland.lua config (keybinds,
+# waybar, hyprlock, hypridle) is written into the new user's home
+# directory during the unattended chroot step below.
 # ============================================================
 
 # ---------------- CONFIGURATION (edit before running) ----------------
