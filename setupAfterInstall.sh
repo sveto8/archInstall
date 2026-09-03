@@ -67,6 +67,11 @@ ENABLE_OS_PROBER="no"
 PLYMOUTH_REPO="https://github.com/yucellmustafa/plymouth-linux.git"
 PLYMOUTH_THEME="linux-penguin"
 
+# GRUB Theme
+GRUB_THEME_REPO="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-theme/Xenlism-Arch"
+GRUB_THEME_NAME="Xenlism-Arch"
+GRUB_THEME_DIR="/boot/grub/themes/${GRUB_THEME_NAME}"
+
 # ------------------------------------------------
 
 SCRIPT_NAME="$(basename "$0")"
@@ -210,6 +215,7 @@ printf '%s\n' "Snapshots   : $SNAP_SOURCE"
 printf '%s\n' "Boot        : $(findmnt -n -o SOURCE /boot)"
 printf '%s\n' "EFI         : $(findmnt -n -o SOURCE /efi)"
 printf '%s\n' "Microcode   : ${UCODE_PKG:-none}"
+printf '%s\n' "GRUB Theme  : $GRUB_THEME_NAME (will be downloaded)"
 printf '%s\n' "============================================================"
 printf '\n'
 printf '%s\n' "The script will configure:"
@@ -222,6 +228,7 @@ printf '%s\n' "  * snap-pac pre/post pacman snapshots"
 printf '%s\n' "  * boot + daily snapshots"
 printf '%s\n' "  * automatic cleanup"
 printf '%s\n' "  * fstrim.timer (periodic TRIM instead of online discard)"
+printf '%s\n' "  * Xenlism GRUB theme (downloaded from GitHub)"
 if [[ "$ENABLE_BTRFS_QUOTA" == "yes" ]]; then
     printf '%s\n' "  * Btrfs quota support (qgroups)"
 else
@@ -270,11 +277,98 @@ PACKAGES=(
     btrfs-assistant
     plymouth
     git
+    curl
 )
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
 [[ "$ENABLE_OS_PROBER" == "yes" ]] && PACKAGES+=("os-prober")
 
 pacman -S --needed --noconfirm "${PACKAGES[@]}"
+
+# ---------------- GRUB THEME INSTALL ----------------
+
+log "Installing Xenlism GRUB theme..."
+
+# Create themes directory
+mkdir -p "/boot/grub/themes"
+
+# Download the theme from GitHub
+GRUB_THEME_TMP="/tmp/xenlism-grub-theme"
+
+log "Downloading GRUB theme from GitHub..."
+rm -rf "$GRUB_THEME_TMP"
+mkdir -p "$GRUB_THEME_TMP"
+
+# Download all files from the theme directory
+THEME_FILES=(
+    "theme.txt"
+    "background.jpg"
+    "background.png"
+    "xenlism.png"
+    "logo.png"
+)
+
+# Try to download each file
+for file in "${THEME_FILES[@]}"; do
+    echo -n "  Downloading $file ... "
+    if curl -fsSL -o "${GRUB_THEME_TMP}/${file}" "${GRUB_THEME_REPO}/${file}" 2>/dev/null; then
+        echo -e "${GREEN}OK${NC}"
+    else
+        echo -e "${YELLOW}SKIP (not found)${NC}"
+    fi
+done
+
+# Also try to download the icons directory
+if curl -fsSL -o "${GRUB_THEME_TMP}/icons.tar.gz" "${GRUB_THEME_REPO}/icons.tar.gz" 2>/dev/null; then
+    tar -xzf "${GRUB_THEME_TMP}/icons.tar.gz" -C "$GRUB_THEME_TMP" 2>/dev/null
+    rm -f "${GRUB_THEME_TMP}/icons.tar.gz"
+    echo "  Icons: OK"
+fi
+
+# Alternative: try to download as a complete archive
+if [[ ! -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
+    log "Trying to download theme as archive..."
+    if curl -fsSL -o "${GRUB_THEME_TMP}/theme.tar.gz" "${GRUB_THEME_REPO}/../Xenlism-Arch.tar.gz" 2>/dev/null; then
+        tar -xzf "${GRUB_THEME_TMP}/theme.tar.gz" -C "$GRUB_THEME_TMP" --strip-components=1 2>/dev/null
+        rm -f "${GRUB_THEME_TMP}/theme.tar.gz"
+        echo "  Archive download: OK"
+    fi
+fi
+
+# Check if theme was downloaded successfully
+if [[ -f "${GRUB_THEME_TMP}/theme.txt" ]]; then
+    log "Installing theme to $GRUB_THEME_DIR..."
+    
+    # Remove old theme if exists
+    rm -rf "$GRUB_THEME_DIR"
+    mkdir -p "$GRUB_THEME_DIR"
+    
+    # Copy all files
+    cp -a "${GRUB_THEME_TMP}/." "$GRUB_THEME_DIR/"
+    
+    # Set correct permissions
+    chmod -R 755 "$GRUB_THEME_DIR"
+    
+    # Set theme in /etc/default/grub
+    log "Setting $GRUB_THEME_NAME as default GRUB theme..."
+    
+    # Backup grub config
+    cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
+    
+    # Remove existing GRUB_THEME or GRUB_BACKGROUND lines
+    sed -i '/^GRUB_THEME=/d' /etc/default/grub
+    sed -i '/^GRUB_BACKGROUND=/d' /etc/default/grub
+    
+    # Add new GRUB_THEME line
+    echo "GRUB_THEME=\"${GRUB_THEME_DIR}/theme.txt\"" >> /etc/default/grub
+    
+    log "GRUB theme $GRUB_THEME_NAME installed successfully."
+else
+    warn "Could not download GRUB theme. Theme files not found at $GRUB_THEME_REPO"
+    warn "Skipping GRUB theme installation."
+fi
+
+# Clean up
+rm -rf "$GRUB_THEME_TMP"
 
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
 
@@ -590,6 +684,15 @@ fi
 echo
 echo "--- GRUB command line ---"
 grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
+
+echo
+echo "--- GRUB theme ---"
+grep '^GRUB_THEME=' /etc/default/grub || true
+if [[ -f "$GRUB_THEME_DIR/theme.txt" ]]; then
+    echo "GRUB theme installed at: $GRUB_THEME_DIR"
+else
+    echo "GRUB theme not installed."
+fi
 
 echo
 echo "--- Initial snapshot ---"
