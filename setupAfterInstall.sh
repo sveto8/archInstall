@@ -299,35 +299,35 @@ log "Installing Xenlism GRUB theme..."
 mkdir -p "/boot/grub/themes"
 
 # Download the complete theme archive
-log "Downloading Xenlism GRUB theme from GitHub..."
+log "Downloading Poly dark GRUB theme from GitHub..."
 
 # Download the tar.xz archive
-if curl -fsSL -o "/tmp/Xenlism-Arch.tar.xz" "https://github.com/sveto8/archInstall/raw/main/Xenlism-Arch.tar.xz"; then
+if curl -fsSL -o "/tmp/Xenlism-Arch.tar.xz" "https://github.com/sveto8/archInstall/raw/main/poly-dark-master.tar.xz"; then
     log "Extracting theme..."
     
     # Remove old theme if exists
-    rm -rf "/boot/grub/themes/Xenlism-Arch"
+    rm -rf "/boot/grub/themes/Poly-dark"
     
     # Extract to /boot/grub/themes/
-    tar -xf "/tmp/Xenlism-Arch.tar.xz" -C "/boot/grub/themes/"
+    tar -xf "/tmp/poly-dark-master.tar.xz" -C "/boot/grub/themes/"
     
     # Set permissions
-    chmod -R 755 "/boot/grub/themes/Xenlism-Arch"
+    chmod -R 755 "/boot/grub/themes/Poly-dark"
     
     # Clean up
-    rm -f "/tmp/Xenlism-Arch.tar.xz"
+    rm -f "/tmp/poly-dark-master.tar.xz"
     
-    log "Theme installed to /boot/grub/themes/Xenlism-Arch"
+    log "Theme installed to /boot/grub/themes/Poly-dark"
     
     # Verify installation
-    if [[ -f "/boot/grub/themes/Xenlism-Arch/theme.txt" ]]; then
+    if [[ -f "/boot/grub/themes/Poly-dark/theme.txt" ]]; then
         log "Theme files verified successfully."
     else
         warn "theme.txt not found! Theme may not work correctly."
     fi
     
     # Set theme in /etc/default/grub
-    log "Setting Xenlism-Arch as default GRUB theme..."
+    log "Setting Poly-dark as default GRUB theme..."
     
     # Backup grub config
     cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
@@ -337,12 +337,12 @@ if curl -fsSL -o "/tmp/Xenlism-Arch.tar.xz" "https://github.com/sveto8/archInsta
     sed -i '/^GRUB_BACKGROUND=/d' /etc/default/grub
     
     # Add new GRUB_THEME line
-    echo 'GRUB_THEME="/boot/grub/themes/Xenlism-Arch/theme.txt"' >> /etc/default/grub
+    echo 'GRUB_THEME="/boot/grub/themes/Poly-dark/theme.txt"' >> /etc/default/grub
     
     log "GRUB theme installed successfully."
 else
     warn "Could not download theme archive."
-    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/Xenlism-Arch.tar.xz"
+    warn "Make sure the archive exists at: https://github.com/sveto8/archInstall/raw/main/poly-dark-master.tar.xz"
     warn "Skipping GRUB theme installation."
 fi
 
