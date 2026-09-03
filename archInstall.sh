@@ -355,7 +355,7 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
-sed -i -E 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet"' /etc/default/grub
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet\"/" /etc/default/grub
 
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
