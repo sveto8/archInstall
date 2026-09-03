@@ -87,7 +87,11 @@ trap 'die "Failed at line $LINENO. Configuration backups (if any were made yet) 
 
 # ---------------- BASIC CHECKS ----------------
 
-[[ $EUID -eq 0 ]] || die "Run this script as root."
+if [[ $EUID -ne 0 ]]; then
+    command -v sudo >/dev/null || die "This script needs root, and sudo isn't installed to elevate automatically. Run it with: su -c ./setupAfterInstall.sh"
+    echo "Not running as root -- re-launching with sudo (you may be asked for your password)."
+    exec sudo -- "$0" "$@"
+fi
 
 command -v pacman >/dev/null || die "pacman not found."
 command -v findmnt >/dev/null || die "findmnt not found."
