@@ -76,7 +76,7 @@ download_scripts() {
     done
 }
 
-# Run a script
+# Run a script with auto-sudo if needed
 run_script() {
     local script="$1"
     local path="${DOWNLOAD_DIR}/${script}"
@@ -143,30 +143,6 @@ show_menu() {
     echo -e "${BLUE}╚═══════════════════════════════════════════════════════════════╝${NC}"
 }
 
-# Prerequisites check
-check_prereq() {
-    local script="$1"
-    case "$script" in
-        "archInstall.sh")
-            [[ $EUID -ne 0 ]] && { error "Need root!"; return 1; }
-            [[ ! -d /sys/firmware/efi ]] && { error "Not UEFI!"; return 1; }
-            ;;
-        "setupAfterInstall.sh")
-            [[ $EUID -ne 0 ]] && { error "Need root!"; return 1; }
-            [[ ! -f /etc/os-release ]] || ! grep -q "ID=arch" /etc/os-release && { error "Not Arch!"; return 1; }
-            ;;
-        "installDE.sh")
-            [[ ! -f /etc/os-release ]] || ! grep -q "ID=arch" /etc/os-release && { error "Not Arch!"; return 1; }
-            ;;
-        "installApps.sh")
-            [[ $EUID -eq 0 ]] && { error "Cannot run as root!"; return 1; }
-            [[ ! -f /etc/os-release ]] || ! grep -q "ID=arch" /etc/os-release && { error "Not Arch!"; return 1; }
-            command -v sudo >/dev/null || { error "sudo missing!"; return 1; }
-            ;;
-    esac
-    return 0
-}
-
 # Install all (Live CD only)
 install_all() {
     log "Starting full installation..."
@@ -174,11 +150,8 @@ install_all() {
     
     for script in "${SCRIPTS[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
-        if check_prereq "$script"; then
-            run_script "$script" || failed=$((failed+1))
-        else
-            warn "Skipping $script (prerequisites not met)"
-        fi
+        # Run script directly without prereq check (run_script handles sudo)
+        run_script "$script" || failed=$((failed+1))
     done
     
     if [[ $failed -eq 0 ]]; then
@@ -200,11 +173,7 @@ install_remaining() {
 
     for script in "${scripts_to_run[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
-        if check_prereq "$script"; then
-            run_script "$script" || failed=$((failed+1))
-        else
-            warn "Skipping $script (prerequisites not met)"
-        fi
+        run_script "$script" || failed=$((failed+1))
     done
 
     if [[ $failed -eq 0 ]]; then
@@ -238,9 +207,7 @@ main() {
             1|2|3|4)
                 script="${SCRIPTS[$((choice-1))]}"
                 echo
-                if check_prereq "$script"; then
-                    run_script "$script"
-                fi
+                run_script "$script"
                 echo
                 read -r -p "Press Enter..."
                 ;;
