@@ -747,25 +747,26 @@ hl.bind(mainMod .. " + SHIFT + R", hl.dsp.exec_cmd("hyprctl reload"))
 hl.bind(mainMod .. " + SHIFT + E", hl.dsp.exec_cmd("hyprctl dispatch exit"))
 
 -- Focus
-hl.bind(mainMod .. " + LEFT", hl.dsp.focus("l"))
-hl.bind(mainMod .. " + RIGHT", hl.dsp.focus("r"))
-hl.bind(mainMod .. " + UP", hl.dsp.focus("u"))
-hl.bind(mainMod .. " + DOWN", hl.dsp.focus("d"))
+hl.bind(mainMod .. " + LEFT", hl.dsp.focus({ direction = "left" }))
+hl.bind(mainMod .. " + RIGHT", hl.dsp.focus({ direction = "right" }))
+hl.bind(mainMod .. " + UP", hl.dsp.focus({ direction = "up" }))
+hl.bind(mainMod .. " + DOWN", hl.dsp.focus({ direction = "down" }))
 
 -- Move window
-hl.bind(mainMod .. " + SHIFT + LEFT", hl.dsp.window.move({ direction = "l" }))
-hl.bind(mainMod .. " + SHIFT + RIGHT", hl.dsp.window.move({ direction = "r" }))
-hl.bind(mainMod .. " + SHIFT + UP", hl.dsp.window.move({ direction = "u" }))
-hl.bind(mainMod .. " + SHIFT + DOWN", hl.dsp.window.move({ direction = "d" }))
+hl.bind(mainMod .. " + SHIFT + LEFT", hl.dsp.window.move({ direction = "left" }))
+hl.bind(mainMod .. " + SHIFT + RIGHT", hl.dsp.window.move({ direction = "right" }))
+hl.bind(mainMod .. " + SHIFT + UP", hl.dsp.window.move({ direction = "up" }))
+hl.bind(mainMod .. " + SHIFT + DOWN", hl.dsp.window.move({ direction = "down" }))
 
 -- Resize / move with mouse
 hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })
 hl.bind(mainMod .. " + mouse:273", hl.dsp.window.resize(), { mouse = true })
 
--- Workspaces 1-10
+-- Workspaces 1-10 (workspace 10 maps to physical key "0")
 for i = 1, 10 do
-    hl.bind(mainMod .. " + " .. i, hl.workspace(i))
-    hl.bind(mainMod .. " + SHIFT + " .. i, hl.dsp.window.move({ workspace = i }))
+    local key = i % 10
+    hl.bind(mainMod .. " + " .. key, hl.dsp.focus({ workspace = i }))
+    hl.bind(mainMod .. " + SHIFT + " .. key, hl.dsp.window.move({ workspace = i }))
 end
 
 -- Workspace scrolling
