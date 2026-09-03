@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # ============================================================
 
 # URL baza za skripte (promijeni prema svom repozitoriju)
-SCRIPT_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
+SCRIPT_URL="https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main"
 
 # Liste skripti
 SCRIPTS=(
@@ -41,16 +41,25 @@ check_status() {
     local root="✗"
     local btrfs="✗"
     local snapper="✗"
-    
+    local installed="✗"          # <<< VAŽNO: ovo je novi status
+
     [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
     [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release && live="✓"
     [[ $EUID -eq 0 ]] && root="✓"
     command -v findmnt >/dev/null && findmnt -n -o FSTYPE / 2>/dev/null | grep -q "btrfs" && btrfs="✓"
     [[ -f /etc/snapper/configs/root ]] && snapper="✓"
-    
+
+    # <<< NOVO: je li setup već završen?
+    if [[ -f "/arch-setup/.installed" ]]; then
+        installed="✓"
+    elif [[ -d "/arch-setup" ]]; then
+        installed="⚠"
+    fi
+
     echo -e "${BLUE}Status sustava:${NC}"
     echo -e "  Arch: $arch   Live CD: $live   Root: $root"
     echo -e "  Btrfs: $btrfs   Snapper: $snapper"
+    echo -e "  Installirano: $installed"
     echo
 }
 
@@ -102,7 +111,7 @@ show_menu() {
     echo -e "${BLUE}║${NC}  2) Postavi Snapper/GRUB (setupAfterInstall)  ${BLUE}║${NC}"
     echo -e "${BLUE}║${NC}  3) Instaliraj DE (installDE.sh)              ${BLUE}║${NC}"
     echo -e "${BLUE}║${NC}  4) Instaliraj aplikacije (installApps.sh)    ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  5) INSTALIRAJ SVE (1→2→3→4)                 ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  5) INSTALIRAJ SVE (2→3→4)                    ${BLUE}║${NC}"
     echo -e "${BLUE}║${NC}  6) Preuzmi skripte                           ${BLUE}║${NC}"
     echo -e "${BLUE}║${NC}  0) Izlaz                                    ${BLUE}║${NC}"
     echo -e "${BLUE}╚════════════════════════════════════════════════════╝${NC}"
@@ -132,7 +141,7 @@ check_prereq() {
     return 0
 }
 
-# Instalacija svega
+# Instalacija svega (samo Live CD)
 install_all() {
     log "Pokrećem potpunu instalaciju..."
     local failed=0
@@ -153,16 +162,42 @@ install_all() {
     fi
 }
 
+# ==================== NOVO: Instalacija preostalih skripti ====================
+install_remaining() {
+    log "Arch je već instaliran – pokrećem preostale skripte..."
+    local failed=0
+    local scripts_to_run=(
+        "setupAfterInstall.sh"
+        "installDE.sh"
+        "installApps.sh"
+    )
+
+    for script in "${scripts_to_run[@]}"; do
+        echo -e "\n${BLUE}>>> $script${NC}"
+        if check_prereq "$script"; then
+            run_script "$script" || failed=$((failed+1))
+        else
+            warn "Preskačem $script (preduvjeti nisu zadovoljeni)"
+        fi
+    done
+
+    if [[ $failed -eq 0 ]]; then
+        log "Sve preostale skripte završene! 🎉"
+        touch "/arch-setup/.installed"
+    else
+        warn "$failed skripti nije uspjelo"
+    fi
+}
+
 # ---------------- GLAVNI PROGRAM ----------------
 main() {
-    # Prvo preuzmi skripte ako nisu dostupne
+    # Prvo preuzmi skripte ako nisu dostupne (samo ako je live)
     local need_download=false
     for script in "${SCRIPTS[@]}"; do
         [[ ! -f "${DOWNLOAD_DIR}/${script}" ]] && need_download=true
     done
     
     if [[ "$need_download" == true ]]; then
-        log "Skripte nisu preuzete. Preuzimam..."
         download_scripts
         echo
     fi
@@ -183,7 +218,11 @@ main() {
                 read -r -p "Pritisnite Enter..."
                 ;;
             5)
-                install_all
+                if [[ -f "/arch-setup/.installed" ]]; then
+                    error "Setup je već završen!"
+                else
+                    install_remaining
+                fi
                 echo
                 read -r -p "Pritisnite Enter..."
                 ;;
@@ -212,7 +251,6 @@ if [[ $# -gt 0 ]]; then
         --install) download_scripts; install_all; exit 0 ;;
         --help) echo "Koristi: $0 [--download|--install|--help]"; exit 0 ;;
         *)
-            # Pokušaj pokrenuti zadanu skriptu
             if [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
                 run_script "$1" "${@:2}"
                 exit $?
