@@ -369,7 +369,7 @@ CHROOT_EOF
 # ---------------- DONE ----------------
 
 # ========================================================
-# Installation complete – final message
+# Installation complete – final message (arch-manager.sh)
 # ========================================================
 log "Base install complete."
 
