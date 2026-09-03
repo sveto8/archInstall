@@ -1,15 +1,17 @@
 # Arch Linux: LUKS2 + Btrfs + Snapper + DE + apps install scripts
 
 Four scripts that together take a machine from an Arch ISO boot to a
-fully configured, encrypted, snapshotted Arch install with GRUB,
-grub-btrfs, Snapper, a Plymouth boot theme, a desktop environment, and a
-personal application set.
+fully configured, encrypted, snapshotted Arch install with GRUB (+
+theme), grub-btrfs, Snapper, a Plymouth boot theme, a desktop
+environment, and a personal application set — plus an optional
+menu-driven wrapper that downloads and runs them for you.
 
 ```
 archInstall.sh        Phase 0   — run from the Arch ISO live environment
 setupAfterInstall.sh  Phase 1   — run on the new system, after first boot
 installDE.sh           Phase 1.5 — run as root, installs a desktop environment
 installApps.sh         Phase 2   — run as your regular user, once at the desktop
+arch-manager.sh        optional  — menu that downloads + runs the four above
 ```
 
 `setupAfterInstall.sh` and `installDE.sh` can be run in either order —
@@ -98,30 +100,37 @@ equivalent manual install) already produced the layout above.
    `/.snapshots` mounted, fstab entry for `/.snapshots` present)
 2. Detects the LUKS2 backing device (via `cryptsetup status`, with an
    `lsblk` fallback) and CPU vendor for microcode
-3. Shows a summary and asks for confirmation
-4. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
+3. Asks which GRUB boot menu theme to install: `Xenlism-Arch`,
+   `arch-linux`, `poly-dark`, or none — downloads the matching
+   `<name>.tar.xz` from the repo's `grub-themes/` folder, extracts it to
+   `/boot/grub/themes/<name>/`, and points `GRUB_THEME` at it in
+   `/etc/default/grub` (skipped entirely, without failing the script, if
+   the archive can't be downloaded)
+4. Shows a summary and asks for confirmation
+5. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
    `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`
-5. Installs: `btrfs-progs`, `cryptsetup`, `snapper`, `snap-pac`, `grub`,
+6. Installs: `btrfs-progs`, `cryptsetup`, `snapper`, `snap-pac`, `grub`,
    `grub-btrfs`, `inotify-tools`, `btrfs-assistant`, `plymouth`, `git`,
    microcode package
-6. Sets up the Snapper config for `/` (creates it against the existing
+7. Sets up the Snapper config for `/` (creates it against the existing
    `@snapshots` subvolume rather than letting Snapper create its own),
    with number + timeline retention policy and space-based cleanup
    (Btrfs quota/qgroups — can be disabled via `ENABLE_BTRFS_QUOTA=no`)
-7. Enables `snapper-cleanup.timer`, `snapper-timeline.timer`,
+8. Enables `snapper-cleanup.timer`, `snapper-timeline.timer`,
    `snapper-boot.timer`, `fstrim.timer`
-8. Best-effort installs a Plymouth theme from a git repo (falls back to
+9. Best-effort installs a Plymouth theme from a git repo (falls back to
    the default theme without failing the script if unavailable)
-9. Rewrites `mkinitcpio.conf` HOOKS to the full systemd + Plymouth +
-   `sd-encrypt` set and rebuilds the initramfs
-10. Rewrites the GRUB kernel cmdline (`rd.luks.name=`, `root=`,
+10. Rewrites `mkinitcpio.conf` HOOKS to the full systemd + Plymouth +
+    `sd-encrypt` set and rebuilds the initramfs
+11. Rewrites the GRUB kernel cmdline (`rd.luks.name=`, `root=`,
     `rootflags=subvol=@`, `quiet splash`, …), optionally enables
     `os-prober` (`ENABLE_OS_PROBER=yes`, for dual-boot setups where GRUB
     itself should list the other OS), reinstalls GRUB, enables
     `grub-btrfsd`, regenerates `grub.cfg`
-11. Creates and cleans up an initial protected snapshot
-12. Prints a final status report (filesystems, subvolumes, LUKS status,
-    Snapper config/snapshots, timers, Plymouth theme, GRUB cmdline)
+12. Creates and cleans up an initial protected snapshot
+13. Prints a final status report (filesystems, subvolumes, LUKS status,
+    Snapper config/snapshots, timers, Plymouth theme, GRUB theme, GRUB
+    cmdline)
 
 ### 3. `installDE.sh` — on the installed system, as root
 
@@ -160,18 +169,21 @@ GRUB at all.
    `yay` itself built from AUR with `makepkg`)
 3. Installs official-repo packages via plain `pacman`, and AUR-only
    packages via `yay` — current list:
-   - **Repo:** `guake`, `terminator`, `meld`, `qmmp`, `jdk11-openjdk`,
+   - **Repo:** `jdk11-openjdk`, `guake`, `terminator`, `meld`, `qmmp`,
      `intellij-idea-community-edition`, `code` (open-source VS Code
      build, no MS branding/telemetry), `remmina`, `kolourpaint`,
-     `mission-center`, `hplip` + `cups` + `system-config-printer`
-     (HP/general printer support)
-   - **AUR:** `ferdium-bin`, `google-chrome`, `sublime-text-4`,
-     `peazip-gtk2`, `wps-office` + `ttf-wps-fonts` (OpenOffice
-     replacement — OpenOffice itself is unmaintained upstream and its
-     AUR package has a history of maintainer issues)
-4. Asks `[y/N]` whether to also install `snx-rs` (Check Point VPN
-   client, AUR, slow Rust build) — opt-in since it's not needed on
-   every machine
+     `mission-center`, `stow`, `hplip` + `cups` +
+     `system-config-printer` (HP/general printer support)
+   - **AUR:** `f5vpn-ng` (F5 BIG-IP APM VPN client — F5's own renamed
+     build; can occasionally need a library fix after a
+     libxml2/webkit2gtk update), `ferdium-bin`, `google-chrome`,
+     `sublime-text-4`, `peazip`, `python-pyqt5` (needed for `hp-setup`'s
+     GUI)
+4. Asks `[y/N]` for three opt-in extras not installed by default:
+   `snx-rs` (Check Point VPN client, AUR, slow Rust build), `wps-office`
+   + `ttf-wps-fonts`, and `onlyoffice-bin` — all AUR, all skippable per
+   machine since not everyone needs an office suite or a specific VPN
+   client
 5. Prints the current package list, then asks for any extra packages
    (space-separated) to add for this run
 6. Every package — list-defined or typed in at step 5 — is checked with
@@ -182,12 +194,56 @@ GRUB at all.
 7. Sets OpenJDK 11 as the default JVM (`archlinux-java set`)
 8. Enables the CUPS printing service
 9. Final summary: what installed, what was skipped/failed, and manual
-   next steps (`hp-setup` for the actual printer, F5 VPN — no package
-   exists for this, download it from your organization's portal)
+   next steps (`hp-setup` for the actual printer, and a note that
+   `f5vpn-ng` may need a library fix if it fails to build/launch after
+   a system update)
 
 You can re-run `installApps.sh` any time later to add more software —
 it's idempotent (`--needed` skips already-installed packages) and asks
 for extras every time.
+
+### `arch-manager.sh` — optional menu-driven wrapper
+
+Not part of the numbered phases — a convenience front-end that
+downloads all four scripts above from the repo and lets you run them
+from a menu instead of typing filenames yourself.
+
+- Downloads `archInstall.sh`, `setupAfterInstall.sh`, `installDE.sh`,
+  `installApps.sh` into `~/arch-setup/downloads/` (only if not already
+  present)
+- Shows a status line (Arch? Live ISO? root? Btrfs mounted? Snapper
+  configured? already run before?) before the menu every time
+- Menu options: run any one script individually, run
+  `setupAfterInstall.sh` → `installDE.sh` → `installApps.sh` in sequence
+  ("INSTALL ALL"), or re-download the scripts
+- Runs `archInstall.sh` / `setupAfterInstall.sh` / `installDE.sh` with
+  `sudo` automatically if not already root; runs `installApps.sh` as
+  the current user, matching each script's own requirement
+- CLI shortcuts: `./arch-manager.sh --download`, `--install` (download +
+  run everything), or `./arch-manager.sh <script-name.sh>` to run one
+  script directly
+- Edit `SCRIPT_URL` near the top of the file to point at your own fork
+  if you're not using `sveto8/archInstall`
+
+## GRUB themes
+
+`setupAfterInstall.sh` downloads the selected theme from
+`grub-themes/<name>.tar.xz` in this repo, so that folder needs to exist
+alongside the scripts with matching archive names. Current themes:
+
+| Menu name      | Archive                              | Source |
+|-----------------|--------------------------------------|--------|
+| `Xenlism-Arch`  | `grub-themes/Xenlism-Arch.tar.xz`    | [xenlism/Grub-themes](https://github.com/xenlism/Grub-themes) |
+| `arch-linux`    | `grub-themes/arch-linux.tar.xz`      | [gnome-look.org/p/1230780](https://www.gnome-look.org/p/1230780) |
+| `poly-dark`     | `grub-themes/poly-dark.tar.xz`       | [gnome-look.org/p/1482847](https://www.gnome-look.org/p/1482847) |
+
+Each archive must extract to a single top-level folder with the same
+name as the archive (e.g. `poly-dark.tar.xz` → `poly-dark/theme.txt`,
+not `poly-dark-1.0/theme.txt`) — the script installs to
+`/boot/grub/themes/<name>/` and expects `theme.txt` at that exact path.
+To add a theme: drop a correctly-named `.tar.xz` into `grub-themes/` in
+the repo and add a matching menu entry in `setupAfterInstall.sh`.
+
 
 ## Requirements between the scripts
 
@@ -233,10 +289,7 @@ can run in either order.
   `hyprland.conf` format). Treat the generated config as a starting
   point, not a finished setup — review it against the official example
   at `hyprwm/Hyprland/example/hyprland.lua` before relying on it.
-
-
-
-  GRUB-THEMES - downloaded from:
-  https://github.com/xenlism/Grub-themes
-  https://www.gnome-look.org/p/1230780
-  https://www.gnome-look.org/p/1482847
+- `arch-manager.sh` is a convenience wrapper, not a replacement for
+  understanding what each script does — it just saves typing
+  `curl`/`chmod`/filenames by hand. Nothing about the four numbered
+  scripts changes when run through it.
