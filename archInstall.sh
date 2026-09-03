@@ -188,12 +188,6 @@ sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
 echo
 echo "==> Disk partitioning completed."
 
-#wipefs -af "$DEVICE"
-#sgdisk --zap-all "$DEVICE"
-#sgdisk -n1:0:+${ESP_SIZE}  -t1:ef00 -c1:"EFI"       "$DEVICE"
-#sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot"      "$DEVICE"
-#sgdisk -n3:0:0             -t3:8309 -c3:"cryptroot" "$DEVICE"
-
 partprobe "$DEVICE"
 udevadm settle
 sleep 3
@@ -354,6 +348,7 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
+# Ispravljena linija - koristi dvostruke navodnike
 sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet\"/" /etc/default/grub
 
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
@@ -368,19 +363,56 @@ CHROOT_EOF
 # ---------------- DONE ----------------
 
 # ========================================================
-# Installation complete – final message (arch-manager.sh)
+# Installation complete – copy manager script to installed system
 # ========================================================
 log "Base install complete."
 
-if [[ -d "/arch-setup" ]]; then
-    log "Copying the script to the installed Arch..."
-    cp "$0" "/arch-setup/arch-manager.sh"
-    echo -e "${YELLOW}=======================================${NC}"
-    echo -e "${GREEN}Arch has been installed!${NC}"
+# Create /archInstall directory on the new system
+log "Creating /archInstall directory on the new system..."
+mkdir -p /mnt/archInstall
+
+# Find the manager script
+MANAGER_SCRIPT=""
+if [[ -f "/arch-setup/arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="/arch-setup/arch-manager.sh"
+elif [[ -f "$(dirname "$0")/arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="$(dirname "$0")/arch-manager.sh"
+elif [[ -f "./arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="./arch-manager.sh"
+fi
+
+if [[ -n "$MANAGER_SCRIPT" && -f "$MANAGER_SCRIPT" ]]; then
+    log "Copying arch-manager.sh to /archInstall on the new system..."
+    cp "$MANAGER_SCRIPT" /mnt/archInstall/arch-manager.sh
+    chmod +x /mnt/archInstall/arch-manager.sh
+    
+    # Also copy all other scripts if they exist
+    if [[ -d "/arch-setup/downloads" ]]; then
+        log "Copying all installation scripts to /archInstall..."
+        mkdir -p /mnt/archInstall/scripts
+        cp -r /arch-setup/downloads/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
+        chmod +x /mnt/archInstall/scripts/*.sh 2>/dev/null || true
+    fi
+    
+    echo -e "\n${YELLOW}=======================================${NC}"
+    echo -e "${GREEN}✓ Arch has been installed successfully!${NC}"
     echo -e "${YELLOW}=======================================${NC}"
     echo -e "${GREEN}After reboot, run:${NC}"
-    echo -e "${CYAN}  arch-manager.sh${NC}"
-    echo -e "${YELLOW} (or ${GREEN}sudo reboot${NC} and then ${CYAN}arch-manager.sh)${NC}"
+    echo -e "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+    echo -e "${YELLOW}  (or as root: ${CYAN}/archInstall/arch-manager.sh${YELLOW})${NC}"
+    echo -e ""
+    echo -e "${GREEN}All scripts are available in:${NC}"
+    echo -e "${CYAN}  /archInstall/scripts/${NC}"
+else
+    echo -e "\n${YELLOW}=======================================${NC}"
+    echo -e "${GREEN}✓ Arch has been installed successfully!${NC}"
+    echo -e "${YELLOW}=======================================${NC}"
+    echo -e "${RED}WARNING: arch-manager.sh not found!${NC}"
+    echo -e "${YELLOW}After reboot, download it again:${NC}"
+    echo -e "${CYAN}  sudo mkdir -p /archInstall${NC}"
+    echo -e "${CYAN}  sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh${NC}"
+    echo -e "${CYAN}  sudo chmod +x /archInstall/arch-manager.sh${NC}"
+    echo -e "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
 fi
 
 echo
@@ -390,10 +422,13 @@ echo "============================================================"
 echo "1. umount -R /mnt"
 echo "2. cryptsetup close cryptroot"
 echo "3. reboot, remove the install media"
-echo "4. Log in (CLI only -- no desktop environment yet)."
-echo "5. After login, run 'arch-manager.sh' (it will automatically"
-echo "   run setupAfterInstall.sh, installDE.sh and installApps.sh)."
-echo "6. Run installDE.sh only if you want to skip the menu"
-echo "   (GNOME, KDE Plasma, Hyprland or skip it)."
-echo "7. Run installApps.sh as your regular user."
+echo "4. After reboot, log in and run:"
+if [[ -f /mnt/archInstall/arch-manager.sh ]]; then
+    echo "   sudo /archInstall/arch-manager.sh"
+else
+    echo "   sudo mkdir -p /archInstall"
+    echo "   sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh"
+    echo "   sudo chmod +x /archInstall/arch-manager.sh"
+    echo "   sudo /archInstall/arch-manager.sh"
+fi
 echo "============================================================"
