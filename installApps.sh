@@ -63,7 +63,6 @@ REPO_PACKAGES=(
     mission-center
     stow
     hplip                               # HP printer support
-    python-pyqt5
     cups                                 # printing system
     system-config-printer               # GUI printer management
 )
@@ -89,15 +88,9 @@ if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
 fi
 
 echo
-read -r -p "Install WPS Office (AUR)? [y/N] " INSTALL_WPS
+read -r -p "Install WPS Office (AUR, replaces OpenOffice)? [y/N] " INSTALL_WPS
 if [[ "$INSTALL_WPS" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(wps-office ttf-wps-fonts)
-fi
-
-echo
-read -r -p "Install Only office (AUR)? [y/N] " INSTALL_WPS
-if [[ "$INSTALL_WPS" =~ ^[Yy]$ ]]; then
-    AUR_PACKAGES+=(onlyoffice-bin)
 fi
 
 # ---------------- EXTRA PACKAGES ----------------
