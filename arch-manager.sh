@@ -86,11 +86,38 @@ run_script() {
         return 1
     fi
     
+    # Check if script needs root
+    local needs_root=false
+    case "$script" in
+        "archInstall.sh"|"setupAfterInstall.sh"|"installDE.sh")
+            needs_root=true
+            ;;
+    esac
+    
     echo -e "\n${BLUE}═══════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}Running: ${YELLOW}$script${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}\n"
     
-    "$path"
+    # If root is needed, run with sudo (or directly if already root)
+    if [[ "$needs_root" == true ]]; then
+        if [[ $EUID -eq 0 ]]; then
+            "$path"
+        else
+            if command -v sudo >/dev/null 2>&1; then
+                echo -e "${YELLOW}This script requires root privileges.${NC}"
+                echo -e "${CYAN}Running with sudo (enter your password)...${NC}"
+                echo
+                sudo "$path"
+            else
+                error "sudo is not installed!"
+                return 1
+            fi
+        fi
+    else
+        # installApps.sh - run as current user
+        "$path"
+    fi
+    
     local code=$?
     
     if [[ $code -eq 0 ]]; then
