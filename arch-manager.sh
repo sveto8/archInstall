@@ -103,17 +103,17 @@ run_script() {
 
 # Main menu
 show_menu() {
-    echo -e "${BLUE}╔════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}Arch Linux Installation Manager${NC}              ${BLUE}║${NC}"
-    echo -e "${BLUE}╠════════════════════════════════════════════════════╣${NC}"
-    echo -e "${BLUE}║${NC}  1) Install Arch (archInstall.sh)              ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  2) Setup Snapper/GRUB (setupAfterInstall)    ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  3) Install DE (installDE.sh)                 ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  4) Install applications (installApps.sh)     ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  5) INSTALL ALL (2→3→4)                       ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  6) Download scripts                          ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  0) Exit                                     ${BLUE}║${NC}"
-    echo -e "${BLUE}╚════════════════════════════════════════════════════╝${NC}"
+    echo -e "${BLUE}╔═══════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║${NC}  ${YELLOW}Arch Linux Installation Manager${NC}    ${BLUE}║${NC}"
+    echo -e "${BLUE}╠═══════════════════════════════════════════════════════════════╣${NC}"
+    echo -e "${BLUE}║${NC}  1) Install Arch (archInstall.sh)                 ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  2) Setup Snapper/GRUB (setupAfterInstall)        ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  3) Install DE (installDE.sh)                     ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  4) Install applications (installApps.sh)         ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  5) INSTALL ALL (2→3→4)                           ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  6) Download scripts                              ${BLUE}║${NC}"
+    echo -e "${BLUE}║${NC}  0) Exit                                          ${BLUE}║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════════════════════════╝${NC}"
 }
 
 # Prerequisites check
