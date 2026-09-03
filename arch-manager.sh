@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # ============================================================
 
 # URL for the scripts repository (change according to your repo)
-SCRIPT_URL="https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main"
+SCRIPT_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
 
 # List of scripts
 SCRIPTS=(
