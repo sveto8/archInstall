@@ -73,6 +73,7 @@ AUR_PACKAGES=(
     google-chrome
     sublime-text-4
     peazip
+    python-pyqt5                        # for hp-setup
 )
 
 # snx-rs (Check Point VPN client) and wps-office (OpenOffice replacement --
