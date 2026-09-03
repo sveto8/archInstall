@@ -129,18 +129,42 @@ run_script() {
 }
 
 # Main menu
+MENU_WIDTH=65   # total width including the two border characters
+
+menu_border() {
+    local char="$1" left="$2" right="$3"
+    local n=$((MENU_WIDTH - 2))
+    local line=""
+    for ((i = 0; i < n; i++)); do line+="$char"; done
+    printf '%b%s%s%s%b\n' "$BLUE" "$left" "$line" "$right" "$NC"
+}
+
+menu_line() {
+    local text="$1" color="${2:-}"
+    local pad=$(( MENU_WIDTH - 2 - ${#text} ))
+    [[ $pad -lt 0 ]] && pad=0
+    printf '%b%s%b' "$BLUE" "║" "$NC"
+    if [[ -n "$color" ]]; then
+        printf '%b%s%b' "$color" "$text" "$NC"
+    else
+        printf '%s' "$text"
+    fi
+    printf '%*s' "$pad" ''
+    printf '%b%s%b\n' "$BLUE" "║" "$NC"
+}
+
 show_menu() {
-    echo -e "${BLUE}╔═══════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║${NC}  ${YELLOW}Arch Linux Installation Manager${NC}    ${BLUE}║${NC}"
-    echo -e "${BLUE}╠═══════════════════════════════════════════════════════════════╣${NC}"
-    echo -e "${BLUE}║${NC}  1) Install Arch (archInstall.sh)                 ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  2) Setup Snapper/GRUB (setupAfterInstall)        ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  3) Install DE (installDE.sh)                     ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  4) Install applications (installApps.sh)         ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  5) INSTALL ALL (2→3→4)                           ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  6) Download scripts                              ${BLUE}║${NC}"
-    echo -e "${BLUE}║${NC}  0) Exit                                          ${BLUE}║${NC}"
-    echo -e "${BLUE}╚═══════════════════════════════════════════════════════════════╝${NC}"
+    menu_border "═" "╔" "╗"
+    menu_line "  Arch Linux Installation Manager" "$YELLOW"
+    menu_border "═" "╠" "╣"
+    menu_line "  1) Install Arch (archInstall.sh)"
+    menu_line "  2) Setup Snapper/GRUB (setupAfterInstall)"
+    menu_line "  3) Install DE (installDE.sh)"
+    menu_line "  4) Install applications (installApps.sh)"
+    menu_line "  5) INSTALL ALL (2->3->4)"
+    menu_line "  6) Download scripts"
+    menu_line "  0) Exit"
+    menu_border "═" "╚" "╝"
 }
 
 # Install all (Live CD only)
