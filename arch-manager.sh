@@ -6,7 +6,7 @@ set -Eeuo pipefail
 # ============================================================
 
 # URL baza za skripte (promijeni prema svom repozitoriju)
-SCRIPT_URL="https://raw.githubusercontent.com/YOUR_USERNAME/YOUR_REPO/main"
+SCRIPT_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
 
 # Liste skripti
 SCRIPTS=(
