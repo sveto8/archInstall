@@ -63,6 +63,7 @@ REPO_PACKAGES=(
     mission-center
     stow
     hplip                               # HP printer support
+    python-pyqt5
     cups                                 # printing system
     system-config-printer               # GUI printer management
 )
