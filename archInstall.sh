@@ -215,7 +215,6 @@ udevadm settle
 
 log "Creating LUKS2 container on $LUKSPART..."
 info "You will be prompted for a passphrase."
-info "You must type YES in capital letters exactly."
 
 for attempt in 1 2 3; do
     if cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; then
