@@ -67,9 +67,9 @@ TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 
 echo
 echo "Desktop environment:"
-echo "  1) GNOME"
-echo "  2) KDE Plasma"
-echo "  3) Hyprland"
+echo "  1) GNOME (Wayland)"
+echo "  2) KDE Plasma (Wayland)"
+echo "  3) Hyprland (Wayland)"
 echo "  4) None / cancel"
 read -r -p "Choice [1]: " DE_CHOICE
 DE_CHOICE="${DE_CHOICE:-1}"
@@ -85,22 +85,62 @@ if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" ]]; then
     [[ "$INSTALL_MODE" =~ ^[Mm]$ ]] && INSTALL_MODE="minimal" || INSTALL_MODE="full"
 fi
 
+# Common Wayland packages for all DEs (portals, qt support, etc.)
+WAYLAND_COMMON=(
+    xdg-desktop-portal
+    xdg-desktop-portal-gtk
+    qt5-wayland
+    qt6-wayland
+    polkit
+    polkit-gnome
+)
+
 case "$DE_CHOICE" in
     1)
-        DE_NAME="GNOME ($INSTALL_MODE)"
+        DE_NAME="GNOME ($INSTALL_MODE) [Wayland]"
         if [[ "$INSTALL_MODE" == "full" ]]; then
-            DE_PACKAGES=(gnome gnome-tweaks gdm)
+            DE_PACKAGES=(
+                gnome-shell
+                gnome-session
+                gnome-control-center
+                gnome-tweaks
+                nautilus
+                gnome-terminal
+                gdm
+                "${WAYLAND_COMMON[@]}"
+            )
         else
-            DE_PACKAGES=(gnome-shell gnome-control-center nautilus gnome-terminal gdm)
+            DE_PACKAGES=(
+                gnome-shell
+                gnome-control-center
+                nautilus
+                gnome-terminal
+                gdm
+                "${WAYLAND_COMMON[@]}"
+            )
         fi
         DM_SERVICE="gdm.service"
         ;;
     2)
-        DE_NAME="KDE Plasma ($INSTALL_MODE)"
+        DE_NAME="KDE Plasma ($INSTALL_MODE) [Wayland]"
         if [[ "$INSTALL_MODE" == "full" ]]; then
-            DE_PACKAGES=(plasma kde-applications sddm)
+            DE_PACKAGES=(
+                plasma-desktop
+                plasma-workspace-wayland
+                dolphin
+                konsole
+                sddm
+                "${WAYLAND_COMMON[@]}"
+            )
         else
-            DE_PACKAGES=(plasma-desktop dolphin konsole sddm)
+            DE_PACKAGES=(
+                plasma-desktop
+                plasma-workspace-wayland
+                dolphin
+                konsole
+                sddm
+                "${WAYLAND_COMMON[@]}"
+            )
         fi
         DM_SERVICE="sddm.service"
         ;;
