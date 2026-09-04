@@ -16,9 +16,20 @@ SCRIPTS=(
     "installApps.sh"
 )
 
-WORK_DIR="${HOME}/arch-setup"
+REAL_USER="${SUDO_USER:-$USER}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+[[ -n "$REAL_HOME" ]] || REAL_HOME="$HOME"
+
+WORK_DIR="${REAL_HOME}/arch-setup"
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
 mkdir -p "$DOWNLOAD_DIR"
+
+# If we ended up running as root (e.g. someone still does `sudo ./arch-manager.sh`),
+# make sure the downloaded files are owned by the real user, not root, so
+# installApps.sh (which must NOT run as root) can actually read/execute them.
+if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+    chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
+fi
 
 # ---------------- COLORS ----------------
 RED='\033[0;31m'
@@ -74,6 +85,9 @@ download_scripts() {
             echo -e "${RED}FAIL${NC}"
         fi
     done
+    if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+        chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
+    fi
 }
 
 # Run a script with auto-sudo if needed
@@ -114,8 +128,19 @@ run_script() {
             fi
         fi
     else
-        # installApps.sh - run as current user
-        "$path"
+        # installApps.sh must NOT run as root (makepkg/yay refuse). If the
+        # manager itself is currently root (e.g. it was invoked with sudo,
+        # or as a sub-step from a root script), drop to the real user.
+        if [[ $EUID -eq 0 ]]; then
+            if [[ -z "$REAL_USER" || "$REAL_USER" == "root" ]]; then
+                error "Running as root with no real user to drop to -- re-run this menu without sudo."
+                return 1
+            fi
+            echo -e "${CYAN}Running as $REAL_USER (installApps.sh must not run as root)...${NC}"
+            runuser -u "$REAL_USER" -- "$path"
+        else
+            "$path"
+        fi
     fi
     
     local code=$?
