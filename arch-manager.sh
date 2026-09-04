@@ -73,18 +73,38 @@ check_status() {
     echo
 }
 
-# Download scripts
-download_scripts() {
-    log "Downloading scripts..."
-    for script in "${SCRIPTS[@]}"; do
-        echo -n "  $script ... "
-        if curl -fsSL -o "${DOWNLOAD_DIR}/${script}" "${SCRIPT_URL}/${script}"; then
-            chmod +x "${DOWNLOAD_DIR}/${script}"
-            echo -e "${GREEN}OK${NC}"
-        else
-            echo -e "${RED}FAIL${NC}"
+# Download a single script
+download_single_script() {
+    local script="$1"
+    local url="${SCRIPT_URL}/${script}"
+    local dest="${DOWNLOAD_DIR}/${script}"
+
+    echo -n "  Downloading $script ... "
+    if curl -fsSL -o "$dest" "$url"; then
+        chmod +x "$dest"
+        if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+            chown "$REAL_USER:$REAL_USER" "$dest" 2>/dev/null || true
         fi
+        echo -e "${GREEN}OK${NC}"
+        return 0
+    else
+        echo -e "${RED}FAIL${NC}"
+        return 1
+    fi
+}
+
+# Download all scripts
+download_scripts() {
+    log "Downloading all scripts..."
+    local failed=0
+    for script in "${SCRIPTS[@]}"; do
+        download_single_script "$script" || failed=$((failed+1))
     done
+    if [[ $failed -eq 0 ]]; then
+        log "All scripts downloaded successfully."
+    else
+        warn "$failed script(s) failed to download."
+    fi
     if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
         chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
     fi
@@ -94,12 +114,16 @@ download_scripts() {
 run_script() {
     local script="$1"
     local path="${DOWNLOAD_DIR}/${script}"
-    
+
+    # If script doesn't exist, download it now
     if [[ ! -f "$path" ]]; then
-        error "Script $script not downloaded!"
-        return 1
+        warn "Script $script not found locally. Downloading..."
+        if ! download_single_script "$script"; then
+            error "Failed to download $script. Aborting."
+            return 1
+        fi
     fi
-    
+
     # Check if script needs root
     local needs_root=false
     case "$script" in
@@ -107,11 +131,11 @@ run_script() {
             needs_root=true
             ;;
     esac
-    
+
     echo -e "\n${BLUE}═══════════════════════════════════════════════════${NC}"
     echo -e "${BLUE}Running: ${YELLOW}$script${NC}"
     echo -e "${BLUE}═══════════════════════════════════════════════════${NC}\n"
-    
+
     # If root is needed, run with sudo (or directly if already root)
     if [[ "$needs_root" == true ]]; then
         if [[ $EUID -eq 0 ]]; then
@@ -142,9 +166,9 @@ run_script() {
             "$path"
         fi
     fi
-    
+
     local code=$?
-    
+
     if [[ $code -eq 0 ]]; then
         log "$script completed successfully"
     else
@@ -196,13 +220,12 @@ show_menu() {
 install_all() {
     log "Starting full installation..."
     local failed=0
-    
+
     for script in "${SCRIPTS[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
-        # Run script directly without prereq check (run_script handles sudo)
         run_script "$script" || failed=$((failed+1))
     done
-    
+
     if [[ $failed -eq 0 ]]; then
         log "All installed successfully! 🎉"
     else
@@ -235,23 +258,12 @@ install_remaining() {
 
 # ---------------- MAIN PROGRAM ----------------
 main() {
-    # Download scripts only if not present (Live CD)
-    local need_download=false
-    for script in "${SCRIPTS[@]}"; do
-        [[ ! -f "${DOWNLOAD_DIR}/${script}" ]] && need_download=true
-    done
-    
-    if [[ "$need_download" == true ]]; then
-        log "Scripts not found. Downloading..."
-        download_scripts
-        echo
-    fi
-    
+    # No automatic download – scripts are downloaded on demand (see run_script)
     while true; do
         check_status
         show_menu
         read -r -p "Choice [0-6]: " choice
-        
+
         case "$choice" in
             1|2|3|4)
                 script="${SCRIPTS[$((choice-1))]}"
