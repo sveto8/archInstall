@@ -55,7 +55,7 @@ check_status() {
     local installed="✗"
 
     [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
-    # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso (common on Arch ISO)
+    # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso
     if [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release; then
         live="✓"
     elif [[ -d /run/archiso ]]; then
@@ -115,14 +115,13 @@ download_scripts() {
     fi
 }
 
-# Copy the entire WORK_DIR (including arch-manager.sh and downloaded scripts)
-# to the installed system's home directory of the first regular user.
-# This function is called after a successful archInstall.sh run.
+# Copy the entire WORK_DIR to the installed system's home directory of the first regular user.
+# Called after a successful archInstall.sh run.
 copy_to_installed_system() {
     local dest_root="/mnt"
     local passwd_file="${dest_root}/etc/passwd"
 
-    # First, check if we are on a Live CD environment
+    # Check if we are on a Live CD environment
     local is_live=false
     if [[ -d /run/archiso ]] || ([[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release); then
         is_live=true
@@ -139,12 +138,13 @@ copy_to_installed_system() {
         return 0
     fi
 
-    # Find the first regular user (UID >= 1000, not system users)
+    # Find the first regular user (UID >= 1000) and get UID and GID
     local target_user=""
     local target_uid=""
     local target_gid=""
     local target_home=""
-    while IFS=: read -r username _ uid _ gid _ homedir _; do
+    # Correctly parse /etc/passwd fields: username:password:uid:gid:gecos:homedir:shell
+    while IFS=: read -r username password uid gid gecos homedir shell; do
         if [[ "$uid" -ge 1000 && "$username" != "nobody" && "$homedir" != "/" && -d "${dest_root}${homedir}" ]]; then
             target_user="$username"
             target_uid="$uid"
@@ -168,7 +168,6 @@ copy_to_installed_system() {
 
     # Fix ownership using numeric UID:GID (works even if the user doesn't exist on the Live CD)
     chown -R "${target_uid}:${target_gid}" "$target_dir" 2>/dev/null || true
-
     # Also copy the main script itself (arch-manager.sh) to the home root for convenience
     cp "$0" "$target_home/arch-manager.sh"
     chown "${target_uid}:${target_gid}" "$target_home/arch-manager.sh" 2>/dev/null || true
@@ -321,7 +320,7 @@ install_remaining() {
     fi
 }
 
-# ---------------- MAIN PROGRAM ----------------
+# ---------------- MAIN ----------------
 main() {
     while true; do
         check_status
