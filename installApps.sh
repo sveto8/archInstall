@@ -110,9 +110,12 @@ if [[ "$INSTALL_ONLYOFFICE" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(onlyoffice-bin)
 fi
 
-# NEW: Ask about work programs
+# Dynamically build the list of work packages for the prompt
+WORK_PACKAGES_LIST=("${WORK_REPO[@]}" "${WORK_AUR[@]}")
+WORK_PROMPT="Install work programs ($(IFS=,; echo "${WORK_PACKAGES_LIST[*]}"))? [y/N] "
+
 echo
-read -r -p "Install work programs (intellij-idea-community-edition, jdk11-openjdk, postman-bin, meld, code, remmina, f5vpn-ng, ferdium-bin)? [y/N] " INSTALL_WORK
+read -r -p "$WORK_PROMPT" INSTALL_WORK
 if [[ "$INSTALL_WORK" =~ ^[Yy]$ ]]; then
     REPO_PACKAGES+=("${WORK_REPO[@]}")
     AUR_PACKAGES+=("${WORK_AUR[@]}")
