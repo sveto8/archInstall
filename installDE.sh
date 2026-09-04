@@ -233,6 +233,25 @@ pacman -S --needed --noconfirm "${DE_PACKAGES[@]}"
 log "Enabling $DM_SERVICE..."
 systemctl enable "$DM_SERVICE"
 
+# ---------------- GNOME: DARK THEME BY DEFAULT ----------------
+
+if [[ "$DE_CHOICE" == "1" ]]; then
+    log "Setting GNOME to dark theme by default for $TARGET_USER..."
+
+    if command -v dbus-run-session >/dev/null 2>&1; then
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' \
+            || warn "Could not set GNOME color-scheme to prefer-dark."
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' \
+            || warn "Could not set GNOME gtk-theme to Adwaita-dark (older GTK3 apps)."
+        info "GNOME dark theme set (applies on first login)."
+    else
+        warn "dbus-run-session not found (package: dbus) -- skipping GNOME dark theme."
+        info "Set it manually after login: Settings -> Appearance -> Dark."
+    fi
+fi
+
 # ---------------- HYPRLAND CONFIG ----------------
 
 if [[ "$DE_CHOICE" == "3" ]]; then
@@ -623,6 +642,9 @@ echo "============================================================"
 echo " NEXT STEPS"
 echo "============================================================"
 echo "Log out and back in (or reboot) to get to the $DM_SERVICE login screen."
+if [[ "$DE_CHOICE" == "1" ]]; then
+    echo "GNOME dark theme was pre-set -- it should already be dark on first login."
+fi
 if [[ "$DE_CHOICE" == "3" ]]; then
     echo "Hyprland config: $HYPR_HOME/.config/hypr/hyprland.lua"
     echo "Review it against https://github.com/hyprwm/Hyprland/blob/main/example/hyprland.lua"
