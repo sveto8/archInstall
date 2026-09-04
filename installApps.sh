@@ -55,6 +55,7 @@ fi
 # Base packages (always installed)
 REPO_PACKAGES=(
     terminator
+    guake
     qmmp
     kolourpaint
     mission-center
@@ -74,7 +75,6 @@ AUR_PACKAGES=(
 # Work-related packages (optional, asked below)
 WORK_REPO=(
     jdk11-openjdk
-    guake
     meld
     code                                # open-source VS Code
     remmina
@@ -112,7 +112,7 @@ fi
 
 # NEW: Ask about work programs
 echo
-read -r -p "Install work programs (intellij-idea-community-edition, jdk11-openjdk, postman-bin, guake, meld, code, remmina, f5vpn-ng, ferdium-bin)? [y/N] " INSTALL_WORK
+read -r -p "Install work programs (intellij-idea-community-edition, jdk11-openjdk, postman-bin, meld, code, remmina, f5vpn-ng, ferdium-bin)? [y/N] " INSTALL_WORK
 if [[ "$INSTALL_WORK" =~ ^[Yy]$ ]]; then
     REPO_PACKAGES+=("${WORK_REPO[@]}")
     AUR_PACKAGES+=("${WORK_AUR[@]}")
