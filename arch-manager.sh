@@ -229,7 +229,6 @@ install_all() {
 
     for script in "${SCRIPTS[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
-        # Run script directly without prereq check (run_script handles sudo)
         run_script "$script" || failed=$((failed+1))
     done
 
@@ -272,7 +271,17 @@ main() {
         read -r -p "Choice [0-6]: " choice
 
         case "$choice" in
-            1|2|3|4)
+            1)
+                # Option 1: Install Arch. After finishing, exit the manager
+                # because we are still on the Live CD and should reboot.
+                script="${SCRIPTS[0]}"
+                echo
+                run_script "$script"
+                echo -e "\n${GREEN}Installation script finished. You can now reboot into your new system.${NC}"
+                echo -e "${YELLOW}Exiting Arch Manager.${NC}"
+                exit 0
+                ;;
+            2|3|4)
                 script="${SCRIPTS[$((choice-1))]}"
                 echo
                 run_script "$script"
