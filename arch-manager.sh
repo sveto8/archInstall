@@ -56,7 +56,6 @@ check_status() {
 
     [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
     # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso (common on Arch ISO)
-    # NEW: added /run/archiso check for broader Live CD detection
     if [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release; then
         live="✓"
     elif [[ -d /run/archiso ]]; then
@@ -142,10 +141,14 @@ copy_to_installed_system() {
 
     # Find the first regular user (UID >= 1000, not system users)
     local target_user=""
+    local target_uid=""
+    local target_gid=""
     local target_home=""
-    while IFS=: read -r username _ uid _ _ homedir _; do
+    while IFS=: read -r username _ uid _ gid _ homedir _; do
         if [[ "$uid" -ge 1000 && "$username" != "nobody" && "$homedir" != "/" && -d "${dest_root}${homedir}" ]]; then
             target_user="$username"
+            target_uid="$uid"
+            target_gid="$gid"
             target_home="${dest_root}${homedir}"
             break
         fi
@@ -156,25 +159,24 @@ copy_to_installed_system() {
         return 0
     fi
 
-    log "Copying Arch Manager scripts to $target_home/arch-setup for user $target_user"
+    log "Copying Arch Manager scripts to $target_home/arch-setup for user $target_user (UID: $target_uid, GID: $target_gid)"
 
     # Create target directory and copy everything from WORK_DIR
     local target_dir="${target_home}/arch-setup"
     mkdir -p "$target_dir"
     cp -r "$WORK_DIR"/* "$target_dir/"
 
-    # Fix ownership to the target user:group (assuming group name same as user)
-    local target_group="$target_user"
-    chown -R "$target_user:$target_group" "$target_dir" 2>/dev/null || true
+    # Fix ownership using numeric UID:GID (works even if the user doesn't exist on the Live CD)
+    chown -R "${target_uid}:${target_gid}" "$target_dir" 2>/dev/null || true
 
     # Also copy the main script itself (arch-manager.sh) to the home root for convenience
     cp "$0" "$target_home/arch-manager.sh"
-    chown "$target_user:$target_group" "$target_home/arch-manager.sh" 2>/dev/null || true
+    chown "${target_uid}:${target_gid}" "$target_home/arch-manager.sh" 2>/dev/null || true
 
     log "Scripts copied successfully. After reboot, you can run:"
     echo -e "${CYAN}  cd ~/arch-setup && ./arch-manager.sh${NC}"
     echo -e "${CYAN}  or directly: ~/arch-manager.sh${NC}"
-    echo -e "${GREEN}All files are owned by $target_user.${NC}"
+    echo -e "${GREEN}All files are owned by UID $target_uid (user $target_user).${NC}"
 }
 
 # Run a script with auto-sudo if needed
@@ -245,7 +247,7 @@ run_script() {
 }
 
 # Main menu
-MENU_WIDTH=65   # total width including the two border characters
+MENU_WIDTH=65
 
 menu_border() {
     local char="$1" left="$2" right="$3"
@@ -287,12 +289,10 @@ show_menu() {
 install_all() {
     log "Starting full installation..."
     local failed=0
-
     for script in "${SCRIPTS[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
         run_script "$script" || failed=$((failed+1))
     done
-
     if [[ $failed -eq 0 ]]; then
         log "All installed successfully! 🎉"
     else
@@ -309,12 +309,10 @@ install_remaining() {
         "installDE.sh"
         "installApps.sh"
     )
-
     for script in "${scripts_to_run[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
         run_script "$script" || failed=$((failed+1))
     done
-
     if [[ $failed -eq 0 ]]; then
         log "All remaining scripts completed successfully! 🎉"
         touch "/arch-setup/.installed"
@@ -325,20 +323,15 @@ install_remaining() {
 
 # ---------------- MAIN PROGRAM ----------------
 main() {
-    # No automatic download – scripts are downloaded on-demand (see run_script)
     while true; do
         check_status
         show_menu
         read -r -p "Choice [0-6]: " choice
-
         case "$choice" in
             1)
-                # Option 1: Install Arch. After finishing, copy scripts to the new system
-                # and then exit the manager (since we are still on the Live CD).
                 script="${SCRIPTS[0]}"
                 echo
                 if run_script "$script"; then
-                    # Installation succeeded – copy the manager and all scripts to the installed system
                     copy_to_installed_system
                 else
                     warn "Installation script failed. Skipping copy to installed system."
