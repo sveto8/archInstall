@@ -56,7 +56,6 @@ REPO_PACKAGES=(
     terminator
     meld
     qmmp
-    intellij-idea-community-edition
     code                                # open-source build of VS Code, no MS branding/telemetry
     remmina
     kolourpaint
@@ -86,6 +85,12 @@ echo
 read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
 if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(snx-rs)
+fi
+
+echo
+read -r -p "Install Intellij Community edition (AUR)? [y/N] " INSTALL_INTELLIJ
+if [[ "$INSTALL_INTELLIJ" =~ ^[Yy]$ ]]; then
+    AUR_PACKAGES+=(intellij-idea-community-edition)
 fi
 
 echo
