@@ -116,6 +116,60 @@ download_scripts() {
     fi
 }
 
+# Copy the entire WORK_DIR (including arch-manager.sh and downloaded scripts)
+# to the installed system's home directory of the first regular user.
+# This function is called after a successful archInstall.sh run.
+copy_to_installed_system() {
+    local dest_root="/mnt"
+    local passwd_file="${dest_root}/etc/passwd"
+
+    # Check if we are on a Live CD and the new system is mounted at /mnt
+    if [[ ! -d /run/archiso ]] && [[ ! -f /etc/os-release ]] || ! grep -q "ARCHISO" /etc/os-release; then
+        warn "Not on Arch Live CD or /mnt does not contain the installed system. Skipping copy."
+        return 0
+    fi
+
+    if [[ ! -f "$passwd_file" ]]; then
+        warn "Installed system's passwd file not found at $passwd_file. Skipping copy."
+        return 0
+    fi
+
+    # Find the first regular user (UID >= 1000, not system users)
+    local target_user=""
+    while IFS=: read -r username _ uid _ _ homedir _; do
+        if [[ "$uid" -ge 1000 && "$username" != "nobody" && "$homedir" != "/" && -d "${dest_root}${homedir}" ]]; then
+            target_user="$username"
+            target_home="${dest_root}${homedir}"
+            break
+        fi
+    done < "$passwd_file"
+
+    if [[ -z "$target_user" ]]; then
+        warn "No regular user found in the installed system. Skipping copy."
+        return 0
+    fi
+
+    log "Copying Arch Manager scripts to $target_home/arch-setup for user $target_user"
+
+    # Create target directory and copy everything from WORK_DIR
+    local target_dir="${target_home}/arch-setup"
+    mkdir -p "$target_dir"
+    cp -r "$WORK_DIR"/* "$target_dir/"
+
+    # Fix ownership to the target user:group (assuming group name same as user)
+    local target_group="$target_user"
+    chown -R "$target_user:$target_group" "$target_dir" 2>/dev/null || true
+
+    # Also copy the main script itself (arch-manager.sh) to the home root for convenience
+    cp "$0" "$target_home/arch-manager.sh"
+    chown "$target_user:$target_group" "$target_home/arch-manager.sh" 2>/dev/null || true
+
+    log "Scripts copied successfully. After reboot, you can run:"
+    echo -e "${CYAN}  cd ~/arch-setup && ./arch-manager.sh${NC}"
+    echo -e "${CYAN}  or directly: ~/arch-manager.sh${NC}"
+    echo -e "${GREEN}All files are owned by $target_user.${NC}"
+}
+
 # Run a script with auto-sudo if needed
 run_script() {
     local script="$1"
@@ -272,12 +326,17 @@ main() {
 
         case "$choice" in
             1)
-                # Option 1: Install Arch. After finishing, exit the manager
-                # because we are still on the Live CD and should reboot.
+                # Option 1: Install Arch. After finishing, copy scripts to the new system
+                # and then exit the manager (since we are still on the Live CD).
                 script="${SCRIPTS[0]}"
                 echo
-                run_script "$script"
-                echo -e "\n${GREEN}Installation script finished. You can now reboot into your new system.${NC}"
+                if run_script "$script"; then
+                    # Installation succeeded – copy the manager and all scripts to the installed system
+                    copy_to_installed_system
+                else
+                    warn "Installation script failed. Skipping copy to installed system."
+                fi
+                echo -e "\n${GREEN}Installation phase completed. You can now reboot into your new system.${NC}"
                 echo -e "${YELLOW}Exiting Arch Manager.${NC}"
                 exit 0
                 ;;
