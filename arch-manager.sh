@@ -123,12 +123,18 @@ copy_to_installed_system() {
     local dest_root="/mnt"
     local passwd_file="${dest_root}/etc/passwd"
 
-    # Check if we are on a Live CD and the new system is mounted at /mnt
-    if [[ ! -d /run/archiso ]] && [[ ! -f /etc/os-release ]] || ! grep -q "ARCHISO" /etc/os-release; then
-        warn "Not on Arch Live CD or /mnt does not contain the installed system. Skipping copy."
+    # First, check if we are on a Live CD environment
+    local is_live=false
+    if [[ -d /run/archiso ]] || ([[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release); then
+        is_live=true
+    fi
+
+    if [[ "$is_live" == false ]]; then
+        warn "Not on Arch Live CD. Skipping copy to installed system (this should only run from Live CD)."
         return 0
     fi
 
+    # Check if the installed system is mounted at /mnt
     if [[ ! -f "$passwd_file" ]]; then
         warn "Installed system's passwd file not found at $passwd_file. Skipping copy."
         return 0
@@ -136,6 +142,7 @@ copy_to_installed_system() {
 
     # Find the first regular user (UID >= 1000, not system users)
     local target_user=""
+    local target_home=""
     while IFS=: read -r username _ uid _ _ homedir _; do
         if [[ "$uid" -ge 1000 && "$username" != "nobody" && "$homedir" != "/" && -d "${dest_root}${homedir}" ]]; then
             target_user="$username"
