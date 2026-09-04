@@ -52,7 +52,6 @@ check_status() {
     local root="✗"
     local btrfs="✗"
     local snapper="✗"
-    local installed="✗"
 
     [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
     # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso
@@ -65,16 +64,9 @@ check_status() {
     command -v findmnt >/dev/null && findmnt -n -o FSTYPE / 2>/dev/null | grep -q "btrfs" && btrfs="✓"
     [[ -f /etc/snapper/configs/root ]] && snapper="✓"
 
-    if [[ -f "/arch-setup/.installed" ]]; then
-        installed="✓"
-    elif [[ -d "/arch-setup" ]]; then
-        installed="⚠"
-    fi
-
     echo -e "${BLUE}System Status:${NC}"
     echo -e "  Arch: $arch   Live CD: $live   Root: $root"
     echo -e "  Btrfs: $btrfs   Snapper: $snapper"
-    echo -e "  Installed: $installed"
     echo
 }
 
@@ -314,7 +306,6 @@ install_remaining() {
     done
     if [[ $failed -eq 0 ]]; then
         log "All remaining scripts completed successfully! 🎉"
-        touch "/arch-setup/.installed"
     else
         warn "$failed scripts failed"
     fi
@@ -347,11 +338,7 @@ main() {
                 read -r -p "Press Enter..."
                 ;;
             5)
-                if [[ -f "/arch-setup/.installed" ]]; then
-                    error "Setup is already complete!"
-                else
-                    install_remaining
-                fi
+                install_remaining
                 echo
                 read -r -p "Press Enter..."
                 ;;
