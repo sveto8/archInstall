@@ -81,9 +81,10 @@ WORK_REPO=(
 )
 
 WORK_AUR=(
-    f5vpn-ng                            # F5 VPN client
-    ferdium-bin                         # Ferdium messaging client
     intellij-idea-community-edition
+    postman-bin
+    f5vpn-ng                            # F5 VPN client
+    ferdium-bin                         # Ferdium messaging client    
 )
 
 # ---------------- OPTIONAL PACKAGE PROMPTS ----------------
@@ -111,7 +112,7 @@ fi
 
 # NEW: Ask about work programs
 echo
-read -r -p "Install work programs (intellij-idea-community-edition, jdk11-openjdk, guake, meld, code, remmina, f5vpn-ng, ferdium-bin)? [y/N] " INSTALL_WORK
+read -r -p "Install work programs (intellij-idea-community-edition, jdk11-openjdk, postman-bin, guake, meld, code, remmina, f5vpn-ng, ferdium-bin)? [y/N] " INSTALL_WORK
 if [[ "$INSTALL_WORK" =~ ^[Yy]$ ]]; then
     REPO_PACKAGES+=("${WORK_REPO[@]}")
     AUR_PACKAGES+=("${WORK_AUR[@]}")
