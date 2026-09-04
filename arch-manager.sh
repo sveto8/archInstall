@@ -55,7 +55,13 @@ check_status() {
     local installed="✗"
 
     [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
-    [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release && live="✓"
+    # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso (common on Arch ISO)
+    # NEW: added /run/archiso check for broader Live CD detection
+    if [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release; then
+        live="✓"
+    elif [[ -d /run/archiso ]]; then
+        live="✓"
+    fi
     [[ $EUID -eq 0 ]] && root="✓"
     command -v findmnt >/dev/null && findmnt -n -o FSTYPE / 2>/dev/null | grep -q "btrfs" && btrfs="✓"
     [[ -f /etc/snapper/configs/root ]] && snapper="✓"
@@ -115,7 +121,7 @@ run_script() {
     local script="$1"
     local path="${DOWNLOAD_DIR}/${script}"
 
-    # If script doesn't exist, download it now
+    # If script doesn't exist, download it now (on-demand download)
     if [[ ! -f "$path" ]]; then
         warn "Script $script not found locally. Downloading..."
         if ! download_single_script "$script"; then
@@ -223,6 +229,7 @@ install_all() {
 
     for script in "${SCRIPTS[@]}"; do
         echo -e "\n${BLUE}>>> $script${NC}"
+        # Run script directly without prereq check (run_script handles sudo)
         run_script "$script" || failed=$((failed+1))
     done
 
@@ -258,7 +265,7 @@ install_remaining() {
 
 # ---------------- MAIN PROGRAM ----------------
 main() {
-    # No automatic download – scripts are downloaded on demand (see run_script)
+    # No automatic download – scripts are downloaded on-demand (see run_script)
     while true; do
         check_status
         show_menu
