@@ -49,48 +49,52 @@ fi
 #
 # REPO_PACKAGES -> plain pacman (official repos)
 # AUR_PACKAGES  -> yay (not in official repos)
+#
+# Work-related packages are asked separately and added later.
 
+# Base packages (always installed)
 REPO_PACKAGES=(
-    jdk11-openjdk
-    guake
     terminator
-    meld
     qmmp
-    code                                # open-source build of VS Code, no MS branding/telemetry
-    remmina
     kolourpaint
     mission-center
     stow
     hplip                               # HP printer support
-    cups                                 # printing system
+    cups                                # printing system
     system-config-printer               # GUI printer management
 )
 
 AUR_PACKAGES=(
-    f5vpn-ng                             # F5 BIG-IP APM VPN client (F5's own renamed build; can be finicky across libwebkit2gtk/libxml2 updates)
-    ferdium-bin
     google-chrome
     sublime-text-4
     peazip
     python-pyqt5                        # for hp-setup
 )
 
-# snx-rs (Check Point VPN client) and wps-office (OpenOffice replacement --
-# OpenOffice itself is unmaintained upstream) aren't needed on every
-# machine, and both are opt-in rather than installed by default.
+# Work-related packages (optional, asked below)
+WORK_REPO=(
+    jdk11-openjdk
+    guake
+    meld
+    code                                # open-source VS Code
+    remmina
+)
+
+WORK_AUR=(
+    f5vpn-ng                            # F5 VPN client
+    ferdium-bin                         # Ferdium messaging client
+    intellij-idea-community-edition
+)
+
+# ---------------- OPTIONAL PACKAGE PROMPTS ----------------
 
 echo
-echo "Install additional apps"
+echo "Optional packages:"
 echo
+
 read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
 if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(snx-rs)
-fi
-
-echo
-read -r -p "Install Intellij Community edition (AUR)? [y/N] " INSTALL_INTELLIJ
-if [[ "$INSTALL_INTELLIJ" =~ ^[Yy]$ ]]; then
-    AUR_PACKAGES+=(intellij-idea-community-edition)
 fi
 
 echo
@@ -103,6 +107,14 @@ echo
 read -r -p "Install OnlyOffice (AUR)? [y/N] " INSTALL_ONLYOFFICE
 if [[ "$INSTALL_ONLYOFFICE" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(onlyoffice-bin)
+fi
+
+# NEW: Ask about work programs
+echo
+read -r -p "Install work programs (intellij-idea-community-edition, jdk11-openjdk, guake, meld, code, remmina, f5vpn-ng, ferdium-bin)? [y/N] " INSTALL_WORK
+if [[ "$INSTALL_WORK" =~ ^[Yy]$ ]]; then
+    REPO_PACKAGES+=("${WORK_REPO[@]}")
+    AUR_PACKAGES+=("${WORK_AUR[@]}")
 fi
 
 # ---------------- EXTRA PACKAGES ----------------
