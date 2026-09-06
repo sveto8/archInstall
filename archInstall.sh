@@ -329,10 +329,14 @@ ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 hwclock --systohc
 
 # --- Enable locales ---
-for loc in en_US.UTF-8 hr_HR.UTF-8; do
-    sed -i "s/^#${loc} UTF-8/${loc} UTF-8/" /etc/locale.gen 2>/dev/null || true
-    grep -q "^${loc} UTF-8" /etc/locale.gen || echo "${loc} UTF-8" >> /etc/locale.gen
-done
+# Enable en_US.UTF-8
+sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
+grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+
+# Enable hr_HR.UTF-8
+sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
+grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
+
 locale-gen
 
 # Set system locale and keymap
