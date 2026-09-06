@@ -130,7 +130,7 @@ copy_to_installed_system() {
         return 0
     fi
 
-    # Find the first regular user (UID >= 1000) and get UID and GID
+    # Find the first regular user (UID >= 1000) and get UID, GID, and home directory
     local target_user=""
     local target_uid=""
     local target_gid=""
@@ -153,16 +153,43 @@ copy_to_installed_system() {
 
     log "Copying Arch Manager scripts to $target_home/arch-setup for user $target_user (UID: $target_uid, GID: $target_gid)"
 
-    # Create target directory and copy everything from WORK_DIR
+    # Ensure target home directory exists (should already)
+    if [[ ! -d "$target_home" ]]; then
+        warn "Target home $target_home does not exist. Creating it..."
+        mkdir -p "$target_home"
+        chown "${target_uid}:${target_gid}" "$target_home" 2>/dev/null || true
+    fi
+
+    # Copy the entire WORK_DIR (downloaded scripts) to ~/arch-setup
     local target_dir="${target_home}/arch-setup"
     mkdir -p "$target_dir"
-    cp -r "$WORK_DIR"/* "$target_dir/"
+    if cp -r "$WORK_DIR"/* "$target_dir/" 2>/dev/null; then
+        log "Copied scripts to $target_dir"
+    else
+        warn "Failed to copy scripts from $WORK_DIR to $target_dir"
+    fi
 
-    # Fix ownership using numeric UID:GID (works even if the user doesn't exist on the Live CD)
+    # Fix ownership of the copied scripts
     chown -R "${target_uid}:${target_gid}" "$target_dir" 2>/dev/null || true
-    # Also copy the main script itself (arch-manager.sh) to the home root for convenience
-    cp "$0" "$target_home/arch-manager.sh"
-    chown "${target_uid}:${target_gid}" "$target_home/arch-manager.sh" 2>/dev/null || true
+
+    # Also copy the main manager script (this script) to ~/arch-manager.sh
+    local manager_source="$(readlink -f "$0")"
+    local manager_dest="${target_home}/arch-manager.sh"
+    if cp "$manager_source" "$manager_dest" 2>/dev/null; then
+        chown "${target_uid}:${target_gid}" "$manager_dest" 2>/dev/null || true
+        log "Copied manager script to $manager_dest"
+    else
+        warn "Failed to copy manager script ($manager_source) to $manager_dest"
+        # Fallback: try to copy from the current working directory if the source is not accessible
+        if [[ -f "./arch-manager.sh" ]]; then
+            if cp "./arch-manager.sh" "$manager_dest" 2>/dev/null; then
+                chown "${target_uid}:${target_gid}" "$manager_dest" 2>/dev/null || true
+                log "Copied manager script from current directory to $manager_dest"
+            else
+                warn "Fallback copy also failed."
+            fi
+        fi
+    fi
 
     log "Scripts copied successfully. After reboot, you can run:"
     echo -e "${CYAN}  cd ~/arch-setup && ./arch-manager.sh${NC}"
