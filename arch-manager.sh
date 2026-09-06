@@ -277,17 +277,21 @@ show_menu() {
 }
 
 # Install all (Live CD only)
-install_all() {
-    log "Starting full installation..."
-    local failed=0
-    for script in "${SCRIPTS[@]}"; do
-        echo -e "\n${BLUE}>>> $script${NC}"
-        run_script "$script" || failed=$((failed+1))
-    done
-    if [[ $failed -eq 0 ]]; then
-        log "All installed successfully! 🎉"
+install_live_phase() {
+    # For --install: only archInstall.sh makes sense before a reboot.
+    # setupAfterInstall.sh / installDE.sh / installApps.sh all expect to
+    # run ON the already-booted target system (they check findmnt/LUKS
+    # status of the CURRENT root), so chaining them here without a reboot
+    # in between would run them against the live ISO's own filesystem,
+    # not the freshly installed one.
+    log "Starting archInstall.sh (Phase 0)..."
+    if run_script "archInstall.sh"; then
+        copy_to_installed_system
+        log "Phase 0 complete. Reboot, then use arch-manager.sh's menu option 5"
+        log "(or run setupAfterInstall.sh / installDE.sh / installApps.sh directly)."
     else
-        warn "$failed scripts failed"
+        error "archInstall.sh did not finish successfully."
+        return 1
     fi
 }
 
@@ -323,17 +327,19 @@ main() {
                 echo
                 if run_script "$script"; then
                     copy_to_installed_system
+                    echo -e "\n${GREEN}Installation phase completed. You can now reboot into your new system.${NC}"
                 else
                     warn "Installation script failed. Skipping copy to installed system."
+                    echo -e "\n${RED}archInstall.sh did not finish successfully -- do not reboot yet.${NC}"
+                    echo -e "${YELLOW}Check the errors above, fix them, and run this again.${NC}"
                 fi
-                echo -e "\n${GREEN}Installation phase completed. You can now reboot into your new system.${NC}"
                 echo -e "${YELLOW}Exiting Arch Manager.${NC}"
                 exit 0
                 ;;
             2|3|4)
                 script="${SCRIPTS[$((choice-1))]}"
                 echo
-                run_script "$script"
+                run_script "$script" || true
                 echo
                 read -r -p "Press Enter..."
                 ;;
@@ -364,7 +370,7 @@ main() {
 if [[ $# -gt 0 ]]; then
     case "$1" in
         --download) download_scripts; exit 0 ;;
-        --install) download_scripts; install_all; exit 0 ;;
+        --install) download_scripts; install_live_phase; exit $? ;;
         --help) echo "Usage: $0 [--download|--install|--help]"; exit 0 ;;
         *)
             if [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
