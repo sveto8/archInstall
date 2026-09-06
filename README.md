@@ -341,3 +341,9 @@ can run in either order.
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
   scripts changes when run through it.
+
+
+  Plymouth themes are downloadaded from:
+
+  https://github.com/yucellmustafa/plymouth-linux
+  https://github.com/adi1090x/plymouth-themes
