@@ -69,9 +69,10 @@ PLYMOUTH_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/m
 # List of available Plymouth themes (names of .tar.xz archives without extension)
 # Add/remove themes as you have in your repo.
 PLYMOUTH_THEMES=(
+    "cuts_alt"
+    "hud_3"
     "linux-penguin"
-    "arch-breeze"
-    # "my-custom-theme"   # add more here
+    "metal_ball"
 )
 
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
