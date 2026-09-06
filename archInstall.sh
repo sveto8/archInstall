@@ -37,17 +37,6 @@ LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the
 KEYMAP="us"
 MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
 
-# ---------------- CONFIGURATION (edit before running) ----------------
-
-ESP_SIZE="1GiB"
-BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
-HOSTNAME="monarch"
-TIMEZONE="Europe/Zagreb"
-LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
-LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the system
-KEYMAP="us"
-MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
-
 # ---------------- COLORS ----------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -330,37 +319,42 @@ info "All passwords set. The rest of the install runs unattended from here."
 
 log "Configuring the new system (chroot)..."
 
-# Build locale.gen commands for every locale in $LOCALES, fully expanded
-# here (not inside the heredoc) to avoid variable-scoping issues across
-# the chroot boundary.
-LOCALE_GEN_CMDS=""
-for loc in "${LOCALES[@]}"; do
-    LOCALE_GEN_CMDS+="grep -q '^${loc} UTF-8' /etc/locale.gen || { sed -i 's/^#${loc} UTF-8/${loc} UTF-8/' /etc/locale.gen; grep -q '^${loc} UTF-8' /etc/locale.gen || echo '${loc} UTF-8' >> /etc/locale.gen; }; "
-done
-
-# ---------------- CHROOT CONFIGURATION (unattended) ---------------- 
-
+# --- CHROOT SCRIPT ---
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
+# Set hostname and time
 echo "$HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 hwclock --systohc
 
-${LOCALE_GEN_CMDS}
+# --- Enable locales ---
+for loc in en_US.UTF-8 hr_HR.UTF-8; do
+    sed -i "s/^#${loc} UTF-8/${loc} UTF-8/" /etc/locale.gen 2>/dev/null || true
+    grep -q "^${loc} UTF-8" /etc/locale.gen || echo "${loc} UTF-8" >> /etc/locale.gen
+done
 locale-gen
-echo "LANG=${LOCALE}" > /etc/locale.conf
-echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 
+# Set system locale and keymap
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "KEYMAP=us" > /etc/vconsole.conf
+
+# Export LANGUAGE to avoid "NO" in GDM and other display managers
+mkdir -p /etc/profile.d
+echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
+chmod 644 /etc/profile.d/locale.sh
+
+# Hosts file
 cat >> /etc/hosts <<HOSTS_EOF
 127.0.0.1   localhost
 ::1         localhost
 127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
 
+# Enable NetworkManager
 systemctl enable NetworkManager
 
-# Minimal systemd-based initramfs
+# Initramfs: systemd-based with proper hooks
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
 cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
 
@@ -368,8 +362,10 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
+# GRUB: add LUKS, locale, and keymap to kernel command line
 sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=us rd.locale.LANG=en_US.UTF-8\"/" /etc/default/grub
 
+# Install GRUB for UEFI
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
