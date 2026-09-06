@@ -29,8 +29,8 @@ set -o errtrace
 #   -> systemd initramfs -> Plymouth -> sd-encrypt -> LUKS2
 #
 # Plymouth theme:
-#   https://github.com/yucellmustafa/plymouth-linux
-#   Theme: linux-penguin
+#   https://github.com/sveto8/archInstall/tree/main/plymouth-themes
+#   Themes are downloaded as .tar.xz archives from that repo.
 # ============================================================
 
 # ---------------- CONFIGURATION ----------------
@@ -63,9 +63,16 @@ ENABLE_BTRFS_QUOTA="yes"
 # already pick the OS from the motherboard/UEFI boot menu.
 ENABLE_OS_PROBER="no"
 
-# Plymouth
-PLYMOUTH_REPO="https://github.com/yucellmustafa/plymouth-linux.git"
-PLYMOUTH_THEME="linux-penguin"
+# Plymouth themes base URL (your GitHub repo)
+PLYMOUTH_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main/plymouth-themes"
+
+# List of available Plymouth themes (names of .tar.xz archives without extension)
+# Add/remove themes as you have in your repo.
+PLYMOUTH_THEMES=(
+    "linux-penguin"
+    "arch-breeze"
+    # "my-custom-theme"   # add more here
+)
 
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
 # / poly-dark / none), not hardcoded here.
@@ -81,8 +88,8 @@ NC='\033[0m' # No Color
 
 SCRIPT_NAME="$(basename "$0")"
 BACKUP_DIR="/root/btrfs-setup-backups/$(date +%Y%m%d-%H%M%S)"
-PLYMOUTH_TMP="/tmp/plymouth-linux"
-PLYMOUTH_OK=1
+PLYMOUTH_TMP="/tmp/plymouth-theme-$$"
+PLYMOUTH_OK=0   # 0 = not installed / failed, 1 = success
 
 log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
 info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
@@ -227,6 +234,27 @@ case "$GRUB_THEME_CHOICE" in
 esac
 info "GRUB theme: ${GRUB_THEME_NAME:-none}"
 
+# ---------------- PLYMOUTH THEME ----------------
+
+echo
+echo "Plymouth boot splash theme:"
+i=1
+for theme in "${PLYMOUTH_THEMES[@]}"; do
+    echo "  $i) $theme"
+    ((i++))
+done
+echo "  $i) None / skip"
+read -r -p "Choice [$i]: " PLYMOUTH_CHOICE
+PLYMOUTH_CHOICE="${PLYMOUTH_CHOICE:-$i}"
+
+PLYMOUTH_SELECTED=""
+if [[ "$PLYMOUTH_CHOICE" -ge 1 && "$PLYMOUTH_CHOICE" -le "${#PLYMOUTH_THEMES[@]}" ]]; then
+    PLYMOUTH_SELECTED="${PLYMOUTH_THEMES[$((PLYMOUTH_CHOICE-1))]}"
+    info "Selected Plymouth theme: $PLYMOUTH_SELECTED"
+else
+    info "No Plymouth theme selected -- skipping."
+fi
+
 # ---------------- CONFIRM ----------------
 
 printf '\n'
@@ -242,12 +270,17 @@ printf '%s\n' "Boot        : $(findmnt -n -o SOURCE /boot)"
 printf '%s\n' "EFI         : $(findmnt -n -o SOURCE /efi)"
 printf '%s\n' "Microcode   : ${UCODE_PKG:-none}"
 printf '%s\n' "GRUB Theme  : ${GRUB_THEME_NAME:-none}"
+printf '%s\n' "Plymouth    : ${PLYMOUTH_SELECTED:-none}"
 printf '%s\n' "============================================================"
 printf '\n'
 printf '%s\n' "The script will configure:"
 printf '%s\n' "  * systemd-based mkinitcpio initramfs"
 printf '%s\n' "  * LUKS2 unlock via sd-encrypt"
-printf '%s\n' "  * Plymouth + linux-penguin (best-effort, non-fatal if it fails)"
+if [[ -n "$PLYMOUTH_SELECTED" ]]; then
+    printf '%s\n' "  * Plymouth theme: $PLYMOUTH_SELECTED (downloaded from GitHub)"
+else
+    printf '%s\n' "  * Plymouth: skipped (no theme selected)"
+fi
 printf '%s\n' "  * GRUB + grub-btrfs"
 printf '%s\n' "  * Snapper for / only"
 printf '%s\n' "  * snap-pac pre/post pacman snapshots"
@@ -349,6 +382,73 @@ else
     info "No GRUB theme selected -- skipping."
 fi
 
+# ---------------- PLYMOUTH THEME INSTALL ----------------
+
+if [[ -n "$PLYMOUTH_SELECTED" ]]; then
+    log "Installing Plymouth theme: $PLYMOUTH_SELECTED..."
+
+    mkdir -p "$PLYMOUTH_TMP"
+    THEME_ARCHIVE="$PLYMOUTH_TMP/${PLYMOUTH_SELECTED}.tar.xz"
+    THEME_URL="${PLYMOUTH_THEMES_BASE_URL}/${PLYMOUTH_SELECTED}.tar.xz"
+
+    if curl -fsSL -o "$THEME_ARCHIVE" "$THEME_URL"; then
+        log "Extracting theme..."
+
+        # Extract to /usr/share/plymouth/themes/
+        mkdir -p /usr/share/plymouth/themes
+        tar -xf "$THEME_ARCHIVE" -C /usr/share/plymouth/themes/
+
+        # Check if the extracted directory exists
+        if [[ -d "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}" ]]; then
+            # If the archive extracted a directory with the theme name, good.
+            # Otherwise, try to find a .plymouth file and rename directory if needed.
+            if [[ -f "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}/${PLYMOUTH_SELECTED}.plymouth" ]]; then
+                info "Theme verified: /usr/share/plymouth/themes/${PLYMOUTH_SELECTED}/${PLYMOUTH_SELECTED}.plymouth"
+            else
+                # Maybe the archive contains files directly, not in a subdir.
+                # We'll create the directory if needed.
+                if find "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}" -name "*.plymouth" | grep -q .; then
+                    info "Found .plymouth file in theme directory."
+                else
+                    # No .plymouth found, maybe archive extracted to a different dir name.
+                    # We'll try to find any subdir containing a .plymouth and move its contents.
+                    PLYMOUTH_FILE=$(find /usr/share/plymouth/themes -name "*.plymouth" -type f | head -n1)
+                    if [[ -n "$PLYMOUTH_FILE" ]]; then
+                        THEME_DIR=$(dirname "$PLYMOUTH_FILE")
+                        THEME_DIR_NAME=$(basename "$THEME_DIR")
+                        if [[ "$THEME_DIR_NAME" != "$PLYMOUTH_SELECTED" ]]; then
+                            # Move it to the expected name
+                            mv "$THEME_DIR" "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}"
+                            info "Renamed theme directory to ${PLYMOUTH_SELECTED}"
+                        fi
+                    else
+                        warn "Could not find .plymouth file after extraction. Theme may not be correctly installed."
+                    fi
+                fi
+            fi
+
+            # Set the default theme
+            if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+                if plymouth-set-default-theme "$PLYMOUTH_SELECTED"; then
+                    PLYMOUTH_OK=1
+                    log "Plymouth theme set successfully."
+                else
+                    warn "plymouth-set-default-theme failed for '$PLYMOUTH_SELECTED'."
+                fi
+            else
+                warn "plymouth-set-default-theme not found; keeping default theme."
+            fi
+        else
+            warn "Theme directory '/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}' not found after extraction."
+        fi
+    else
+        warn "Could not download $THEME_URL"
+        warn "Check that the archive exists at that path in the repo. Skipping Plymouth theme installation."
+    fi
+else
+    info "No Plymouth theme selected -- skipping."
+fi
+
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
 
 log "Checking /.snapshots..."
@@ -444,37 +544,6 @@ fi
 
 log "Enabling fstrim.timer (periodic TRIM)..."
 systemctl enable --now fstrim.timer
-
-# ---------------- PLYMOUTH THEME ----------------
-
-log "Installing Plymouth theme: $PLYMOUTH_THEME ..."
-
-rm -rf "$PLYMOUTH_TMP"
-
-if git clone --depth 1 "$PLYMOUTH_REPO" "$PLYMOUTH_TMP" 2>/dev/null; then
-    THEME_SOURCE="$PLYMOUTH_TMP/$PLYMOUTH_THEME"
-    THEME_DEST="/usr/share/plymouth/themes/$PLYMOUTH_THEME"
-
-    if [[ -d "$THEME_SOURCE" ]]; then
-        rm -rf "$THEME_DEST"
-        mkdir -p "$THEME_DEST"
-        cp -a "$THEME_SOURCE/." "$THEME_DEST/"
-
-        if command -v plymouth-set-default-theme >/dev/null 2>&1; then
-            plymouth-set-default-theme "$PLYMOUTH_THEME" || \
-                { warn "Could not set Plymouth theme '$PLYMOUTH_THEME'."; PLYMOUTH_OK=0; }
-        else
-            warn "plymouth-set-default-theme not found; keeping the default theme."
-            PLYMOUTH_OK=0
-        fi
-    else
-        warn "Theme directory '$THEME_SOURCE' was not found in the cloned repo; keeping the default theme."
-        PLYMOUTH_OK=0
-    fi
-else
-    warn "Could not clone $PLYMOUTH_REPO (no network / repo unavailable). Continuing without the custom theme."
-    PLYMOUTH_OK=0
-fi
 
 # ---------------- MKINITCPIO ----------------
 
