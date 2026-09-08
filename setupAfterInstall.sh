@@ -249,7 +249,7 @@ read -r -p "Choice [$i]: " PLYMOUTH_CHOICE
 PLYMOUTH_CHOICE="${PLYMOUTH_CHOICE:-$i}"
 
 PLYMOUTH_SELECTED=""
-if [[ "$PLYMOUTH_CHOICE" -ge 1 && "$PLYMOUTH_CHOICE" -le "${#PLYMOUTH_THEMES[@]}" ]]; then
+if [[ "$PLYMOUTH_CHOICE" =~ ^[0-9]+$ ]] && [[ "$PLYMOUTH_CHOICE" -ge 1 && "$PLYMOUTH_CHOICE" -le "${#PLYMOUTH_THEMES[@]}" ]]; then
     PLYMOUTH_SELECTED="${PLYMOUTH_THEMES[$((PLYMOUTH_CHOICE-1))]}"
     info "Selected Plymouth theme: $PLYMOUTH_SELECTED"
 else
