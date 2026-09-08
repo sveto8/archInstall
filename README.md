@@ -111,29 +111,36 @@ equivalent manual install) already produced the layout above.
    `/boot/grub/themes/<name>/`, and points `GRUB_THEME` at it in
    `/etc/default/grub` (skipped entirely, without failing the script, if
    the archive can't be downloaded)
-4. Shows a summary and asks for confirmation
-5. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
+4. Asks which Plymouth boot splash theme to install: `cuts_alt`,
+   `hud_3`, `linux-penguin`, `metal_ball`, or none — downloads the
+   matching `<name>.tar.xz` from the repo's `plymouth-themes/` folder
+   (same non-fatal-if-unavailable behavior as the GRUB theme step)
+5. Shows a summary and asks for confirmation
+6. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
    `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`
-6. Installs: `btrfs-progs`, `cryptsetup`, `snapper`, `snap-pac`, `grub`,
+7. Installs: `btrfs-progs`, `cryptsetup`, `snapper`, `snap-pac`, `grub`,
    `grub-btrfs`, `inotify-tools`, `btrfs-assistant`, `plymouth`, `git`,
    microcode package
-7. Sets up the Snapper config for `/` (creates it against the existing
+8. Sets up the Snapper config for `/` (creates it against the existing
    `@snapshots` subvolume rather than letting Snapper create its own),
    with number + timeline retention policy and space-based cleanup
    (Btrfs quota/qgroups — can be disabled via `ENABLE_BTRFS_QUOTA=no`)
-8. Enables `snapper-cleanup.timer`, `snapper-timeline.timer`,
+9. Enables `snapper-cleanup.timer`, `snapper-timeline.timer`,
    `snapper-boot.timer`, `fstrim.timer`
-9. Best-effort installs a Plymouth theme from a git repo (falls back to
-   the default theme without failing the script if unavailable)
-10. Rewrites `mkinitcpio.conf` HOOKS to the full systemd + Plymouth +
+10. Installs the selected Plymouth theme (if any), verifying the
+    extracted `.plymouth` file exists and setting it as default with
+    `plymouth-set-default-theme` — a failed download or missing theme
+    file doesn't fail the script, it just leaves Plymouth on its default
+    theme
+11. Rewrites `mkinitcpio.conf` HOOKS to the full systemd + Plymouth +
     `sd-encrypt` set and rebuilds the initramfs
-11. Rewrites the GRUB kernel cmdline (`rd.luks.name=`, `root=`,
+12. Rewrites the GRUB kernel cmdline (`rd.luks.name=`, `root=`,
     `rootflags=subvol=@`, `quiet splash`, …), optionally enables
     `os-prober` (`ENABLE_OS_PROBER=yes`, for dual-boot setups where GRUB
     itself should list the other OS), reinstalls GRUB, enables
     `grub-btrfsd`, regenerates `grub.cfg`
-12. Creates and cleans up an initial protected snapshot
-13. Prints a final status report (filesystems, subvolumes, LUKS status,
+13. Creates and cleans up an initial protected snapshot
+14. Prints a final status report (filesystems, subvolumes, LUKS status,
     Snapper config/snapshots, timers, Plymouth theme, GRUB theme, GRUB
     cmdline)
 
@@ -278,6 +285,27 @@ not `poly-dark-1.0/theme.txt`) — the script installs to
 To add a theme: drop a correctly-named `.tar.xz` into `grub-themes/` in
 the repo and add a matching menu entry in `setupAfterInstall.sh`.
 
+## Plymouth themes
+
+Same pattern as GRUB themes, separate folder: `setupAfterInstall.sh`
+downloads the selected theme from `plymouth-themes/<name>.tar.xz` in
+this repo. Current themes:
+
+| Menu name      | Archive                                   | Source |
+|-----------------|-------------------------------------------|--------|
+| `cuts_alt`      | `plymouth-themes/cuts_alt.tar.xz`         | [adi1090x/plymouth-themes](https://github.com/adi1090x/plymouth-themes) |
+| `hud_3`         | `plymouth-themes/hud_3.tar.xz`            | [adi1090x/plymouth-themes](https://github.com/adi1090x/plymouth-themes) |
+| `linux-penguin` | `plymouth-themes/linux-penguin.tar.xz`    | [yucellmustafa/plymouth-linux](https://github.com/yucellmustafa/plymouth-linux) |
+| `metal_ball`    | `plymouth-themes/metal_ball.tar.xz`       | [adi1090x/plymouth-themes](https://github.com/adi1090x/plymouth-themes) |
+
+Each archive should extract to `/usr/share/plymouth/themes/<name>/`
+with a `<name>.plymouth` file inside. If the archive extracts under a
+different name, the script tries to find any `.plymouth` file and move
+its folder into place automatically; if that also fails, it warns and
+leaves the default Plymouth theme active rather than failing the whole
+script. To add a theme: drop a correctly-named `.tar.xz` into
+`plymouth-themes/` in the repo and add its name to the `PLYMOUTH_THEMES`
+array near the top of `setupAfterInstall.sh`.
 
 ## Known issues
 
@@ -341,9 +369,3 @@ can run in either order.
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
   scripts changes when run through it.
-
-
-  Plymouth themes are downloadaded from:
-
-  https://github.com/yucellmustafa/plymouth-linux
-  https://github.com/adi1090x/plymouth-themes
