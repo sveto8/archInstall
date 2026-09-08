@@ -1,35 +1,41 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+set -o errtrace
 
 # ============================================================
-# Arch Linux Installation Manager
+# Arch Linux: Base install with LUKS2 + Btrfs  ("Phase 0")
+#
+# Run this from the Arch ISO LIVE environment (not from an
+# already-installed system). It WIPES the target device.
+#
+# Produces exactly the layout expected by setup-btrfs-snapper.sh:
+#
+#   /efi         unencrypted ESP  (FAT32)
+#   /boot        unencrypted      (ext4)
+#
+#   LUKS2
+#     └── Btrfs
+#          ├── @             -> /
+#          ├── @home        -> /home
+#          └── @snapshots   -> /.snapshots
+#
+# After this script finishes, reboot into the new system and run
+# setup-btrfs-snapper.sh as root to finish Snapper/GRUB/Plymouth/quota,
+# then installDE.sh to install a desktop environment (GNOME, KDE Plasma,
+# Hyprland, or none). This script only produces a bootable, CLI-only
+# base system -- no desktop environment is installed here.
 # ============================================================
 
-# URL for the scripts repository (change according to your repo)
-SCRIPT_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
+# ---------------- CONFIGURATION (edit before running) ----------------
 
-# List of scripts
-SCRIPTS=(
-    "archInstall.sh"
-    "setupAfterInstall.sh"
-    "installDE.sh"
-    "installApps.sh"
-)
-
-REAL_USER="${SUDO_USER:-$USER}"
-REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
-[[ -n "$REAL_HOME" ]] || REAL_HOME="$HOME"
-
-WORK_DIR="${REAL_HOME}/arch-setup"
-DOWNLOAD_DIR="${WORK_DIR}/downloads"
-mkdir -p "$DOWNLOAD_DIR"
-
-# If we ended up running as root (e.g. someone still does `sudo ./arch-manager.sh`),
-# make sure the downloaded files are owned by the real user, not root, so
-# installApps.sh (which must NOT run as root) can actually read/execute them.
-if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
-    chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
-fi
+ESP_SIZE="1GiB"
+BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
+HOSTNAME="monarch"
+TIMEZONE="Europe/Zagreb"
+LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
+LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the system
+KEYMAP="us"
+MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
 
 # ---------------- COLORS ----------------
 RED='\033[0;31m'
@@ -37,378 +43,413 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-# ---------------- FUNCTIONS ----------------
-log() { echo -e "${GREEN}[+]${NC} $*"; }
-info() { echo -e "${CYAN}   $*${NC}"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
+# -----------------------------------------------------------------------
+# -----------------------------------------------------------------------
 
-# Check system status
-check_status() {
-    local arch="✗"
-    local live="✗"
-    local root="✗"
-    local btrfs="✗"
-    local snapper="✗"
+log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
+info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
+warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
+die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
+error() { printf '\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; }
 
-    [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
-    # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso
-    if [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release; then
-        live="✓"
-    elif [[ -d /run/archiso ]]; then
-        live="✓"
-    fi
-    [[ $EUID -eq 0 ]] && root="✓"
-    command -v findmnt >/dev/null && findmnt -n -o FSTYPE / 2>/dev/null | grep -q "btrfs" && btrfs="✓"
-    [[ -f /etc/snapper/configs/root ]] && snapper="✓"
+trap 'die "Failed at line $LINENO."' ERR
 
-    echo -e "${BLUE}System Status:${NC}"
-    echo -e "  Arch: $arch   Live CD: $live   Root: $root"
-    echo -e "  Btrfs: $btrfs   Snapper: $snapper"
+# ---------------- BASIC CHECKS ----------------
+
+[[ $EUID -eq 0 ]] || die "Run this script as root (from the Arch ISO live environment)."
+[[ -d /sys/firmware/efi ]] || die "Not booted in UEFI mode."
+
+command -v sgdisk >/dev/null || die "sgdisk not found (package: gptfdisk)."
+command -v cryptsetup >/dev/null || die "cryptsetup not found."
+command -v mkfs.btrfs >/dev/null || die "mkfs.btrfs not found (package: btrfs-progs)."
+command -v pacstrap >/dev/null || die "pacstrap not found (are you on the Arch ISO?)."
+
+# ---------------- SELECT DISK ----------------
+
+echo
+echo "============================================================"
+echo " Available disks"
+echo "============================================================"
+lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
+echo
+
+read -r -p "Disk to install onto (e.g. /dev/sda, /dev/nvme0n1): " DEVICE
+[[ -n "$DEVICE" ]] || die "No disk entered."
+[[ -b "$DEVICE" ]] || die "$DEVICE is not a block device."
+
+# Refuse to run against something that is currently mounted (e.g. the live USB itself),
+# but offer to clean up leftover mounts from a previous, interrupted run of this script.
+if lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -q .; then
+    warn "$DEVICE (or a partition on it) has active mounts, possibly left over from a previous run:"
+    lsblk "$DEVICE"
     echo
-}
-
-# Download a single script
-download_single_script() {
-    local script="$1"
-    local url="${SCRIPT_URL}/${script}"
-    local dest="${DOWNLOAD_DIR}/${script}"
-
-    echo -n "  Downloading $script ... "
-    if curl -fsSL -o "$dest" "$url"; then
-        chmod +x "$dest"
-        if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
-            chown "$REAL_USER:$REAL_USER" "$dest" 2>/dev/null || true
+    read -r -p "Unmount everything under $DEVICE and continue? [y/N] " UNMOUNT_ANSWER
+    if [[ "$UNMOUNT_ANSWER" =~ ^[Yy]$ ]]; then
+        log "Unmounting leftover mounts..."
+        umount -R /mnt 2>/dev/null || true
+        cryptsetup close cryptroot 2>/dev/null || true
+        sleep 1
+        STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -v '^$' || true)"
+        if [[ -n "$STILL_MOUNTED" ]]; then
+            die "Could not fully unmount $DEVICE. Unmount manually (umount -R /mnt; cryptsetup close cryptroot) and re-run."
         fi
-        echo -e "${GREEN}OK${NC}"
-        return 0
+        info "Unmounted and closed cryptroot successfully."
     else
-        echo -e "${RED}FAIL${NC}"
-        return 1
+        die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
     fi
-}
-
-# Download all scripts
-download_scripts() {
-    log "Downloading all scripts..."
-    local failed=0
-    for script in "${SCRIPTS[@]}"; do
-        download_single_script "$script" || failed=$((failed+1))
-    done
-    if [[ $failed -eq 0 ]]; then
-        log "All scripts downloaded successfully."
-    else
-        warn "$failed script(s) failed to download."
-    fi
-    if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
-        chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
-    fi
-}
-
-# Copy the entire WORK_DIR to the installed system's home directory of the first regular user.
-# Called after a successful archInstall.sh run.
-copy_to_installed_system() {
-    local dest_root="/mnt"
-    local passwd_file="${dest_root}/etc/passwd"
-
-    # Check if we are on a Live CD environment
-    local is_live=false
-    if [[ -d /run/archiso ]] || ([[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release); then
-        is_live=true
-    fi
-
-    if [[ "$is_live" == false ]]; then
-        warn "Not on Arch Live CD. Skipping copy to installed system (this should only run from Live CD)."
-        return 0
-    fi
-
-    # Check if the installed system is mounted at /mnt
-    if [[ ! -f "$passwd_file" ]]; then
-        warn "Installed system's passwd file not found at $passwd_file. Skipping copy."
-        return 0
-    fi
-
-    # Find the first regular user (UID >= 1000) and get UID, GID, and home directory
-    local target_user=""
-    local target_uid=""
-    local target_gid=""
-    local target_home=""
-    # Correctly parse /etc/passwd fields: username:password:uid:gid:gecos:homedir:shell
-    while IFS=: read -r username password uid gid gecos homedir shell; do
-        if [[ "$uid" -ge 1000 && "$username" != "nobody" && "$homedir" != "/" && -d "${dest_root}${homedir}" ]]; then
-            target_user="$username"
-            target_uid="$uid"
-            target_gid="$gid"
-            target_home="${dest_root}${homedir}"
-            break
-        fi
-    done < "$passwd_file"
-
-    if [[ -z "$target_user" ]]; then
-        warn "No regular user found in the installed system. Skipping copy."
-        return 0
-    fi
-
-    log "Copying Arch Manager scripts to $target_home/arch-setup for user $target_user (UID: $target_uid, GID: $target_gid)"
-
-    # Ensure target home directory exists (should already)
-    if [[ ! -d "$target_home" ]]; then
-        warn "Target home $target_home does not exist. Creating it..."
-        mkdir -p "$target_home"
-        chown "${target_uid}:${target_gid}" "$target_home" 2>/dev/null || true
-    fi
-
-    # Copy the entire WORK_DIR (downloaded scripts) to ~/arch-setup
-    local target_dir="${target_home}/arch-setup"
-    mkdir -p "$target_dir"
-    if cp -r "$WORK_DIR"/* "$target_dir/" 2>/dev/null; then
-        log "Copied scripts to $target_dir"
-    else
-        warn "Failed to copy scripts from $WORK_DIR to $target_dir"
-    fi
-
-    # Fix ownership of the copied scripts
-    chown -R "${target_uid}:${target_gid}" "$target_dir" 2>/dev/null || true
-
-    # Also copy the main manager script (this script) to ~/arch-manager.sh
-    local manager_source="$(readlink -f "$0")"
-    local manager_dest="${target_home}/arch-manager.sh"
-    if cp "$manager_source" "$manager_dest" 2>/dev/null; then
-        chown "${target_uid}:${target_gid}" "$manager_dest" 2>/dev/null || true
-        log "Copied manager script to $manager_dest"
-    else
-        warn "Failed to copy manager script ($manager_source) to $manager_dest"
-        # Fallback: try to copy from the current working directory if the source is not accessible
-        if [[ -f "./arch-manager.sh" ]]; then
-            if cp "./arch-manager.sh" "$manager_dest" 2>/dev/null; then
-                chown "${target_uid}:${target_gid}" "$manager_dest" 2>/dev/null || true
-                log "Copied manager script from current directory to $manager_dest"
-            else
-                warn "Fallback copy also failed."
-            fi
-        fi
-    fi
-
-    log "Scripts copied successfully. After reboot, you can run:"
-    echo -e "${CYAN}  cd ~/arch-setup && ./arch-manager.sh${NC}"
-    echo -e "${CYAN}  or directly: ~/arch-manager.sh${NC}"
-    echo -e "${GREEN}All files are owned by UID $target_uid (user $target_user).${NC}"
-}
-
-# Run a script with auto-sudo if needed
-run_script() {
-    local script="$1"
-    local path="${DOWNLOAD_DIR}/${script}"
-
-    # If script doesn't exist, download it now (on-demand download)
-    if [[ ! -f "$path" ]]; then
-        warn "Script $script not found locally. Downloading..."
-        if ! download_single_script "$script"; then
-            error "Failed to download $script. Aborting."
-            return 1
-        fi
-    fi
-
-    # Check if script needs root
-    local needs_root=false
-    case "$script" in
-        "archInstall.sh"|"setupAfterInstall.sh"|"installDE.sh")
-            needs_root=true
-            ;;
-    esac
-
-    echo -e "\n${BLUE}═══════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}Running: ${YELLOW}$script${NC}"
-    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}\n"
-
-    # If root is needed, run with sudo (or directly if already root)
-    if [[ "$needs_root" == true ]]; then
-        if [[ $EUID -eq 0 ]]; then
-            "$path"
-        else
-            if command -v sudo >/dev/null 2>&1; then
-                echo -e "${YELLOW}This script requires root privileges.${NC}"
-                echo -e "${CYAN}Running with sudo (enter your password)...${NC}"
-                echo
-                sudo "$path"
-            else
-                error "sudo is not installed!"
-                return 1
-            fi
-        fi
-    else
-        # installApps.sh must NOT run as root (makepkg/yay refuse). If the
-        # manager itself is currently root (e.g. it was invoked with sudo,
-        # or as a sub-step from a root script), drop to the real user.
-        if [[ $EUID -eq 0 ]]; then
-            if [[ -z "$REAL_USER" || "$REAL_USER" == "root" ]]; then
-                error "Running as root with no real user to drop to -- re-run this menu without sudo."
-                return 1
-            fi
-            echo -e "${CYAN}Running as $REAL_USER (installApps.sh must not run as root)...${NC}"
-            runuser -u "$REAL_USER" -- "$path"
-        else
-            "$path"
-        fi
-    fi
-
-    local code=$?
-
-    if [[ $code -eq 0 ]]; then
-        log "$script completed successfully"
-    else
-        error "$script failed with error ($code)"
-    fi
-    return $code
-}
-
-# Main menu
-MENU_WIDTH=65
-
-menu_border() {
-    local char="$1" left="$2" right="$3"
-    local n=$((MENU_WIDTH - 2))
-    local line=""
-    for ((i = 0; i < n; i++)); do line+="$char"; done
-    printf '%b%s%s%s%b\n' "$BLUE" "$left" "$line" "$right" "$NC"
-}
-
-menu_line() {
-    local text="$1" color="${2:-}"
-    local pad=$(( MENU_WIDTH - 2 - ${#text} ))
-    [[ $pad -lt 0 ]] && pad=0
-    printf '%b%s%b' "$BLUE" "║" "$NC"
-    if [[ -n "$color" ]]; then
-        printf '%b%s%b' "$color" "$text" "$NC"
-    else
-        printf '%s' "$text"
-    fi
-    printf '%*s' "$pad" ''
-    printf '%b%s%b\n' "$BLUE" "║" "$NC"
-}
-
-show_menu() {
-    menu_border "═" "╔" "╗"
-    menu_line "  Arch Linux Installation Manager" "$YELLOW"
-    menu_border "═" "╠" "╣"
-    menu_line "  1) Install Arch (archInstall.sh)"
-    menu_line "  2) Setup Snapper/GRUB (setupAfterInstall)"
-    menu_line "  3) Install DE (installDE.sh)"
-    menu_line "  4) Install applications (installApps.sh)"
-    menu_line "  5) INSTALL ALL (2->3->4)"
-    menu_line "  6) Download scripts"
-    menu_line "  0) Exit"
-    menu_border "═" "╚" "╝"
-}
-
-# Install all (Live CD only)
-install_live_phase() {
-    # For --install: only archInstall.sh makes sense before a reboot.
-    # setupAfterInstall.sh / installDE.sh / installApps.sh all expect to
-    # run ON the already-booted target system (they check findmnt/LUKS
-    # status of the CURRENT root), so chaining them here without a reboot
-    # in between would run them against the live ISO's own filesystem,
-    # not the freshly installed one.
-    log "Starting archInstall.sh (Phase 0)..."
-    if run_script "archInstall.sh"; then
-        copy_to_installed_system
-        log "Phase 0 complete. Reboot, then use arch-manager.sh's menu option 5"
-        log "(or run setupAfterInstall.sh / installDE.sh / installApps.sh directly)."
-    else
-        error "archInstall.sh did not finish successfully."
-        return 1
-    fi
-}
-
-# Install remaining scripts (after reboot)
-install_remaining() {
-    log "Arch is already installed – running remaining scripts..."
-    local failed=0
-    local scripts_to_run=(
-        "setupAfterInstall.sh"
-        "installDE.sh"
-        "installApps.sh"
-    )
-    for script in "${scripts_to_run[@]}"; do
-        echo -e "\n${BLUE}>>> $script${NC}"
-        run_script "$script" || failed=$((failed+1))
-    done
-    if [[ $failed -eq 0 ]]; then
-        log "All remaining scripts completed successfully! 🎉"
-    else
-        warn "$failed scripts failed"
-    fi
-}
-
-# ---------------- MAIN ----------------
-main() {
-    while true; do
-        check_status
-        show_menu
-        read -r -p "Choice [0-6]: " choice
-        case "$choice" in
-            1)
-                script="${SCRIPTS[0]}"
-                echo
-                if run_script "$script"; then
-                    copy_to_installed_system
-                    echo -e "\n${GREEN}Installation phase completed. You can now reboot into your new system.${NC}"
-                else
-                    warn "Installation script failed. Skipping copy to installed system."
-                    echo -e "\n${RED}archInstall.sh did not finish successfully -- do not reboot yet.${NC}"
-                    echo -e "${YELLOW}Check the errors above, fix them, and run this again.${NC}"
-                fi
-                echo -e "${YELLOW}Exiting Arch Manager.${NC}"
-                exit 0
-                ;;
-            2|3|4)
-                script="${SCRIPTS[$((choice-1))]}"
-                echo
-                run_script "$script" || true
-                echo
-                read -r -p "Press Enter..."
-                ;;
-            5)
-                install_remaining
-                echo
-                read -r -p "Press Enter..."
-                ;;
-            6)
-                download_scripts
-                echo
-                read -r -p "Press Enter..."
-                ;;
-            0)
-                echo -e "${GREEN}Goodbye!${NC}"
-                exit 0
-                ;;
-            *)
-                error "Unknown option"
-                echo
-                read -r -p "Press Enter..."
-                ;;
-        esac
-    done
-}
-
-# Handle command line arguments
-if [[ $# -gt 0 ]]; then
-    case "$1" in
-        --download) download_scripts; exit 0 ;;
-        --install) download_scripts; install_live_phase; exit $? ;;
-        --help) echo "Usage: $0 [--download|--install|--help]"; exit 0 ;;
-        *)
-            if [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
-                run_script "$1" "${@:2}"
-                exit $?
-            else
-                error "Unknown option: $1"
-                exit 1
-            fi
-            ;;
-    esac
 fi
 
-main "$@"
+# partition suffix: /dev/nvme0n1 -> nvme0n1p1, /dev/sda -> sda1
+if [[ "$DEVICE" == *nvme* || "$DEVICE" == *mmcblk* ]]; then
+    SUF="p"
+else
+    SUF=""
+fi
+ESP="${DEVICE}${SUF}1"
+BOOTPART="${DEVICE}${SUF}2"
+LUKSPART="${DEVICE}${SUF}3"
+
+UCODE_PKG=""
+if grep -qi 'AuthenticAMD' /proc/cpuinfo; then
+    UCODE_PKG="amd-ucode"
+elif grep -qi 'GenuineIntel' /proc/cpuinfo; then
+    UCODE_PKG="intel-ucode"
+fi
+
+# ---------------- CONFIRM ----------------
+
+printf '\n'
+echo "============================================================"
+echo " THIS WILL DESTROY ALL DATA ON: $DEVICE"
+echo "============================================================"
+lsblk "$DEVICE"
+echo
+echo "Planned layout:"
+echo "  ${ESP}      -> ESP (FAT32, $ESP_SIZE)          -> /efi"
+echo "  ${BOOTPART} -> ext4 ($BOOT_SIZE)                -> /boot"
+echo "  ${LUKSPART} -> LUKS2 -> Btrfs (@ @home @snapshots)"
+echo "  Hostname:   $HOSTNAME"
+echo "  Timezone:   $TIMEZONE"
+echo "  Locale:     $LOCALE"
+echo "  Microcode:  ${UCODE_PKG:-none detected}"
+echo "============================================================"
+echo
+read -r -p "Type WIPE (all caps) to continue: " CONFIRM
+[[ "$CONFIRM" == "WIPE" ]] || { echo "Cancelled."; exit 0; }
+
+# ---------------- REGULAR USER ----------------
+
+echo
+read -r -p "Username for the new regular user (leave empty to skip): " NEW_USERNAME
+if [[ -n "$NEW_USERNAME" ]]; then
+    if [[ "$NEW_USERNAME" == "root" ]]; then
+        die "Refusing to create a regular user named 'root'."
+    fi
+    read -r -p "Should $NEW_USERNAME be a superuser (added to wheel + sudo)? [Y/n] " MAKE_SUDO
+    [[ "$MAKE_SUDO" =~ ^[Nn]$ ]] && MAKE_SUDO="no" || MAKE_SUDO="yes"
+    info "User: $NEW_USERNAME (sudo: $MAKE_SUDO). You'll set the password interactively at the end."
+else
+    warn "No regular user will be created; only root will exist on the new system."
+    MAKE_SUDO="no"
+fi
+
+# ---------------- ROOT PASSWORD ----------------
+#
+# No separate question here: if a sudo-enabled user was just created,
+# root stays locked automatically (use sudo instead). A root password
+# is only requested if there's no sudo user, since otherwise nothing
+# could log into the system at all.
+
+if [[ -n "$NEW_USERNAME" && "$MAKE_SUDO" == "yes" ]]; then
+    SET_ROOT_PASSWORD="no"
+    info "Sudo-enabled user created -- root account stays locked (no root password)."
+else
+    SET_ROOT_PASSWORD="yes"
+    info "No sudo-enabled user configured -- you'll be asked to set a root password so you can still log in."
+fi
+
+# ---------------- PARTITIONING ----------------
+
+log "Wiping and partitioning $DEVICE..."
+
+echo
+echo "==> Wiping existing filesystem signatures..."
+wipefs -af "$DEVICE"
+
+echo
+echo "==> Wiping existing GPT/MBR partition table..."
+sgdisk --zap-all "$DEVICE"
+
+echo
+echo "==> Creating EFI partition (${ESP_SIZE})..."
+sgdisk -n1:0:+${ESP_SIZE} -t1:ef00 -c1:"EFI" "$DEVICE"
+
+echo
+echo "==> Creating boot partition (${BOOT_SIZE})..."
+sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot" "$DEVICE"
+
+echo
+echo "==> Creating root partition (remaining disk space)..."
+sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
+
+echo
+echo "==> Disk partitioning completed."
+
+partprobe "$DEVICE"
+udevadm settle
+sleep 3
+
+for p in "$ESP" "$BOOTPART" "$LUKSPART"; do
+    [[ -b "$p" ]] || die "$p does not exist yet -- the kernel may not have re-read the partition table. Try running 'partprobe $DEVICE' manually, then re-run this script."
+done
+
+# ---------------- FORMAT ESP + /boot ----------------
+
+log "Formatting ESP and /boot..."
+
+mkfs.fat -F32 -n EFI "$ESP"
+mkfs.ext4 -F -L boot "$BOOTPART"
+sync
+udevadm settle
+
+# ---------------- LUKS2 ----------------
+
+log "Creating LUKS2 container on $LUKSPART..."
+info "You will be prompted for a passphrase."
+
+for attempt in 1 2 3; do
+    if cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; then
+        break
+    fi
+
+    if [[ "$attempt" -eq 3 ]]; then
+        error "LUKS2 formatting failed after 3 attempts. Aborting."
+        exit 1
+    fi
+
+    warn "LUKS2 formatting was cancelled or confirmation was incorrect."
+    warn "Please try again. Attempt $((attempt + 1)) of 3."
+done
+
+log "Opening LUKS2 container..."
+cryptsetup open "$LUKSPART" cryptroot || {
+    error "Failed to open LUKS2 container."
+    exit 1
+}
+
+LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
+info "LUKS UUID: $LUKS_UUID"
+
+# ---------------- BTRFS ----------------
+
+log "Creating Btrfs filesystem and subvolumes..."
+
+mkfs.btrfs -L cryptroot /dev/mapper/cryptroot
+
+mount /dev/mapper/cryptroot /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@snapshots
+umount /mnt
+
+mount -o "${MOUNT_OPTS},subvol=@" /dev/mapper/cryptroot /mnt
+mkdir -p /mnt/{home,.snapshots,boot,efi}
+mount -o "${MOUNT_OPTS},subvol=@home" /dev/mapper/cryptroot /mnt/home
+mount -o "${MOUNT_OPTS},subvol=@snapshots" /dev/mapper/cryptroot /mnt/.snapshots
+mount "$BOOTPART" /mnt/boot
+mount "$ESP" /mnt/efi
+
+# ---------------- PACSTRAP ----------------
+
+log "Installing base system (pacstrap)..."
+
+PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
+          grub efibootmgr sudo networkmanager vim git)
+[[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
+
+pacstrap -K /mnt "${PACKAGES[@]}"
+
+genfstab -U /mnt >> /mnt/etc/fstab
+
+log "/etc/fstab:"
+cat /mnt/etc/fstab
+
+# ---------------- USER ACCOUNT + PASSWORDS (interactive) ----------------
+#
+# Done right after pacstrap, before the longer unattended steps below
+# (mkinitcpio -P, grub-install, grub-mkconfig), so you answer all the
+# prompts up front and can then walk away while the rest runs.
+
+if [[ -n "${NEW_USERNAME}" ]]; then
+    log "Creating user ${NEW_USERNAME}..."
+    if [[ "${MAKE_SUDO}" == "yes" ]]; then
+        arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
+        # Enable the wheel group in sudoers (validated with visudo -c before activating).
+        arch-chroot /mnt cp /etc/sudoers /etc/sudoers.bak
+        arch-chroot /mnt sed -i -E 's/^# %wheel ALL=\(ALL:ALL\) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+        arch-chroot /mnt visudo -c -f /etc/sudoers || {
+            arch-chroot /mnt cp /etc/sudoers.bak /etc/sudoers
+            warn "sudoers edit failed validation, reverted."
+        }
+        arch-chroot /mnt rm -f /etc/sudoers.bak
+    else
+        arch-chroot /mnt useradd -m -s /bin/bash "${NEW_USERNAME}"
+    fi
+
+    log "Set the password for ${NEW_USERNAME} now:"
+    until arch-chroot /mnt passwd "${NEW_USERNAME}"; do
+        echo "Passwords did not match or were rejected -- try again."
+    done
+fi
+
+if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
+    log "Set the root password now:"
+    until arch-chroot /mnt passwd; do
+        echo "Passwords did not match or were rejected -- try again."
+    done
+else
+    info "Skipping root password as requested -- root account stays locked."
+fi
+
+info "All passwords set. The rest of the install runs unattended from here."
+
+# ---------------- CHROOT CONFIGURATION (unattended) ----------------
+
+log "Configuring the new system (chroot)..."
+
+# --- CHROOT SCRIPT ---
+arch-chroot /mnt /bin/bash <<CHROOT_EOF
+set -Eeuo pipefail
+
+# Set hostname and time
+echo "$HOSTNAME" > /etc/hostname
+ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+hwclock --systohc
+
+# --- Enable locales ---
+# Enable en_US.UTF-8
+sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
+grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+
+# Enable hr_HR.UTF-8
+sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
+grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
+
+locale-gen
+
+# Set system locale and keymap
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+echo "KEYMAP=us" > /etc/vconsole.conf
+
+# Export LANGUAGE to avoid "NO" in GDM and other display managers
+mkdir -p /etc/profile.d
+echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
+chmod 644 /etc/profile.d/locale.sh
+
+# Hosts file
+cat >> /etc/hosts <<HOSTS_EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+HOSTS_EOF
+
+# Enable NetworkManager
+systemctl enable NetworkManager
+
+# Initramfs: systemd-based with proper hooks
+sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
+cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
+
+HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt filesystems fsck)
+HOOKS_EOF
+mkinitcpio -P
+
+# GRUB: add LUKS, locale, and keymap to kernel command line
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=us rd.locale.LANG=en_US.UTF-8\"/" /etc/default/grub
+
+# Install GRUB for UEFI
+grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
+grub-mkconfig -o /boot/grub/grub.cfg
+
+if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
+    echo "==> WARNING: /boot/grub/grub.cfg has no menuentry -- GRUB will likely drop to a rescue shell on boot." >&2
+fi
+
+CHROOT_EOF
+
+# ---------------- DONE ----------------
+
+# ========================================================
+# Installation complete – copy manager script to installed system
+# ========================================================
+log "Base install complete."
+
+# Create /archInstall directory on the new system
+log "Creating /archInstall directory on the new system..."
+mkdir -p /mnt/archInstall
+
+# Find the manager script
+MANAGER_SCRIPT=""
+if [[ -f "/arch-setup/arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="/arch-setup/arch-manager.sh"
+elif [[ -f "$(dirname "$0")/arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="$(dirname "$0")/arch-manager.sh"
+elif [[ -f "./arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="./arch-manager.sh"
+fi
+
+if [[ -n "$MANAGER_SCRIPT" && -f "$MANAGER_SCRIPT" ]]; then
+    log "Copying arch-manager.sh to /archInstall on the new system..."
+    cp "$MANAGER_SCRIPT" /mnt/archInstall/arch-manager.sh
+    chmod +x /mnt/archInstall/arch-manager.sh
+    
+    # Also copy all other scripts if they exist
+    if [[ -d "/arch-setup/downloads" ]]; then
+        log "Copying all installation scripts to /archInstall..."
+        mkdir -p /mnt/archInstall/scripts
+        cp -r /arch-setup/downloads/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
+        chmod +x /mnt/archInstall/scripts/*.sh 2>/dev/null || true
+    fi
+    
+    printf '\n'
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}After reboot, run:${NC}"
+    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+    printf '%s\n' "${YELLOW}  (or as root: ${CYAN}/archInstall/arch-manager.sh${YELLOW})${NC}"
+    printf '\n'
+    printf '%s\n' "${GREEN}All scripts are available in:${NC}"
+    printf '%s\n' "${CYAN}  /archInstall/scripts/${NC}"
+else
+    printf '\n'
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${RED}WARNING: arch-manager.sh not found!${NC}"
+    printf '%s\n' "${YELLOW}After reboot, download it again:${NC}"
+    printf '%s\n' "${CYAN}  sudo mkdir -p /archInstall${NC}"
+    printf '%s\n' "${CYAN}  sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh${NC}"
+    printf '%s\n' "${CYAN}  sudo chmod +x /archInstall/arch-manager.sh${NC}"
+    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+fi
+
+echo
+echo "============================================================"
+echo " NEXT STEPS"
+echo "============================================================"
+echo "1. umount -R /mnt"
+echo "2. cryptsetup close cryptroot"
+echo "3. reboot, remove the install media"
+echo "4. After reboot, log in and run:"
+if [[ -f /mnt/archInstall/arch-manager.sh ]]; then
+    echo "   sudo /archInstall/arch-manager.sh"
+else
+    echo "   sudo mkdir -p /archInstall"
+    echo "   sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh"
+    echo "   sudo chmod +x /archInstall/arch-manager.sh"
+    echo "   sudo /archInstall/arch-manager.sh"
+fi
+echo "============================================================"
