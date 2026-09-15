@@ -22,7 +22,7 @@ set -o errtrace
 # After this script finishes, reboot into the new system and run
 # setup-btrfs-snapper.sh as root to finish Snapper/GRUB/Plymouth/quota,
 # then installDE.sh to install a desktop environment (GNOME, KDE Plasma,
-# Hyprland, or none). This script only produces a bootable, CLI-only
+# COSMIC, or none). This script only produces a bootable, CLI-only
 # base system -- no desktop environment is installed here.
 # ============================================================
 
