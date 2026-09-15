@@ -154,25 +154,27 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    password) instead of just refusing
 2. Picks the target user automatically if there's exactly one regular
    (UID ≥ 1000) account on the system; otherwise asks which one
-3. Asks for a desktop environment: GNOME, KDE Plasma, Hyprland, or
+3. Asks for a desktop environment: GNOME, KDE Plasma, COSMIC, or
    none/cancel — and, if one is chosen, full or minimal package set.
    GNOME and KDE use curated Wayland-focused package sets (not the full
-   `gnome`/`plasma` meta-groups) plus a shared set of portal/Qt/polkit
-   packages needed for Wayland apps to work correctly under any of the
-   three
+   `gnome`/`plasma` meta-groups); COSMIC uses the official `cosmic`
+   package group (full) or a curated minimal component set — all three
+   share a common set of portal/Qt/polkit packages needed for Wayland
+   apps to work correctly
 4. Shows a summary (user, DE, package list) and asks for confirmation
-5. Installs the packages, enables the matching display manager
-   (`gdm.service` / `sddm.service`)
+5. Installs the packages, enables the matching display manager/greeter
+   (`gdm.service` / `sddm.service` / `cosmic-greeter.service`)
 6. For GNOME specifically: sets the dark color scheme
    (`org.gnome.desktop.interface color-scheme=prefer-dark` +
    `gtk-theme=Adwaita-dark` for older GTK3 apps) as the default for the
    target user, via a temporary `dbus-run-session` since there's no
    live GNOME session yet to talk to
-7. For Hyprland specifically: writes a default `hyprland.lua` config
-   (keybinds, waybar, hyprlock, hypridle) into the target user's home
-   directory, matching the syntax of the official
-   `hyprwm/Hyprland/example/hyprland.lua` (Hyprland 0.55+ uses Lua for
-   its config instead of the older `hyprland.conf` format)
+7. For COSMIC specifically: enables `power-profiles-daemon.service`,
+   needed for the Settings → Power and Battery panel to work; the full
+   install also adds `packagekit`, needed for `cosmic-store` (App
+   Center) to actually install anything. COSMIC itself has no config
+   file to generate — everything (keybinds, panel, wallpaper, etc.) is
+   configured through its own Settings app after login
 
 You can re-run this later to install a different desktop environment or
 change from full to minimal (or vice versa) — it doesn't remove
@@ -307,20 +309,6 @@ script. To add a theme: drop a correctly-named `.tar.xz` into
 `plymouth-themes/` in the repo and add its name to the `PLYMOUTH_THEMES`
 array near the top of `setupAfterInstall.sh`.
 
-## Known issues
-
-- **Hyprland: black screen after login, dumped back to the login
-  screen.** Reported on at least one test install; not yet root-caused.
-  Likely suspects to check first, in order: (1) whether `mesa` (and, on
-  a VM, the guest GPU driver — e.g. `mesa` + `virtio` support, or
-  `xf86-video-qxl` equivalents for Wayland) is actually present —
-  `hyprland`'s own dependencies should pull this in, but verify with
-  `pacman -Qi mesa`; (2) `journalctl --user -b -u sddm` /
-  `~/.local/share/sddm/wayland-session.log` (or equivalent) for the
-  actual compositor error right before it exits; (3) whether the
-  session is even reaching Hyprland vs. failing inside SDDM's Wayland
-  greeter itself. Not fixed yet — flagged here to pick up later.
-
 ## Requirements between the scripts
 
 `setupAfterInstall.sh` and `installDE.sh` both assume the exact layout
@@ -360,11 +348,11 @@ can run in either order.
   `makepkg` and `yay` both refuse to build AUR packages as root. This is
   the opposite of `setupAfterInstall.sh` and `installDE.sh`, which both
   want root.
-- The Hyprland option in `installDE.sh` writes `~/.config/hypr/hyprland.lua`
-  (Hyprland 0.55+ uses Lua for its config instead of the older
-  `hyprland.conf` format). Treat the generated config as a starting
-  point, not a finished setup — review it against the official example
-  at `hyprwm/Hyprland/example/hyprland.lua` before relying on it.
+- The COSMIC option in `installDE.sh` is officially packaged in Arch's
+  `extra` repo (the `cosmic` group for full, individual `cosmic-*`
+  components for minimal). It has no dotfile-based config — everything
+  is configured through its own Settings app after login, so there's
+  nothing for the script to generate or for you to hand-edit.
 - `arch-manager.sh` is a convenience wrapper, not a replacement for
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
