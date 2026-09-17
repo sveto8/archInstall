@@ -68,17 +68,18 @@ echo "Desktop environment:"
 echo "  1) GNOME (Wayland)"
 echo "  2) KDE Plasma (Wayland)"
 echo "  3) COSMIC (Wayland)"
-echo "  4) None / cancel"
+echo "  4) Budgie (Wayland)"
+echo "  5) None / cancel"
 read -r -p "Choice [1]: " DE_CHOICE
 DE_CHOICE="${DE_CHOICE:-1}"
 
-[[ "$DE_CHOICE" == "4" ]] && { echo "Nothing to do."; exit 0; }
+[[ "$DE_CHOICE" == "5" ]] && { echo "Nothing to do."; exit 0; }
 
 DE_PACKAGES=()
 DM_SERVICE=""
 INSTALL_MODE=""
 
-if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" ]]; then
+if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" || "$DE_CHOICE" == "4" ]]; then
     read -r -p "Full install or minimal? [F/m]: " INSTALL_MODE
     [[ "$INSTALL_MODE" =~ ^[Mm]$ ]] && INSTALL_MODE="minimal" || INSTALL_MODE="full"
 fi
@@ -175,6 +176,34 @@ case "$DE_CHOICE" in
 
         DM_SERVICE="cosmic-greeter.service"
         ;;
+    4)
+        DE_NAME="Budgie ($INSTALL_MODE) [Wayland]"
+
+        if [[ "$INSTALL_MODE" == "full" ]]; then
+            DE_PACKAGES=(
+                budgie                  # official package group -- all first-party components
+                budgie-extras           # extra applets (Wiki: can alter existing behavior, but useful)
+                lightdm
+                lightdm-gtk-greeter
+                nautilus                # Budgie ships no file manager by default
+                gnome-terminal          # Budgie ships no terminal by default
+                "${WAYLAND_COMMON[@]}"
+            )
+        else
+            DE_PACKAGES=(
+                budgie-desktop
+                budgie-desktop-services
+                budgie-control-center
+                lightdm
+                lightdm-gtk-greeter
+                nautilus
+                gnome-terminal
+                "${WAYLAND_COMMON[@]}"
+            )
+        fi
+
+        DM_SERVICE="lightdm.service"
+        ;;
 esac
 info "Desktop environment: $DE_NAME"
 
@@ -228,6 +257,23 @@ if [[ "$DE_CHOICE" == "3" ]]; then
     fi
 fi
 
+# ---------------- BUDGIE: LIGHTDM GREETER ----------------
+
+if [[ "$DE_CHOICE" == "4" ]]; then
+    if [[ -f /etc/lightdm/lightdm.conf ]]; then
+        log "Setting lightdm-gtk-greeter as the LightDM greeter..."
+        if grep -q '^greeter-session=' /etc/lightdm/lightdm.conf; then
+            sed -i 's/^greeter-session=.*/greeter-session=lightdm-gtk-greeter/' /etc/lightdm/lightdm.conf
+        elif grep -q '^\[Seat:\*\]' /etc/lightdm/lightdm.conf; then
+            sed -i '/^\[Seat:\*\]/a greeter-session=lightdm-gtk-greeter' /etc/lightdm/lightdm.conf
+        else
+            printf '\n[Seat:*]\ngreeter-session=lightdm-gtk-greeter\n' >> /etc/lightdm/lightdm.conf
+        fi
+    else
+        warn "/etc/lightdm/lightdm.conf not found -- LightDM may not start correctly without a greeter set."
+    fi
+fi
+
 # ---------------- DONE ----------------
 
 log "Desktop environment install complete."
@@ -246,5 +292,9 @@ if [[ "$DE_CHOICE" == "3" ]]; then
     if [[ "$INSTALL_MODE" == "full" ]]; then
         echo "cosmic-store (App Center) needs packagekit, which was installed above."
     fi
+fi
+if [[ "$DE_CHOICE" == "4" ]]; then
+    echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen looks"
+    echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
 fi
 echo "============================================================"
