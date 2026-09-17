@@ -154,16 +154,18 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    password) instead of just refusing
 2. Picks the target user automatically if there's exactly one regular
    (UID ≥ 1000) account on the system; otherwise asks which one
-3. Asks for a desktop environment: GNOME, KDE Plasma, COSMIC, or
-   none/cancel — and, if one is chosen, full or minimal package set.
+3. Asks for a desktop environment: GNOME, KDE Plasma, COSMIC, Budgie,
+   or none/cancel — and, if one is chosen, full or minimal package set.
    GNOME and KDE use curated Wayland-focused package sets (not the full
    `gnome`/`plasma` meta-groups); COSMIC uses the official `cosmic`
-   package group (full) or a curated minimal component set — all three
-   share a common set of portal/Qt/polkit packages needed for Wayland
-   apps to work correctly
+   package group (full) or a curated minimal component set; Budgie uses
+   the official `budgie` package group (full, includes `budgie-extras`)
+   or a curated minimal component set — all four share a common set of
+   portal/Qt/polkit packages needed for Wayland apps to work correctly
 4. Shows a summary (user, DE, package list) and asks for confirmation
 5. Installs the packages, enables the matching display manager/greeter
-   (`gdm.service` / `sddm.service` / `cosmic-greeter.service`)
+   (`gdm.service` / `sddm.service` / `cosmic-greeter.service` /
+   `lightdm.service`)
 6. For GNOME specifically: sets the dark color scheme
    (`org.gnome.desktop.interface color-scheme=prefer-dark` +
    `gtk-theme=Adwaita-dark` for older GTK3 apps) as the default for the
@@ -175,6 +177,12 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    Center) to actually install anything. COSMIC itself has no config
    file to generate — everything (keybinds, panel, wallpaper, etc.) is
    configured through its own Settings app after login
+8. For Budgie specifically: Budgie ships no file manager or terminal of
+   its own, so `nautilus` and `gnome-terminal` are added alongside it;
+   it also has no official display manager of its own, so LightDM +
+   `lightdm-gtk-greeter` are installed and set as the greeter in
+   `/etc/lightdm/lightdm.conf` (LightDM otherwise often comes up with no
+   greeter session configured at all)
 
 You can re-run this later to install a different desktop environment or
 change from full to minimal (or vice versa) — it doesn't remove
