@@ -170,6 +170,33 @@ else
     info "No sudo-enabled user configured -- you'll be asked to set a root password so you can still log in."
 fi
 
+# ---------------- HARDWARE CLOCK (RTC) ----------------
+#
+# Linux keeps the hardware clock in UTC by default. Windows, on the
+# other hand, assumes the hardware clock is in LOCAL time. On a dual-
+# boot machine, if both OSes assume their own convention, Windows will
+# show the wrong time (offset by your timezone).
+#
+# Options:
+#   UTC   -> Linux default. Recommended for Linux-only machines.
+#   LOCAL -> Windows-compatible. Recommended if you dual-boot Windows
+#            and don't want to change the registry on the Windows side.
+
+echo
+echo "Hardware clock (RTC) mode:"
+echo "  1) UTC (Linux default, recommended unless dual-booting Windows)"
+echo "  2) Local time (use this if you dual-boot Windows)"
+read -r -p "Choice [1]: " RTC_CHOICE
+RTC_CHOICE="${RTC_CHOICE:-1}"
+
+if [[ "$RTC_CHOICE" == "2" ]]; then
+    RTC_MODE="local"
+    info "RTC will be set to LOCAL time (Windows-compatible)."
+else
+    RTC_MODE="utc"
+    info "RTC will be set to UTC (Linux default)."
+fi
+
 # ---------------- PARTITIONING ----------------
 
 log "Wiping and partitioning $DEVICE..."
@@ -326,7 +353,14 @@ set -Eeuo pipefail
 # Set hostname and time
 echo "$HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
-hwclock --systohc
+
+# Hardware clock: either UTC (Linux default) or LOCAL (Windows-friendly).
+# The /etc/adjtime file records the chosen mode for hwclock/systemd.
+if [[ "$RTC_MODE" == "local" ]]; then
+    hwclock --systohc --localtime
+else
+    hwclock --systohc --utc
+fi
 
 # --- Enable locales ---
 # Enable en_US.UTF-8
