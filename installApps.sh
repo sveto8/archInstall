@@ -120,7 +120,7 @@ fi
 echo
 read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
 if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
-    AUR_PACKAGES+=(libreoffice-still)
+    REPO_PACKAGES+=(libreoffice-still)
 fi
 
 # Dynamically build the list of work packages for the prompt
@@ -275,7 +275,7 @@ else
 fi
 echo
 echo "Manual steps still needed:"
-if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
+if printf '%s\n' "${AUR_PACKAGES[@]}" | grep -qx "snx-rs"; then
     echo "  - snx-rs: takes a while to build from source, this is expected."
 fi
 echo "  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB."
