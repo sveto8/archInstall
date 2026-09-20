@@ -288,6 +288,30 @@ mount -o "${MOUNT_OPTS},subvol=@snapshots" /dev/mapper/cryptroot /mnt/.snapshots
 mount "$BOOTPART" /mnt/boot
 mount "$ESP" /mnt/efi
 
+# ---------------- OPTIMIZE MIRRORLIST (reflector) ----------------
+#
+# Use reflector to rank mirrors by speed and keep only the fastest
+# HTTPS mirrors. This speeds up pacstrap and all subsequent package
+# installs on the live system.
+#
+# The Arch ISO ships with reflector, but install it if missing.
+
+log "Optimizing pacman mirrorlist with reflector..."
+
+if ! command -v reflector >/dev/null 2>&1; then
+    pacman -S --needed --noconfirm reflector
+fi
+
+# Backup the original mirrorlist (optional but recommended)
+cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
+
+# Rank the 20 most recently synchronized HTTPS mirrors by download rate
+# and write the result back to /etc/pacman.d/mirrorlist.
+# Only mirrors that have synced within the last 12 hours are considered.
+reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist
+
+info "Mirrorlist updated with the fastest HTTPS mirrors."
+
 # ---------------- PACSTRAP ----------------
 
 log "Installing base system (pacstrap)..."
