@@ -58,10 +58,13 @@ FREE_LIMIT="0.20"
 # rely purely on NUMBER_LIMIT / TIMELINE_LIMIT_* for cleanup.
 ENABLE_BTRFS_QUOTA="yes"
 
-# Set to "yes" only if this machine dual-boots another OS (e.g. Windows)
-# and you want GRUB itself to detect and list it. Not needed if you
-# already pick the OS from the motherboard/UEFI boot menu.
-ENABLE_OS_PROBER="no"
+# Enable OS prober so GRUB detects other operating systems (e.g. Windows
+# on a dual-boot machine) and lists them in the boot menu. On Arch this
+# requires the "os-prober" package plus ntfs-3g and fuse3 (os-prober
+# uses grub-mount, which relies on FUSE3 and needs NTFS support to read
+# the Windows partition). GRUB also needs GRUB_DISABLE_OS_PROBER=false
+# in /etc/default/grub -- both are handled automatically below.
+ENABLE_OS_PROBER="yes"
 
 # Plymouth themes base URL (your GitHub repo)
 PLYMOUTH_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main/plymouth-themes"
@@ -74,6 +77,13 @@ PLYMOUTH_THEMES=(
     "linux-penguin"
     "metal_ball"
 )
+
+# UEFI boot entry name. This is what shows up in the firmware's boot menu
+# (F11/F12). The script also removes any old "GRUB" or "UEFI OS" entries
+# left behind by archInstall.sh so the firmware menu only shows one
+# Arch entry -- but ONLY entries that live on this same ESP, so boot
+# entries from other Linux installations on other disks are untouched.
+GRUB_BOOTLOADER_ID="Arch Linux"
 
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
 # / poly-dark / none), not hardcoded here.
@@ -272,6 +282,8 @@ printf '%s\n' "EFI         : $(findmnt -n -o SOURCE /efi)"
 printf '%s\n' "Microcode   : ${UCODE_PKG:-none}"
 printf '%s\n' "GRUB Theme  : ${GRUB_THEME_NAME:-none}"
 printf '%s\n' "Plymouth    : ${PLYMOUTH_SELECTED:-none}"
+printf '%s\n' "UEFI entry  : $GRUB_BOOTLOADER_ID"
+printf '%s\n' "OS prober   : $ENABLE_OS_PROBER"
 printf '%s\n' "============================================================"
 printf '\n'
 printf '%s\n' "The script will configure:"
@@ -283,6 +295,7 @@ else
     printf '%s\n' "  * Plymouth: skipped (no theme selected)"
 fi
 printf '%s\n' "  * GRUB + grub-btrfs"
+printf '%s\n' "  * GRUB remembers last-booted entry (GRUB_DEFAULT=saved)"
 printf '%s\n' "  * Snapper for / only"
 printf '%s\n' "  * snap-pac pre/post pacman snapshots"
 printf '%s\n' "  * boot + daily snapshots"
@@ -340,9 +353,15 @@ PACKAGES=(
     plymouth
     git
     curl
+    efibootmgr
 )
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
-[[ "$ENABLE_OS_PROBER" == "yes" ]] && PACKAGES+=("os-prober")
+# os-prober needs ntfs-3g and fuse3 to actually read Windows' NTFS
+# partition and the FAT32 Windows ESP. Without these, grub-mkconfig
+# can report finding Windows but fail to add a working menu entry.
+if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
+    PACKAGES+=(os-prober ntfs-3g fuse3)
+fi
 
 pacman -S --needed --noconfirm "${PACKAGES[@]}"
 
@@ -572,33 +591,56 @@ EOF
 
 log "Configuring GRUB kernel parameters..."
 
-GRUB_DEFAULT="/etc/default/grub"
-cp -a "$GRUB_DEFAULT" "$BACKUP_DIR/grub.before"
+GRUB_DEFAULT_FILE="/etc/default/grub"
+cp -a "$GRUB_DEFAULT_FILE" "$BACKUP_DIR/grub.before"
 
 # Ensure a visible GRUB menu.
-if grep -q '^GRUB_TIMEOUT=' "$GRUB_DEFAULT"; then
-    sed -i -E 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$GRUB_DEFAULT"
+if grep -q '^GRUB_TIMEOUT=' "$GRUB_DEFAULT_FILE"; then
+    sed -i -E 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$GRUB_DEFAULT_FILE"
 else
-    echo 'GRUB_TIMEOUT=5' >> "$GRUB_DEFAULT"
+    echo 'GRUB_TIMEOUT=5' >> "$GRUB_DEFAULT_FILE"
 fi
 
-if grep -q '^GRUB_TIMEOUT_STYLE=' "$GRUB_DEFAULT"; then
-    sed -i -E 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' "$GRUB_DEFAULT"
+if grep -q '^GRUB_TIMEOUT_STYLE=' "$GRUB_DEFAULT_FILE"; then
+    sed -i -E 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' "$GRUB_DEFAULT_FILE"
 else
-    echo 'GRUB_TIMEOUT_STYLE=menu' >> "$GRUB_DEFAULT"
+    echo 'GRUB_TIMEOUT_STYLE=menu' >> "$GRUB_DEFAULT_FILE"
 fi
 
+# Remember the last booted menu entry and use it as the default on the
+# next boot. "saved" tells GRUB to read the saved entry from the
+# environment block; "GRUB_SAVEDEFAULT=true" makes GRUB write the chosen
+# entry back to that block each time.
+log "Enabling GRUB saved-entry default (boot last used OS automatically)..."
+
+if grep -q '^GRUB_DEFAULT=' "$GRUB_DEFAULT_FILE"; then
+    sed -i -E 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' "$GRUB_DEFAULT_FILE"
+else
+    echo 'GRUB_DEFAULT=saved' >> "$GRUB_DEFAULT_FILE"
+fi
+
+if grep -q '^GRUB_SAVEDEFAULT=' "$GRUB_DEFAULT_FILE"; then
+    sed -i -E 's/^GRUB_SAVEDEFAULT=.*/GRUB_SAVEDEFAULT=true/' "$GRUB_DEFAULT_FILE"
+else
+    echo 'GRUB_SAVEDEFAULT=true' >> "$GRUB_DEFAULT_FILE"
+fi
+
+# OS prober: install + explicitly enable in /etc/default/grub. On Arch,
+# grub-mkconfig only scans for other OSes when GRUB_DISABLE_OS_PROBER is
+# explicitly set to false (the default behavior in recent GRUB versions
+# is to skip the scan for security reasons).
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
-    if grep -q '^GRUB_DISABLE_OS_PROBER=' "$GRUB_DEFAULT"; then
-        sed -i -E 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' "$GRUB_DEFAULT"
+    log "Enabling os-prober so GRUB detects other operating systems..."
+    if grep -q '^GRUB_DISABLE_OS_PROBER=' "$GRUB_DEFAULT_FILE"; then
+        sed -i -E 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' "$GRUB_DEFAULT_FILE"
     else
-        echo 'GRUB_DISABLE_OS_PROBER=false' >> "$GRUB_DEFAULT"
+        echo 'GRUB_DISABLE_OS_PROBER=false' >> "$GRUB_DEFAULT_FILE"
     fi
 fi
 
 # Build the command line for systemd's sd-encrypt hook.
 CURRENT_CMDLINE="$(
-    grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT" |
+    grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT_FILE" |
         head -n1 |
         cut -d= -f2- |
         sed 's/^"//;s/"$//' || true
@@ -631,12 +673,12 @@ CURRENT_CMDLINE="$(
 # remains available if needed.
 NEW_CMDLINE="$CURRENT_CMDLINE rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0"
 
-if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT"; then
+if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT_FILE"; then
     sed -i -E \
         's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="'"$NEW_CMDLINE"'"|' \
-        "$GRUB_DEFAULT"
+        "$GRUB_DEFAULT_FILE"
 else
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="'"$NEW_CMDLINE"'"' >> "$GRUB_DEFAULT"
+    echo 'GRUB_CMDLINE_LINUX_DEFAULT="'"$NEW_CMDLINE"'"' >> "$GRUB_DEFAULT_FILE"
 fi
 
 # Verify GRUB theme is set
@@ -651,13 +693,64 @@ fi
 
 # ---------------- GRUB INSTALL ----------------
 
-log "Installing/reinstalling GRUB for UEFI..."
+log "Installing/reinstalling GRUB for UEFI with boot entry '$GRUB_BOOTLOADER_ID'..."
 
 grub-install \
     --target=x86_64-efi \
     --efi-directory=/efi \
-    --bootloader-id=GRUB \
+    --bootloader-id="$GRUB_BOOTLOADER_ID" \
     --recheck
+
+# ---------------- CLEAN UP OLD UEFI ENTRIES ----------------
+#
+# archInstall.sh runs grub-install with --bootloader-id=GRUB and
+# --removable, which leaves NVRAM entries named "GRUB" and (on many
+# firmwares) "UEFI OS" behind. Since we just created a fresh
+# "$GRUB_BOOTLOADER_ID" entry, we want to remove those stale ones --
+# but ONLY the ones that belong to this same ESP, so we don't delete
+# boot entries from other Linux installations that happen to use the
+# same generic names on a different disk/partition.
+#
+# We compare the device path of each candidate UEFI entry (as shown by
+# "efibootmgr -v") against our own ESP's PARTUUID. Only exact matches
+# are removed.
+
+if command -v efibootmgr >/dev/null 2>&1; then
+    log "Scanning for stale UEFI boot entries on this ESP (GRUB / UEFI OS)..."
+
+    # PARTUUID of our own ESP -- this is what efibootmgr embeds in the
+    # device path of every entry that lives on this partition.
+    ESP_PARTUUID="$(findmnt -n -o PARTUUID /efi 2>/dev/null || true)"
+    if [[ -z "$ESP_PARTUUID" ]]; then
+        warn "Could not determine PARTUUID of /efi -- skipping stale entry cleanup."
+    else
+        info "Our ESP PARTUUID: $ESP_PARTUUID"
+
+        # efibootmgr -v lines look like:
+        #   Boot0001* GRUB    HD(1,GPT,<PARTUUID>,0x800,0x100000)/\EFI\GRUB\grubx64.efi
+        #   Boot0002* UEFI OS HD(1,GPT,<PARTUUID>,0x800,0x100000)/\EFI\BOOT\BOOTX64.EFI
+        # We only match entries whose name is exactly GRUB or UEFI OS AND
+        # whose device path contains our ESP's PARTUUID.
+        while IFS= read -r line; do
+            entry_num="$(printf '%s' "$line" | awk '{print $1}' | sed -E 's/^Boot//; s/\*$//')"
+            entry_name="$(printf '%s' "$line" | sed -E 's/^Boot[0-9A-Fa-f]+\*?[[:space:]]+//; s/[[:space:]]+HD\(.*$//')"
+
+            # Only consider entries whose name is exactly "GRUB" or "UEFI OS"
+            [[ "$entry_name" == "GRUB" || "$entry_name" == "UEFI OS" ]] || continue
+
+            # Only remove if the device path references our own ESP
+            printf '%s' "$line" | grep -q "$ESP_PARTUUID" || continue
+
+            if efibootmgr -b "$entry_num" -B >/dev/null 2>&1; then
+                info "Removed stale UEFI entry Boot$entry_num ($entry_name) on this ESP"
+            else
+                warn "Failed to remove UEFI entry Boot$entry_num ($entry_name)"
+            fi
+        done < <(efibootmgr -v | grep -E '^Boot[0-9A-Fa-f]{4}')
+    fi
+else
+    warn "efibootmgr not found -- stale UEFI entries (if any) were not removed."
+fi
 
 # ---------------- GRUB-BTRFS ----------------
 
@@ -675,11 +768,65 @@ log "Rebuilding initramfs..."
 
 mkinitcpio -P
 
+# ---------------- WINDOWS ESP AUTO-MOUNT (for os-prober) ----------------
+#
+# os-prober can detect Windows only if it can actually read the Windows
+# ESP (the FAT32 partition containing EFI/Microsoft/Boot/bootmgfw.efi).
+# On Arch, os-prober calls grub-mount (from the grub package), which in
+# turn relies on fuse3 and ntfs-3g. Even with those installed, os-prober
+# is much more reliable when the Windows ESP is mounted somewhere at the
+# time grub-mkconfig runs. Here we scan all FAT32 partitions, find the
+# one containing Windows Boot Manager, and mount it read-only at
+# /mnt/win-esp. It gets unmounted again right after grub-mkconfig.
+
+WIN_ESP=""
+WIN_ESP_MOUNT="/mnt/win-esp"
+
+if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
+    log "Searching for a Windows ESP (for os-prober detection)..."
+    mkdir -p "$WIN_ESP_MOUNT"
+
+    while read -r dev; do
+        [[ -b "$dev" ]] || continue
+
+        # Skip our own ESP (/efi) -- it has no Microsoft/ subdir anyway,
+        # but skipping avoids any chance of mounting it twice.
+        if findmnt -n -o SOURCE /efi 2>/dev/null | grep -q "/$(basename "$dev")\$"; then
+            continue
+        fi
+
+        if mount -o ro "$dev" "$WIN_ESP_MOUNT" 2>/dev/null; then
+            if [[ -f "$WIN_ESP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]]; then
+                WIN_ESP="$dev"
+                info "Found Windows ESP: $dev (temporarily mounted at $WIN_ESP_MOUNT)"
+                break
+            fi
+            umount "$WIN_ESP_MOUNT" 2>/dev/null || true
+        fi
+    done < <(lsblk -rno NAME,FSTYPE | awk '$2=="vfat"{print "/dev/"$1}')
+
+    if [[ -z "$WIN_ESP" ]]; then
+        info "No Windows ESP found. (Windows may not be installed, or it's already visible to grub-mkconfig.)"
+    fi
+fi
+
 # ---------------- GRUB CONFIG ----------------
 
 log "Generating GRUB configuration..."
 
 grub-mkconfig -o /boot/grub/grub.cfg
+
+# ---------------- WINDOWS ESP CLEANUP ----------------
+#
+# Unmount the temporary Windows ESP mount, if we made one. Leaving it
+# mounted across reboots can cause the "Windows is hibernated" or
+# "cannot mount" errors on the Windows side, so we always clean up.
+
+if [[ -n "$WIN_ESP" ]]; then
+    log "Unmounting temporary Windows ESP mount ($WIN_ESP_MOUNT)..."
+    umount "$WIN_ESP_MOUNT" 2>/dev/null || true
+    rmdir "$WIN_ESP_MOUNT" 2>/dev/null || true
+fi
 
 # ---------------- INITIAL SNAPSHOT ----------------
 
@@ -745,12 +892,22 @@ echo "--- GRUB command line ---"
 grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
 
 echo
+echo "--- GRUB saved default ---"
+grep -E '^(GRUB_DEFAULT|GRUB_SAVEDEFAULT|GRUB_DISABLE_OS_PROBER)=' /etc/default/grub || true
+
+echo
 echo "--- GRUB theme ---"
 grep '^GRUB_THEME=' /etc/default/grub || true
 if [[ -n "$GRUB_THEME_NAME" && -f "/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt" ]]; then
     echo "GRUB theme installed at: /boot/grub/themes/${GRUB_THEME_NAME}"
 else
     echo "GRUB theme not installed."
+fi
+
+echo
+echo "--- UEFI boot entries ---"
+if command -v efibootmgr >/dev/null 2>&1; then
+    efibootmgr | grep -E '^Boot[0-9A-Fa-f]{4}' || true
 fi
 
 echo
