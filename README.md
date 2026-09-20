@@ -154,14 +154,20 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    password) instead of just refusing
 2. Picks the target user automatically if there's exactly one regular
    (UID ≥ 1000) account on the system; otherwise asks which one
-3. Asks for a desktop environment: GNOME, KDE Plasma, COSMIC, Budgie,
-   or none/cancel — and, if one is chosen, full or minimal package set.
-   GNOME and KDE use curated Wayland-focused package sets (not the full
-   `gnome`/`plasma` meta-groups); COSMIC uses the official `cosmic`
-   package group (full) or a curated minimal component set; Budgie uses
-   the official `budgie` package group (full, includes `budgie-extras`)
-   or a curated minimal component set — all four share a common set of
-   portal/Qt/polkit packages needed for Wayland apps to work correctly
+3. Asks for a desktop environment: GNOME, KDE Plasma, COSMIC, Budgie
+   (all Wayland), XFCE, Cinnamon (both X11 — their Wayland sessions are
+   still experimental/unstable upstream, so X11 is the stable choice
+   for both), or none/cancel — and, if one is chosen, full or minimal
+   package set. GNOME and KDE use curated Wayland-focused package sets
+   (not the full `gnome`/`plasma` meta-groups); COSMIC uses the
+   official `cosmic` package group (full) or a curated minimal
+   component set; Budgie uses the official `budgie` package group
+   (full, includes `budgie-extras`) or a curated minimal component set;
+   XFCE uses the official `xfce4` group (+ `xfce4-goodies` for full);
+   Cinnamon uses the single `cinnamon` package (+ `cinnamon-translations`,
+   `nemo-fileroller`, `blueberry` for full) — the four Wayland DEs share
+   a common set of portal/Qt/polkit packages needed for Wayland apps,
+   the two X11 DEs share an equivalent set without the Wayland-only bits
 4. Shows a summary (user, DE, package list) and asks for confirmation
 5. Installs the packages, enables the matching display manager/greeter
    (`gdm.service` / `sddm.service` / `cosmic-greeter.service` /
@@ -177,12 +183,13 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    Center) to actually install anything. COSMIC itself has no config
    file to generate — everything (keybinds, panel, wallpaper, etc.) is
    configured through its own Settings app after login
-8. For Budgie specifically: Budgie ships no file manager or terminal of
-   its own, so `nautilus` and `gnome-terminal` are added alongside it;
-   it also has no official display manager of its own, so LightDM +
-   `lightdm-gtk-greeter` are installed and set as the greeter in
+8. For Budgie, XFCE, and Cinnamon specifically: none of the three ships
+   its own display manager, so LightDM + `lightdm-gtk-greeter` are
+   installed for all three and explicitly set as the greeter in
    `/etc/lightdm/lightdm.conf` (LightDM otherwise often comes up with no
-   greeter session configured at all)
+   greeter session configured at all). Budgie and Cinnamon also ship no
+   file manager or terminal of their own, so `nautilus`/`nemo`'s bundled
+   equivalents and `gnome-terminal` are added alongside them as needed
 
 You can re-run this later to install a different desktop environment or
 change from full to minimal (or vice versa) — it doesn't remove
@@ -361,6 +368,11 @@ can run in either order.
   components for minimal). It has no dotfile-based config — everything
   is configured through its own Settings app after login, so there's
   nothing for the script to generate or for you to hand-edit.
+- XFCE and Cinnamon are installed as X11 sessions, not Wayland, even
+  though every other DE option here is Wayland — both desktops' Wayland
+  support is still experimental upstream (known issues include black
+  screens on login with some GPU/driver combinations), so X11 is the
+  stable, working choice for these two specifically.
 - `arch-manager.sh` is a convenience wrapper, not a replacement for
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
