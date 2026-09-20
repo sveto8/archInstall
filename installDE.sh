@@ -289,10 +289,10 @@ pacman -S --needed --noconfirm "${DE_PACKAGES[@]}"
 log "Enabling $DM_SERVICE..."
 systemctl enable "$DM_SERVICE"
 
-# ---------------- GNOME: DARK THEME BY DEFAULT ----------------
+# ---------------- GNOME: DARK THEME + YELLOW ACCENT ----------------
 
 if [[ "$DE_CHOICE" == "1" ]]; then
-    log "Setting GNOME to dark theme by default for $TARGET_USER..."
+    log "Setting GNOME dark theme + yellow accent for $TARGET_USER..."
 
     if command -v dbus-run-session >/dev/null 2>&1; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
@@ -301,10 +301,16 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' \
             || warn "Could not set GNOME gtk-theme to Adwaita-dark (older GTK3 apps)."
-        info "GNOME dark theme set (applies on first login)."
+        # Accent color is a GNOME 47+ feature. On older versions the key
+        # doesn't exist and gsettings will error out -- that's fine, we
+        # just warn and continue.
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gnome.desktop.interface accent-color 'yellow' \
+            || warn "Could not set GNOME accent-color to yellow (requires GNOME 47+)."
+        info "GNOME dark theme + yellow accent set (applies on first login)."
     else
-        warn "dbus-run-session not found (package: dbus) -- skipping GNOME dark theme."
-        info "Set it manually after login: Settings -> Appearance -> Dark."
+        warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
+        info "Set it manually after login: Settings -> Appearance -> Dark + Yellow."
     fi
 fi
 
