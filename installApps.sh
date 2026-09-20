@@ -85,6 +85,7 @@ WORK_AUR=(
     postman-bin
     f5vpn-ng                            # F5 VPN client
     ferdium-bin                         # Ferdium messaging client    
+    snx-rs                              # VPN 
 )
 
 # ---------------- OPTIONAL PACKAGE PROMPTS ----------------
@@ -99,10 +100,10 @@ if [[ "$INSTALL_COOLERCONTROLL" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(coolercontrol-bin)
 fi
 
-read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
-if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
-    AUR_PACKAGES+=(snx-rs)
-fi
+#read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
+#if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
+#    AUR_PACKAGES+=(snx-rs)
+#fi
 
 echo
 read -r -p "Install WPS Office (AUR)? [y/N] " INSTALL_WPS
@@ -114,6 +115,12 @@ echo
 read -r -p "Install OnlyOffice (AUR)? [y/N] " INSTALL_ONLYOFFICE
 if [[ "$INSTALL_ONLYOFFICE" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(onlyoffice-bin)
+fi
+
+echo
+read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
+if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
+    AUR_PACKAGES+=(libreoffice-still)
 fi
 
 # Dynamically build the list of work packages for the prompt
