@@ -113,13 +113,9 @@ case "$DE_CHOICE" in
         DE_NAME="GNOME ($INSTALL_MODE) [Wayland]"
         if [[ "$INSTALL_MODE" == "full" ]]; then
             DE_PACKAGES=(
-                gnome-shell
-                gnome-session
-                gnome-control-center
-                gnome-tweaks
-                nautilus
-                gnome-terminal
-                gdm
+                gnome                   # official package group -- full GNOME desktop (shell, session, gdm, nautilus, console, software, all core apps)
+                gnome-extra             # official package group -- additional GNOME apps (evolution, boxes, builder, games, ...)
+                gnome-tweaks            # not part of either group but required for tweaking the desktop
                 "${WAYLAND_COMMON[@]}"
             )
         else
