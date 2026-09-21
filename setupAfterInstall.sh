@@ -84,6 +84,11 @@ PLYMOUTH_THEMES=(
 # Arch entry -- but ONLY entries that live on this same ESP, so boot
 # entries from other Linux installations on other disks are untouched.
 GRUB_BOOTLOADER_ID="Arch Linux"
+
+# Path to the GRUB defaults file. It's edited in place by set_grub_option()
+# throughout the script -- defined here so that every section (including
+# the GRUB theme install step, which runs before the GRUB config section)
+# can safely reference it.
 GRUB_DEFAULT_FILE="/etc/default/grub"
 
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
@@ -633,7 +638,6 @@ EOF
 
 log "Configuring GRUB kernel parameters..."
 
-GRUB_DEFAULT_FILE="/etc/default/grub"
 cp -a "$GRUB_DEFAULT_FILE" "$BACKUP_DIR/grub.before"
 
 # Ensure a visible GRUB menu.
