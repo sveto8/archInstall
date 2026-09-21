@@ -113,6 +113,39 @@ cleanup() {
 trap cleanup EXIT
 trap 'die "Failed at line $LINENO. Configuration backups (if any were made yet) are in $BACKUP_DIR."' ERR
 
+# ---------------- GRUB OPTION HELPER ----------------
+#
+# Replace a GRUB option in-place in /etc/default/grub.
+#
+# The default /etc/default/grub shipped by the grub package contains
+# commented-out examples such as:
+#
+#     #GRUB_SAVEDEFAULT=true
+#     #GRUB_DISABLE_OS_PROBER=false
+#     #GRUB_THEME="/path/to/gfxtheme"
+#
+# A naive `grep '^GRUB_X='` check fails to see those commented lines and
+# appends a new uncommented entry at the bottom of the file, resulting in
+# both the commented example AND the new value being present -- which is
+# confusing and can override what the user expects.
+#
+# This helper matches both "KEY=" and "#KEY=" (with optional leading
+# whitespace), uncomments and replaces in place. It only appends to the
+# end of the file when the option truly doesn't exist anywhere.
+set_grub_option() {
+    local key="$1"
+    local value="$2"
+    local file="$3"
+    # Escape '&' so sed doesn't interpret it as "the matched text"
+    local escaped_value="${value//&/\\&}"
+
+    if grep -qE "^#?[[:space:]]*${key}=" "$file"; then
+        sed -i -E "s|^#?[[:space:]]*${key}=.*|${key}=${escaped_value}|" "$file"
+    else
+        printf '%s=%s\n' "$key" "$value" >> "$file"
+    fi
+}
+
 # ---------------- BASIC CHECKS ----------------
 
 if [[ $EUID -ne 0 ]]; then
@@ -387,8 +420,16 @@ if [[ -n "$GRUB_THEME_NAME" ]]; then
             info "Theme files verified: /boot/grub/themes/${GRUB_THEME_NAME}/theme.txt"
 
             cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
-            sed -i '/^GRUB_THEME=/d;/^GRUB_BACKGROUND=/d' /etc/default/grub
-            echo "GRUB_THEME=\"/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt\"" >> /etc/default/grub
+
+            # Remove any uncommented GRUB_BACKGROUND line so it doesn't
+            # override the theme's own background. Commented examples are
+            # left in place.
+            sed -i -E '/^[[:space:]]*GRUB_BACKGROUND=/d' /etc/default/grub
+
+            # Replace (or uncomment) the GRUB_THEME line in place -- this
+            # avoids appending a duplicate at the bottom of the file when
+            # the commented example "#GRUB_THEME=..." is already present.
+            set_grub_option "GRUB_THEME" "\"/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt\"" "$GRUB_DEFAULT_FILE"
 
             log "GRUB theme installed and set: $GRUB_THEME_NAME"
         else
@@ -595,17 +636,10 @@ GRUB_DEFAULT_FILE="/etc/default/grub"
 cp -a "$GRUB_DEFAULT_FILE" "$BACKUP_DIR/grub.before"
 
 # Ensure a visible GRUB menu.
-if grep -q '^GRUB_TIMEOUT=' "$GRUB_DEFAULT_FILE"; then
-    sed -i -E 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' "$GRUB_DEFAULT_FILE"
-else
-    echo 'GRUB_TIMEOUT=5' >> "$GRUB_DEFAULT_FILE"
-fi
-
-if grep -q '^GRUB_TIMEOUT_STYLE=' "$GRUB_DEFAULT_FILE"; then
-    sed -i -E 's/^GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=menu/' "$GRUB_DEFAULT_FILE"
-else
-    echo 'GRUB_TIMEOUT_STYLE=menu' >> "$GRUB_DEFAULT_FILE"
-fi
+# Uses set_grub_option so commented examples in the stock file are
+# updated in place rather than duplicated at the bottom.
+set_grub_option "GRUB_TIMEOUT"       "5"    "$GRUB_DEFAULT_FILE"
+set_grub_option "GRUB_TIMEOUT_STYLE" "menu" "$GRUB_DEFAULT_FILE"
 
 # Remember the last booted menu entry and use it as the default on the
 # next boot. "saved" tells GRUB to read the saved entry from the
@@ -613,17 +647,8 @@ fi
 # entry back to that block each time.
 log "Enabling GRUB saved-entry default (boot last used OS automatically)..."
 
-if grep -q '^GRUB_DEFAULT=' "$GRUB_DEFAULT_FILE"; then
-    sed -i -E 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT=saved/' "$GRUB_DEFAULT_FILE"
-else
-    echo 'GRUB_DEFAULT=saved' >> "$GRUB_DEFAULT_FILE"
-fi
-
-if grep -q '^GRUB_SAVEDEFAULT=' "$GRUB_DEFAULT_FILE"; then
-    sed -i -E 's/^GRUB_SAVEDEFAULT=.*/GRUB_SAVEDEFAULT=true/' "$GRUB_DEFAULT_FILE"
-else
-    echo 'GRUB_SAVEDEFAULT=true' >> "$GRUB_DEFAULT_FILE"
-fi
+set_grub_option "GRUB_DEFAULT"     "saved" "$GRUB_DEFAULT_FILE"
+set_grub_option "GRUB_SAVEDEFAULT" "true"  "$GRUB_DEFAULT_FILE"
 
 # OS prober: install + explicitly enable in /etc/default/grub. On Arch,
 # grub-mkconfig only scans for other OSes when GRUB_DISABLE_OS_PROBER is
@@ -631,11 +656,7 @@ fi
 # is to skip the scan for security reasons).
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     log "Enabling os-prober so GRUB detects other operating systems..."
-    if grep -q '^GRUB_DISABLE_OS_PROBER=' "$GRUB_DEFAULT_FILE"; then
-        sed -i -E 's/^GRUB_DISABLE_OS_PROBER=.*/GRUB_DISABLE_OS_PROBER=false/' "$GRUB_DEFAULT_FILE"
-    else
-        echo 'GRUB_DISABLE_OS_PROBER=false' >> "$GRUB_DEFAULT_FILE"
-    fi
+    set_grub_option "GRUB_DISABLE_OS_PROBER" "false" "$GRUB_DEFAULT_FILE"
 fi
 
 # Build the command line for systemd's sd-encrypt hook.
@@ -673,17 +694,12 @@ CURRENT_CMDLINE="$(
 # remains available if needed.
 NEW_CMDLINE="$CURRENT_CMDLINE rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0"
 
-if grep -q '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT_FILE"; then
-    sed -i -E \
-        's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="'"$NEW_CMDLINE"'"|' \
-        "$GRUB_DEFAULT_FILE"
-else
-    echo 'GRUB_CMDLINE_LINUX_DEFAULT="'"$NEW_CMDLINE"'"' >> "$GRUB_DEFAULT_FILE"
-fi
+# Replace the existing GRUB_CMDLINE_LINUX_DEFAULT line in place.
+set_grub_option "GRUB_CMDLINE_LINUX_DEFAULT" "\"$NEW_CMDLINE\"" "$GRUB_DEFAULT_FILE"
 
 # Verify GRUB theme is set
-if grep -q '^GRUB_THEME=' /etc/default/grub; then
-    THEME_PATH=$(grep '^GRUB_THEME=' /etc/default/grub | cut -d= -f2 | tr -d '"')
+if grep -qE '^[[:space:]]*GRUB_THEME=' /etc/default/grub; then
+    THEME_PATH=$(grep -E '^[[:space:]]*GRUB_THEME=' /etc/default/grub | cut -d= -f2 | tr -d '"')
     if [[ -f "$THEME_PATH" ]]; then
         log "GRUB theme configured: $THEME_PATH"
     else
@@ -889,15 +905,15 @@ fi
 
 echo
 echo "--- GRUB command line ---"
-grep '^GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
+grep -E '^[[:space:]]*GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
 
 echo
 echo "--- GRUB saved default ---"
-grep -E '^(GRUB_DEFAULT|GRUB_SAVEDEFAULT|GRUB_DISABLE_OS_PROBER)=' /etc/default/grub || true
+grep -E '^[[:space:]]*(GRUB_DEFAULT|GRUB_SAVEDEFAULT|GRUB_DISABLE_OS_PROBER)=' /etc/default/grub || true
 
 echo
 echo "--- GRUB theme ---"
-grep '^GRUB_THEME=' /etc/default/grub || true
+grep -E '^[[:space:]]*GRUB_THEME=' /etc/default/grub || true
 if [[ -n "$GRUB_THEME_NAME" && -f "/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt" ]]; then
     echo "GRUB theme installed at: /boot/grub/themes/${GRUB_THEME_NAME}"
 else
