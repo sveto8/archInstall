@@ -63,6 +63,7 @@ REPO_PACKAGES=(
     hplip                               # HP printer support
     cups                                # printing system
     system-config-printer               # GUI printer management
+    eza
 )
 
 AUR_PACKAGES=(
