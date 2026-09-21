@@ -315,8 +315,8 @@ fi
 printf '%s\n' "============================================================"
 printf '\n'
 
-read -r -p "Continue? [y/N] " ANSWER
-[[ "$ANSWER" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
+read -r -p "Continue? [Y/n] " ANSWER
+[[ "$ANSWER" =~ ^[Nn]$ ]] && { echo "Cancelled."; exit 0; }
 
 # ---------------- BACKUPS ----------------
 
