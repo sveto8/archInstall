@@ -133,6 +133,7 @@ case "$DE_CHOICE" in
                 gnome-sound-recorder    # simple sound recorder
                 manuals                 # developer documentation browser
                 sysprof                 # performance profiler
+                power-profiles-daemon   # power profile settings in gnome-settings
                 
                 gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
