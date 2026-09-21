@@ -304,10 +304,10 @@ pacman -S --needed --noconfirm "${DE_PACKAGES[@]}"
 log "Enabling $DM_SERVICE..."
 systemctl enable "$DM_SERVICE"
 
-# ---------------- GNOME: DARK THEME + YELLOW ACCENT ----------------
+# ---------------- GNOME: DARK THEME + SLATE ACCENT ----------------
 
 if [[ "$DE_CHOICE" == "1" ]]; then
-    log "Setting GNOME dark theme + yellow accent for $TARGET_USER..."
+    log "Setting GNOME dark theme + slate accent for $TARGET_USER..."
 
     if command -v dbus-run-session >/dev/null 2>&1; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
@@ -320,12 +320,12 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         # doesn't exist and gsettings will error out -- that's fine, we
         # just warn and continue.
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface accent-color 'yellow' \
-            || warn "Could not set GNOME accent-color to yellow (requires GNOME 47+)."
-        info "GNOME dark theme + yellow accent set (applies on first login)."
+            gsettings set org.gnome.desktop.interface accent-color 'slate' \
+            || warn "Could not set GNOME accent-color to slate (requires GNOME 47+)."
+        info "GNOME dark theme + slate accent set (applies on first login)."
     else
         warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
-        info "Set it manually after login: Settings -> Appearance -> Dark + Yellow."
+        info "Set it manually after login: Settings -> Appearance -> Dark + Slate."
     fi
 fi
 
