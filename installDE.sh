@@ -113,19 +113,30 @@ case "$DE_CHOICE" in
         DE_NAME="GNOME ($INSTALL_MODE) [Wayland]"
         if [[ "$INSTALL_MODE" == "full" ]]; then
             # Full GNOME = the two official Arch package groups plus gnome-tweaks.
-            # "gnome" pulls in the whole core desktop and every stock GNOME app
-            # (shell, session, gdm, nautilus, console, text-editor, software,
-            # calculator, calendar, maps, weather, music, videos, photos, disks,
-            # system-monitor, evince/loupe, epiphany, cheese, baobab, etc.).
-            # "gnome-extra" adds the additional upstream GNOME apps (evolution,
-            # gnome-boxes, gnome-builder, seahorse, dconf-editor, gnome-games,
-            # rhythmbox, simple-scan, ...).
+            # DE_PACKAGES=(
+            #     gnome                   # official package group -- full core desktop + stock GNOME apps
+            #     gnome-extra             # official package group -- additional GNOME applications
+            #     gnome-tweaks            # not part of either group but essential for tweaking GNOME
+            #     "${WAYLAND_COMMON[@]}"
+            # )
             DE_PACKAGES=(
                 gnome                   # official package group -- full core desktop + stock GNOME apps
-                gnome-extra             # official package group -- additional GNOME applications
+                # --- replacement for gnome-extra (excluding games) ---
+                chatty                  # SMS and Matrix client
+                d-spy                   # D-Bus debugger
+                dconf-editor            # GSettings editor
+                endeavour               # personal task manager (formerly GNOME Todo)
+                ghex                    # hex editor
+                gnome-boxes             # virtual machine manager
+                gnome-builder           # IDE for GNOME apps
+                gnome-calls             # phone and call manager
+                gnome-sound-recorder    # simple sound recorder
+                manuals                 # developer documentation browser
+                sysprof                 # performance profiler
+                
                 gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
-            )
+            )     
         else
             DE_PACKAGES=(
                 gnome-shell
