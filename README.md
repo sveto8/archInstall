@@ -129,7 +129,14 @@ equivalent manual install) already produced the layout above.
    (same non-fatal-if-unavailable behavior as the GRUB theme step)
 5. Shows a summary and asks for confirmation
 6. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
-   `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`
+   `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`.
+   From here on, every `/etc/default/grub` option the script touches
+   (`GRUB_TIMEOUT`, `GRUB_DEFAULT`, `GRUB_SAVEDEFAULT`,
+   `GRUB_DISABLE_OS_PROBER`, `GRUB_THEME`, `GRUB_CMDLINE_LINUX_DEFAULT`)
+   goes through a helper that finds the existing line — commented out or
+   not — and edits it in place, rather than appending a new value to the
+   bottom of the file (which would leave a stale duplicate, commented or
+   otherwise, above the one GRUB actually reads)
 7. Installs: `btrfs-progs`, `cryptsetup`, `snapper`, `snap-pac`, `grub`,
    `grub-btrfs`, `inotify-tools`, `btrfs-assistant`, `plymouth`, `git`,
    microcode package
@@ -179,25 +186,31 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    (all Wayland), XFCE, Cinnamon (both X11 — their Wayland sessions are
    still experimental/unstable upstream, so X11 is the stable choice
    for both), or none/cancel — and, if one is chosen, full or minimal
-   package set. GNOME and KDE use curated Wayland-focused package sets
-   (not the full `gnome`/`plasma` meta-groups); COSMIC uses the
-   official `cosmic` package group (full) or a curated minimal
-   component set; Budgie uses the official `budgie` package group
-   (full, includes `budgie-extras`) or a curated minimal component set;
-   XFCE uses the official `xfce4` group (+ `xfce4-goodies` for full);
-   Cinnamon uses the single `cinnamon` package (+ `cinnamon-translations`,
-   `nemo-fileroller`, `blueberry` for full) — the four Wayland DEs share
-   a common set of portal/Qt/polkit packages needed for Wayland apps,
-   the two X11 DEs share an equivalent set without the Wayland-only bits
+   package set. GNOME full installs the official `gnome` group plus a
+   curated set of `gnome-extra` apps (Boxes, Builder, Chatty, d-spy,
+   dconf Editor, Ghex, Calls, Sound Recorder, Endeavour, Manuals,
+   Sysprof, Tweaks) with the games left out; GNOME minimal is a small
+   hand-picked set (shell, Files, a terminal, Settings); KDE uses a
+   curated Wayland-focused package set (not the full `plasma`
+   meta-group) for both modes; COSMIC uses the official `cosmic`
+   package group (full) or a curated minimal component set; Budgie uses
+   the official `budgie` package group (full, includes `budgie-extras`)
+   or a curated minimal component set; XFCE uses the official `xfce4`
+   group (+ `xfce4-goodies` for full); Cinnamon uses the single
+   `cinnamon` package (+ `cinnamon-translations`, `nemo-fileroller`,
+   `blueberry` for full) — the four Wayland DEs share a common set of
+   portal/Qt/polkit packages needed for Wayland apps, the two X11 DEs
+   share an equivalent set without the Wayland-only bits
 4. Shows a summary (user, DE, package list) and asks for confirmation
+   (default is yes — press Enter to proceed, or type `n` to cancel)
 5. Installs the packages, enables the matching display manager/greeter
    (`gdm.service` / `sddm.service` / `cosmic-greeter.service` /
    `lightdm.service`)
 6. For GNOME specifically: sets the dark color scheme
    (`org.gnome.desktop.interface color-scheme=prefer-dark` +
-   `gtk-theme=Adwaita-dark` for older GTK3 apps) as the default for the
-   target user, via a temporary `dbus-run-session` since there's no
-   live GNOME session yet to talk to
+   `gtk-theme=Adwaita-dark` for older GTK3 apps, plus `accent-color=slate`
+   on GNOME 47+) as the default for the target user, via a temporary
+   `dbus-run-session` since there's no live GNOME session yet to talk to
 7. For COSMIC specifically: enables `power-profiles-daemon.service`,
    needed for the Settings → Power and Battery panel to work; the full
    install also adds `packagekit`, needed for `cosmic-store` (App
@@ -233,29 +246,32 @@ GRUB at all.
      (HP/general printer support)
    - **AUR:** `google-chrome`, `sublime-text-4`, `peazip`,
      `python-pyqt5` (needed for `hp-setup`'s GUI)
-4. Asks `[y/N]` for three standalone opt-in extras: `snx-rs` (Check
-   Point VPN client, AUR, slow Rust build), `wps-office` +
-   `ttf-wps-fonts`, and `onlyoffice-bin`
-5. Asks a single `[y/N]` for a separate "work programs" bundle (prints
+4. Asks `[Y/n]` (installs unless you say no) whether to add
+   `coolercontrol-bin` (AUR) — fan/pump/RGB control, relevant mainly on
+   desktops with controllable cooling hardware
+5. Asks `[y/N]` separately for `wps-office` + `ttf-wps-fonts`,
+   `onlyoffice-bin`, and `libreoffice-still` — pick whichever office
+   suite(s) you actually want, none installed by default
+6. Asks a single `[y/N]` for a separate "work programs" bundle (prints
    the exact package list in the prompt itself so you know what you're
    agreeing to): `jdk11-openjdk`, `meld`, `code` (open-source VS Code
    build), `remmina` from the repos, plus
    `intellij-idea-community-edition`, `postman-bin`, `f5vpn-ng` (F5
    BIG-IP APM VPN client — can occasionally need a library fix after a
-   libxml2/webkit2gtk update), `ferdium-bin` from AUR — useful for
-   splitting a personal machine from a work machine without editing the
-   script
-6. Prints the current package list, then asks for any extra packages
+   libxml2/webkit2gtk update), `ferdium-bin`, `snx-rs` (Check Point VPN
+   client, slow Rust build) from AUR — useful for splitting a personal
+   machine from a work machine without editing the script
+7. Prints the current package list, then asks for any extra packages
    (space-separated) to add for this run
-7. Every package — list-defined or typed in at step 6 — is checked with
+8. Every package — list-defined or typed in at step 7 — is checked with
    `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
    skipped with a warning instead of aborting the whole run. Genuine
    install failures (found, but errored) are also collected and
    reported, not fatal to the rest of the run
-8. Sets OpenJDK 11 as the default JVM (`archlinux-java set`) if it was
+9. Sets OpenJDK 11 as the default JVM (`archlinux-java set`) if it was
    installed (part of the work bundle)
-9. Enables the CUPS printing service
-10. Final summary: what installed, what was skipped/failed, and manual
+10. Enables the CUPS printing service
+11. Final summary: what installed, what was skipped/failed, and manual
     next steps (`hp-setup` for the actual printer, and a note that
     `f5vpn-ng` may need a library fix if it fails to build/launch after
     a system update)
