@@ -85,20 +85,17 @@ if lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -q .; then
     warn "$DEVICE (or a partition on it) has active mounts, possibly left over from a previous run:"
     lsblk "$DEVICE"
     echo
-    read -r -p "Unmount everything under $DEVICE and continue? [y/N] " UNMOUNT_ANSWER
-    if [[ "$UNMOUNT_ANSWER" =~ ^[Yy]$ ]]; then
-        log "Unmounting leftover mounts..."
-        umount -R /mnt 2>/dev/null || true
-        cryptsetup close cryptroot 2>/dev/null || true
-        sleep 1
-        STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -v '^$' || true)"
-        if [[ -n "$STILL_MOUNTED" ]]; then
-            die "Could not fully unmount $DEVICE. Unmount manually (umount -R /mnt; cryptsetup close cryptroot) and re-run."
-        fi
-        info "Unmounted and closed cryptroot successfully."
-    else
-        die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
+    read -r -p "Unmount everything under $DEVICE and continue? [Y/n] " UNMOUNT_ANSWER
+    [[ "$UNMOUNT_ANSWER" =~ ^[Nn]$ ]] && die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
+    log "Unmounting leftover mounts..."
+    umount -R /mnt 2>/dev/null || true
+    cryptsetup close cryptroot 2>/dev/null || true
+    sleep 1
+    STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -v '^$' || true)"
+    if [[ -n "$STILL_MOUNTED" ]]; then
+        die "Could not fully unmount $DEVICE. Unmount manually (umount -R /mnt; cryptsetup close cryptroot) and re-run."
     fi
+    info "Unmounted and closed cryptroot successfully."
 fi
 
 # partition suffix: /dev/nvme0n1 -> nvme0n1p1, /dev/sda -> sda1
