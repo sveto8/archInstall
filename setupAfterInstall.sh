@@ -84,6 +84,7 @@ PLYMOUTH_THEMES=(
 # Arch entry -- but ONLY entries that live on this same ESP, so boot
 # entries from other Linux installations on other disks are untouched.
 GRUB_BOOTLOADER_ID="Arch Linux"
+GRUB_DEFAULT_FILE="/etc/default/grub"
 
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
 # / poly-dark / none), not hardcoded here.
