@@ -292,8 +292,8 @@ echo "Target user:  $TARGET_USER ($TARGET_HOME)"
 echo "Desktop:      $DE_NAME"
 echo "Packages:     ${DE_PACKAGES[*]}"
 echo "============================================================"
-read -r -p "Continue? [y/N] " CONFIRM
-[[ "$CONFIRM" =~ ^[Yy]$ ]] || { echo "Cancelled."; exit 0; }
+read -r -p "Continue? [Y/n] " CONFIRM
+[[ "$CONFIRM" =~ ^[Nn]$ ]] && { echo "Cancelled."; exit 0; }
 
 # ---------------- INSTALL ----------------
 
