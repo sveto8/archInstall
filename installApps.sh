@@ -95,10 +95,8 @@ echo "Optional packages:"
 echo
 
 echo
-read -r -p "Install CoolerControl (AUR)? [y/N] " INSTALL_COOLERCONTROLL
-if [[ "$INSTALL_COOLERCONTROLL" =~ ^[Yy]$ ]]; then
-    AUR_PACKAGES+=(coolercontrol-bin)
-fi
+read -r -p "Install CoolerControl (AUR)? [Y/n] " INSTALL_COOLERCONTROLL
+[[ "$INSTALL_COOLERCONTROLL" =~ ^[Nn]$ ]] || AUR_PACKAGES+=(coolercontrol-bin)
 
 #read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
 #if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
