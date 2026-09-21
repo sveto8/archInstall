@@ -69,6 +69,7 @@ AUR_PACKAGES=(
     google-chrome
     sublime-text-4
     peazip
+    nautilus-admin-gtk4                 # admin entry in right-click menu in nautilus - open as admin
     python-pyqt5                        # for hp-setup
 )
 
