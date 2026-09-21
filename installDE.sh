@@ -112,10 +112,18 @@ case "$DE_CHOICE" in
     1)
         DE_NAME="GNOME ($INSTALL_MODE) [Wayland]"
         if [[ "$INSTALL_MODE" == "full" ]]; then
+            # Full GNOME = the two official Arch package groups plus gnome-tweaks.
+            # "gnome" pulls in the whole core desktop and every stock GNOME app
+            # (shell, session, gdm, nautilus, console, text-editor, software,
+            # calculator, calendar, maps, weather, music, videos, photos, disks,
+            # system-monitor, evince/loupe, epiphany, cheese, baobab, etc.).
+            # "gnome-extra" adds the additional upstream GNOME apps (evolution,
+            # gnome-boxes, gnome-builder, seahorse, dconf-editor, gnome-games,
+            # rhythmbox, simple-scan, ...).
             DE_PACKAGES=(
-                gnome                   # official package group -- full GNOME desktop (shell, session, gdm, nautilus, console, software, all core apps)
-                gnome-extra             # official package group -- additional GNOME apps (evolution, boxes, builder, games, ...)
-                gnome-tweaks            # not part of either group but required for tweaking the desktop
+                gnome                   # official package group -- full core desktop + stock GNOME apps
+                gnome-extra             # official package group -- additional GNOME applications
+                gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
             )
         else
