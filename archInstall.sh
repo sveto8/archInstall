@@ -298,19 +298,31 @@ mount "$ESP" /mnt/efi
 
 log "Optimizing pacman mirrorlist with reflector..."
 
+REFLECTOR_AVAILABLE=1
 if ! command -v reflector >/dev/null 2>&1; then
-    pacman -S --needed --noconfirm reflector
+    pacman -S --needed --noconfirm reflector || REFLECTOR_AVAILABLE=0
 fi
 
-# Backup the original mirrorlist (optional but recommended)
-cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
+if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
+    # Backup the original mirrorlist (optional but recommended)
+    cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
 
-# Rank the 20 most recently synchronized HTTPS mirrors by download rate
-# and write the result back to /etc/pacman.d/mirrorlist.
-# Only mirrors that have synced within the last 12 hours are considered.
-reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist
-
-info "Mirrorlist updated with the fastest HTTPS mirrors."
+    # Rank the 20 most recently synchronized HTTPS mirrors by download rate
+    # and write the result back to /etc/pacman.d/mirrorlist. Only mirrors
+    # that have synced within the last 12 hours are considered.
+    #
+    # Non-fatal by design: the disk is already partitioned/formatted at
+    # this point, so a transient reflector/network hiccup shouldn't abort
+    # the whole install over what is just a speed optimization.
+    if reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist; then
+        info "Mirrorlist updated with the fastest HTTPS mirrors."
+    else
+        warn "reflector failed -- restoring the original mirrorlist and continuing with it."
+        cp /etc/pacman.d/mirrorlist.bak /etc/pacman.d/mirrorlist 2>/dev/null || true
+    fi
+else
+    warn "Could not install reflector -- continuing with the default mirrorlist."
+fi
 
 # ---------------- PACSTRAP ----------------
 
@@ -398,8 +410,8 @@ grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc
 locale-gen
 
 # Set system locale and keymap
-echo "LANG=en_US.UTF-8" > /etc/locale.conf
-echo "KEYMAP=us" > /etc/vconsole.conf
+echo "LANG=${LOCALE}" > /etc/locale.conf
+echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 
 # Export LANGUAGE to avoid "NO" in GDM and other display managers
 mkdir -p /etc/profile.d
@@ -425,7 +437,7 @@ HOOKS_EOF
 mkinitcpio -P
 
 # GRUB: add LUKS, locale, and keymap to kernel command line
-sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=us rd.locale.LANG=en_US.UTF-8\"/" /etc/default/grub
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
 # Install GRUB for UEFI
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
