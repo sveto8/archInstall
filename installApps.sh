@@ -70,7 +70,6 @@ AUR_PACKAGES=(
     google-chrome
     sublime-text-4
     peazip
-    nautilus-admin-gtk4                 # admin entry in right-click menu in nautilus - open as admin
     python-pyqt5                        # for hp-setup
 )
 
@@ -121,6 +120,22 @@ echo
 read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
 if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
     REPO_PACKAGES+=(libreoffice-still)
+fi
+
+# ---------------- GNOME-SPECIFIC: NAUTILUS ADMIN ----------------
+#
+# nautilus-admin-gtk4 is a Nautilus-specific AUR package that adds an
+# "Open as Administrator" entry to the right-click context menu. It is
+# only meaningful when GNOME (or at least Nautilus) is installed, so we
+# only offer it when gnome-shell is detected on the system.
+
+if pacman -Qq gnome-shell >/dev/null 2>&1; then
+    echo
+    info "GNOME detected -- offering Nautilus admin extension."
+    read -r -p "Install nautilus-admin-gtk4 (Open as Administrator in Nautilus)? [Y/n] " INSTALL_NAUTILUS_ADMIN
+    [[ "$INSTALL_NAUTILUS_ADMIN" =~ ^[Nn]$ ]] || AUR_PACKAGES+=(nautilus-admin-gtk4)
+else
+    info "GNOME not detected -- skipping Nautilus admin extension."
 fi
 
 # Dynamically build the list of work packages for the prompt
