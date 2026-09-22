@@ -249,7 +249,7 @@ if curl -fsSL -o "$ICON_ARCHIVE" "${ICONS_BASE_URL}/icons/Reversal-icon-theme-ma
 
         for color in yellow orange black grey; do
             info "==> Reversal: $color"
-            (cd "$REVERSAL_DIR" && ./install.sh -y "$color") \
+            (cd "$REVERSAL_DIR" && ./install.sh -t "$color") \
                 || warn "Reversal install.sh failed for color: $color"
         done
 
