@@ -9,10 +9,9 @@ set -o errtrace
 # itself with sudo). Run it any time after archInstall.sh -- before
 # or after setupAfterInstall.sh, doesn't matter which order.
 #
-# Installs GNOME, KDE Plasma, COSMIC, Budgie (Wayland), or XFCE, Cinnamon
-# (X11 -- Wayland on both is still experimental/unstable upstream) --
-# full or minimal package set -- and enables the matching display
-# manager/greeter.
+# Installs GNOME, KDE Plasma, or XFCE (X11 -- Wayland support on XFCE
+# is still experimental/unstable upstream) -- full or minimal package
+# set -- and enables the matching display manager/greeter.
 #
 # This script only installs packages and writes config files. It does
 # not touch partitioning, LUKS, Btrfs, Snapper, or GRUB.
@@ -69,21 +68,18 @@ echo
 echo "Desktop environment:"
 echo "  1) GNOME (Wayland)"
 echo "  2) KDE Plasma (Wayland)"
-echo "  3) COSMIC (Wayland)"
-echo "  4) Budgie (Wayland)"
-echo "  5) XFCE (X11)"
-echo "  6) Cinnamon (X11)"
-echo "  7) None / cancel"
+echo "  3) XFCE (X11)"
+echo "  4) None / cancel"
 read -r -p "Choice [1]: " DE_CHOICE
 DE_CHOICE="${DE_CHOICE:-1}"
 
-[[ "$DE_CHOICE" == "7" ]] && { echo "Nothing to do."; exit 0; }
+[[ "$DE_CHOICE" == "4" ]] && { echo "Nothing to do."; exit 0; }
 
 DE_PACKAGES=()
 DM_SERVICE=""
 INSTALL_MODE=""
 
-if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" || "$DE_CHOICE" == "4" || "$DE_CHOICE" == "5" || "$DE_CHOICE" == "6" ]]; then
+if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" ]]; then
     read -r -p "Full install or minimal? [F/m]: " INSTALL_MODE
     [[ "$INSTALL_MODE" =~ ^[Mm]$ ]] && INSTALL_MODE="minimal" || INSTALL_MODE="full"
 fi
@@ -98,8 +94,8 @@ WAYLAND_COMMON=(
     polkit-gnome
 )
 
-# Common X11 packages for XFCE/Cinnamon -- no qt-wayland/portal-wayland bits
-# needed since these run on Xorg, not a Wayland compositor.
+# Common X11 packages for XFCE -- no qt-wayland/portal-wayland bits
+# needed since it runs on Xorg, not a Wayland compositor.
 X11_COMMON=(
     xorg-server
     xdg-desktop-portal
@@ -179,67 +175,6 @@ case "$DE_CHOICE" in
         DM_SERVICE="sddm.service"
         ;;
     3)
-        DE_NAME="COSMIC ($INSTALL_MODE) [Wayland]"
-
-        if [[ "$INSTALL_MODE" == "full" ]]; then
-            DE_PACKAGES=(
-                cosmic                  # official package group -- full desktop + all components
-                packagekit              # needed for cosmic-store (App Center) to install packages
-                power-profiles-daemon   # needed for Settings -> Power and Battery to work
-                "${WAYLAND_COMMON[@]}"
-            )
-        else
-            DE_PACKAGES=(
-                cosmic-session
-                cosmic-greeter
-                cosmic-comp
-                cosmic-panel
-                cosmic-launcher
-                cosmic-applets
-                cosmic-bg
-                cosmic-files
-                cosmic-terminal
-                cosmic-settings
-                cosmic-settings-daemon
-                cosmic-notifications
-                cosmic-osd
-                xdg-desktop-portal-cosmic
-                power-profiles-daemon
-                "${WAYLAND_COMMON[@]}"
-            )
-        fi
-
-        DM_SERVICE="cosmic-greeter.service"
-        ;;
-    4)
-        DE_NAME="Budgie ($INSTALL_MODE) [Wayland]"
-
-        if [[ "$INSTALL_MODE" == "full" ]]; then
-            DE_PACKAGES=(
-                budgie                  # official package group -- all first-party components
-                budgie-extras           # extra applets (Wiki: can alter existing behavior, but useful)
-                lightdm
-                lightdm-gtk-greeter
-                nautilus                # Budgie ships no file manager by default
-                gnome-terminal          # Budgie ships no terminal by default
-                "${WAYLAND_COMMON[@]}"
-            )
-        else
-            DE_PACKAGES=(
-                budgie-desktop
-                budgie-desktop-services
-                budgie-control-center
-                lightdm
-                lightdm-gtk-greeter
-                nautilus
-                gnome-terminal
-                "${WAYLAND_COMMON[@]}"
-            )
-        fi
-
-        DM_SERVICE="lightdm.service"
-        ;;
-    5)
         DE_NAME="XFCE ($INSTALL_MODE) [X11]"
 
         if [[ "$INSTALL_MODE" == "full" ]]; then
@@ -253,32 +188,6 @@ case "$DE_CHOICE" in
         else
             DE_PACKAGES=(
                 xfce4
-                lightdm
-                lightdm-gtk-greeter
-                "${X11_COMMON[@]}"
-            )
-        fi
-
-        DM_SERVICE="lightdm.service"
-        ;;
-    6)
-        DE_NAME="Cinnamon ($INSTALL_MODE) [X11]"
-
-        if [[ "$INSTALL_MODE" == "full" ]]; then
-            DE_PACKAGES=(
-                cinnamon                # includes nemo (files), muffin (wm), cinnamon-session, etc.
-                cinnamon-translations
-                nemo-fileroller         # archive integration for the Nemo file manager
-                gnome-terminal          # Cinnamon ships no terminal of its own
-                blueberry               # Bluetooth settings
-                lightdm
-                lightdm-gtk-greeter
-                "${X11_COMMON[@]}"
-            )
-        else
-            DE_PACKAGES=(
-                cinnamon
-                gnome-terminal
                 lightdm
                 lightdm-gtk-greeter
                 "${X11_COMMON[@]}"
@@ -436,20 +345,9 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     fi
 fi
 
-# ---------------- COSMIC: POWER PROFILES ----------------
+# ---------------- LIGHTDM GREETER (XFCE) ----------------
 
 if [[ "$DE_CHOICE" == "3" ]]; then
-    if systemctl list-unit-files power-profiles-daemon.service >/dev/null 2>&1; then
-        log "Enabling power-profiles-daemon (needed for Settings -> Power and Battery)..."
-        systemctl enable power-profiles-daemon.service
-    else
-        warn "power-profiles-daemon.service not found -- Power and Battery settings may not work."
-    fi
-fi
-
-# ---------------- LIGHTDM GREETER (Budgie / XFCE / Cinnamon) ----------------
-
-if [[ "$DE_CHOICE" == "4" || "$DE_CHOICE" == "5" || "$DE_CHOICE" == "6" ]]; then
     if [[ -f /etc/lightdm/lightdm.conf ]]; then
         log "Setting lightdm-gtk-greeter as the LightDM greeter..."
         if grep -q '^greeter-session=' /etc/lightdm/lightdm.conf; then
@@ -477,13 +375,6 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     echo "GNOME dark theme was pre-set -- it should already be dark on first login."
 fi
 if [[ "$DE_CHOICE" == "3" ]]; then
-    echo "COSMIC is configured entirely through its own Settings app (no config file"
-    echo "to hand-edit) -- keybinds, panel, wallpaper, etc. are all in there."
-    if [[ "$INSTALL_MODE" == "full" ]]; then
-        echo "cosmic-store (App Center) needs packagekit, which was installed above."
-    fi
-fi
-if [[ "$DE_CHOICE" == "4" || "$DE_CHOICE" == "5" || "$DE_CHOICE" == "6" ]]; then
     echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen looks"
     echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
 fi
