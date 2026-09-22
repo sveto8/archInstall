@@ -247,9 +247,16 @@ if curl -fsSL -o "$ICON_ARCHIVE" "${ICONS_BASE_URL}/icons/Reversal-icon-theme-ma
 
         log "Installing Reversal icon theme color variants..."
 
-        for color in yellow orange black grey; do
+        # Yellow is the default variant upstream -- its install.sh takes
+        # no color flag (running "./install.sh" alone installs yellow).
+        info "==> Reversal: yellow"
+        (cd "$REVERSAL_DIR" && ./install.sh) \
+            || warn "Reversal install.sh failed for color: yellow"
+
+        # The other three variants need the -y <color> flag.
+        for color in orange black grey; do
             info "==> Reversal: $color"
-            (cd "$REVERSAL_DIR" && ./install.sh -t "$color") \
+            (cd "$REVERSAL_DIR" && ./install.sh -y "$color") \
                 || warn "Reversal install.sh failed for color: $color"
         done
 
