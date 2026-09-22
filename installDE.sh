@@ -134,6 +134,7 @@ case "$DE_CHOICE" in
                 manuals                 # developer documentation browser
                 sysprof                 # performance profiler
                 power-profiles-daemon   # power profile settings in gnome-settings
+                nautilus-admin          # open directories with admin rights
                 
                 gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
@@ -146,6 +147,7 @@ case "$DE_CHOICE" in
                 gnome-terminal
                 gdm
                 power-profiles-daemon   # power profile settings in gnome-settings
+                nautilus-admin          # open directories with admin rights
                 "${WAYLAND_COMMON[@]}"
             )
         fi
