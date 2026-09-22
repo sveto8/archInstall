@@ -233,9 +233,9 @@ else
 fi
 
 # Download and install cursor theme (DeepinV20-dark)
-log "Downloading DeepinV20-dark cursor theme..."
-CURSOR_ARCHIVE="/tmp/DeepinV20-dark-cursors.tar.xz"
-if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeepinV20-dark-cursors.tar.xz"; then
+log "Downloading Deepin-dark cursor theme..."
+CURSOR_ARCHIVE="/tmp/DeppinDark-cursors.tar.xz"
+if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
     log "Extracting DeepinV20-dark cursor theme to /usr/share/icons/..."
     tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
     rm -f "$CURSOR_ARCHIVE"
