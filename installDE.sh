@@ -145,6 +145,7 @@ case "$DE_CHOICE" in
                 nautilus
                 gnome-terminal
                 gdm
+                power-profiles-daemon   # power profile settings in gnome-settings
                 "${WAYLAND_COMMON[@]}"
             )
         fi
@@ -323,10 +324,29 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gnome.desktop.interface accent-color 'slate' \
             || warn "Could not set GNOME accent-color to slate (requires GNOME 47+)."
+        # Directories before files when browsing. This sets the GTK
+        # FileChooser preference, which is the closest available option:
+        # Nautilus 42+ removed the per-view "sort folders before files"
+        # toggle from its own preferences, but this still affects GTK
+        # file dialogs (open/save) system-wide.
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gtk.Settings.FileChooser sort-directories-first true \
+            || warn "Could not set sort-directories-first for GTK file dialogs."
         info "GNOME dark theme + slate accent set (applies on first login)."
     else
         warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
         info "Set it manually after login: Settings -> Appearance -> Dark + Slate."
+    fi
+fi
+
+# ---------------- GNOME: POWER PROFILES ----------------
+
+if [[ "$DE_CHOICE" == "1" ]]; then
+    if systemctl list-unit-files power-profiles-daemon.service >/dev/null 2>&1; then
+        log "Enabling power-profiles-daemon (needed for Settings -> Power)..."
+        systemctl enable power-profiles-daemon.service
+    else
+        warn "power-profiles-daemon.service not found -- Power settings may not work."
     fi
 fi
 
