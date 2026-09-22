@@ -305,6 +305,45 @@ log "Installing $DE_NAME packages..."
 
 pacman -S --needed --noconfirm "${DE_PACKAGES[@]}"
 
+# ---------------- ICONS & CURSORS (from GitHub) ----------------
+
+ICONS_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
+
+# Download and install icon theme (Reversal)
+log "Downloading Reversal icon theme..."
+ICON_ARCHIVE="/tmp/Reversal-icon-theme-master.tar.xz"
+if curl -fsSL -o "$ICON_ARCHIVE" "${ICONS_BASE_URL}/icons/Reversal-icon-theme-master.tar.xz"; then
+    log "Extracting Reversal icon theme to /usr/share/icons/..."
+    tar -xf "$ICON_ARCHIVE" -C /usr/share/icons/
+    rm -f "$ICON_ARCHIVE"
+    info "Reversal icon theme installed."
+else
+    warn "Could not download Reversal icon theme from ${ICONS_BASE_URL}/icons/"
+fi
+
+# Download and install cursor theme (DeepinV20-dark)
+log "Downloading DeepinV20-dark cursor theme..."
+CURSOR_ARCHIVE="/tmp/DeepinV20-dark-cursors.tar.xz"
+if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeepinV20-dark-cursors.tar.xz"; then
+    log "Extracting DeepinV20-dark cursor theme to /usr/share/icons/..."
+    tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
+    rm -f "$CURSOR_ARCHIVE"
+    info "DeepinV20-dark cursor theme installed."
+else
+    warn "Could not download DeepinV20-dark cursor theme from ${ICONS_BASE_URL}/cursor/"
+fi
+
+# Update the icon cache so the new themes are picked up immediately.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    log "Updating icon cache..."
+    for dir in /usr/share/icons/*/; do
+        if [[ -f "${dir}/index.theme" ]]; then
+            gtk-update-icon-cache -f -t "$dir" 2>/dev/null || true
+        fi
+    done
+    info "Icon cache updated."
+fi
+
 log "Enabling $DM_SERVICE..."
 systemctl enable "$DM_SERVICE"
 
@@ -334,6 +373,14 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gtk.Settings.FileChooser sort-directories-first true \
             || warn "Could not set sort-directories-first for GTK file dialogs."
+        # Apply the Reversal icon theme and DeepinV20-dark cursor theme
+        # installed earlier by this script.
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gnome.desktop.interface icon-theme 'Reversal' \
+            || warn "Could not set GNOME icon-theme to Reversal."
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gnome.desktop.interface cursor-theme 'DeepinV20-dark' \
+            || warn "Could not set GNOME cursor-theme to DeepinV20-dark."
         info "GNOME dark theme + slate accent set (applies on first login)."
     else
         warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
