@@ -135,7 +135,9 @@ case "$DE_CHOICE" in
                 sysprof                 # performance profiler
                 power-profiles-daemon   # power profile settings in gnome-settings
                 nautilus-admin          # open directories with admin rights
-                
+                bluez                   # Bluetooth protocol stack
+                bluez-utils             # provides bluetoothctl
+
                 gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
             )     
@@ -148,6 +150,8 @@ case "$DE_CHOICE" in
                 gdm
                 power-profiles-daemon   # power profile settings in gnome-settings
                 nautilus-admin          # open directories with admin rights
+                bluez                   # Bluetooth protocol stack
+                bluez-utils             # provides bluetoothctl
                 "${WAYLAND_COMMON[@]}"
             )
         fi
@@ -385,6 +389,41 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     else
         warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
         info "Set it manually after login: Settings -> Appearance -> Dark + Slate."
+    fi
+fi
+
+# ---------------- GNOME: BLUETOOTH ----------------
+
+if [[ "$DE_CHOICE" == "1" ]]; then
+    log "Enabling Bluetooth service and auto-enable policy..."
+
+    # Enable and start the bluetooth systemd service.
+    if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
+        systemctl enable bluetooth.service
+        info "bluetooth.service enabled (will start on next boot)."
+    else
+        warn "bluetooth.service not found -- is the bluez package installed?"
+    fi
+
+    # Ensure the Bluetooth adapter is automatically powered on after
+    # boot. By default BlueZ leaves the adapter soft-blocked, so even
+    # with the service running, the GNOME toggle would stay off until
+    # the user manually turns it on. AutoEnable=true makes the adapter
+    # come up powered and discoverable-ready at boot.
+    BLUETOOTH_MAIN_CONF="/etc/bluetooth/main.conf"
+    if [[ -f "$BLUETOOTH_MAIN_CONF" ]]; then
+        if grep -qE '^[[:space:]]*AutoEnable=' "$BLUETOOTH_MAIN_CONF"; then
+            sed -i -E 's/^[[:space:]]*AutoEnable=.*/AutoEnable=true/' "$BLUETOOTH_MAIN_CONF"
+        elif grep -qE '^\[Policy\]' "$BLUETOOTH_MAIN_CONF"; then
+            # Insert AutoEnable=true right after the [Policy] header.
+            sed -i '/^\[Policy\]/a AutoEnable=true' "$BLUETOOTH_MAIN_CONF"
+        else
+            # No [Policy] section found -- append one.
+            printf '\n[Policy]\nAutoEnable=true\n' >> "$BLUETOOTH_MAIN_CONF"
+        fi
+        info "Bluetooth AutoEnable=true set in $BLUETOOTH_MAIN_CONF."
+    else
+        warn "$BLUETOOTH_MAIN_CONF not found -- Bluetooth adapter may need manual enabling after boot."
     fi
 fi
 
