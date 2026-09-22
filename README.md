@@ -1,3 +1,10 @@
+----------
+
+NOTE - This is a hobby project created primarily for my personal needs. 
+
+----------
+
+
 # Arch Linux: LUKS2 + Btrfs + Snapper + DE + apps install scripts
 
 Four scripts that together take a machine from an Arch ISO boot to a
