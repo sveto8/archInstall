@@ -134,7 +134,6 @@ case "$DE_CHOICE" in
                 manuals                 # developer documentation browser
                 sysprof                 # performance profiler
                 power-profiles-daemon   # power profile settings in gnome-settings
-                nautilus-admin          # open directories with admin rights
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
 
@@ -149,7 +148,6 @@ case "$DE_CHOICE" in
                 gnome-terminal
                 gdm
                 power-profiles-daemon   # power profile settings in gnome-settings
-                nautilus-admin          # open directories with admin rights
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
                 "${WAYLAND_COMMON[@]}"
