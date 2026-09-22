@@ -326,7 +326,7 @@ fi
 log "Installing base system (pacstrap)..."
 
 PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
-          grub efibootmgr sudo networkmanager vim git)
+          grub efibootmgr sudo networkmanager vim git zram-generator)
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
 
 pacstrap -K /mnt "${PACKAGES[@]}"
@@ -424,6 +424,19 @@ HOSTS_EOF
 
 # Enable NetworkManager
 systemctl enable NetworkManager
+
+# Configure ZRAM swap for better performance and reduced SSD wear.
+# A zram device is created in RAM, compressed, and used as swap.
+# This is especially useful on systems with limited RAM or SSDs.
+# The config below creates a zram device sized at 50% of RAM,
+# using the zstd compression algorithm.
+cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+swap-priority = 100
+fs-type = swap
+ZRAM_EOF
 
 # Initramfs: systemd-based with proper hooks
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
