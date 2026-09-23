@@ -336,6 +336,12 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gtk.Settings.FileChooser sort-directories-first true \
             || warn "Could not set sort-directories-first for GTK file dialogs."
+       # Always show "Log Out" in the GNOME system menu. By default it is
+        # hidden behind the power-off dialog, which is inconvenient on
+        # multi-user or session-switching setups.
+        runuser -u "$TARGET_USER" -- dbus-run-session -- \
+            gsettings set org.gnome.shell always-show-log-out true \
+            || warn "Could not enable always-show-log-out in GNOME shell."            
         # Apply the Reversal icon theme and Deepin dark cursor theme
         # installed earlier by this script.
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
