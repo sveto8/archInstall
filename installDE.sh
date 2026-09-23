@@ -217,84 +217,94 @@ log "Installing $DE_NAME packages..."
 pacman -S --needed --noconfirm "${DE_PACKAGES[@]}"
 
 # ---------------- ICONS & CURSORS (from GitHub) ----------------
-
-ICONS_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
-
-# Download and install the Reversal icon theme.
 #
-# The upstream Reversal repo does not ship pre-built icons -- it ships
-# an install.sh script that generates/installs the icon set for a given
-# color variant. So we download the source archive to a temp directory,
-# extract it, and run its install.sh for each color variant we want to
-# have available (yellow, orange, black, grey).
-log "Downloading Reversal icon theme..."
-ICONS_TMP="$(mktemp -d)"
-ICON_ARCHIVE="$ICONS_TMP/Reversal-icon-theme-master.tar.xz"
+# The Reversal icon theme and Deepin cursor theme are downloaded and
+# installed system-wide, but they are only *applied* via gsettings,
+# which is a GNOME-only mechanism. For KDE and XFCE this step would
+# just waste bandwidth, time and disk space on themes that never get
+# activated -- so it only runs for GNOME.
 
-if curl -fsSL -o "$ICON_ARCHIVE" "${ICONS_BASE_URL}/icons/Reversal-icon-theme-master.tar.xz"; then
-    log "Extracting Reversal icon theme to $ICONS_TMP..."
-    tar -xf "$ICON_ARCHIVE" -C "$ICONS_TMP/"
-    rm -f "$ICON_ARCHIVE"
+if [[ "$DE_CHOICE" == "1" ]]; then
 
-    # The archive extracts to a directory named Reversal-icon-theme-master
-    # (or similar). Locate the directory that contains install.sh so we
-    # can run it from there, regardless of the exact folder name.
-    REVERSAL_INSTALL="$(find "$ICONS_TMP" -maxdepth 2 -name 'install.sh' -type f | head -n1)"
+    ICONS_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
 
-    if [[ -n "$REVERSAL_INSTALL" ]]; then
-        REVERSAL_DIR="$(dirname "$REVERSAL_INSTALL")"
-        chmod +x "$REVERSAL_INSTALL"
+    # Download and install the Reversal icon theme.
+    #
+    # The upstream Reversal repo does not ship pre-built icons -- it ships
+    # an install.sh script that generates/installs the icon set for a given
+    # color variant. So we download the source archive to a temp directory,
+    # extract it, and run its install.sh for each color variant we want to
+    # have available (yellow, orange, black, grey).
+    log "Downloading Reversal icon theme..."
+    ICONS_TMP="$(mktemp -d)"
+    ICON_ARCHIVE="$ICONS_TMP/Reversal-icon-theme-master.tar.xz"
 
-        log "Installing Reversal icon theme color variants..."
+    if curl -fsSL -o "$ICON_ARCHIVE" "${ICONS_BASE_URL}/icons/Reversal-icon-theme-master.tar.xz"; then
+        log "Extracting Reversal icon theme to $ICONS_TMP..."
+        tar -xf "$ICON_ARCHIVE" -C "$ICONS_TMP/"
+        rm -f "$ICON_ARCHIVE"
 
-        # Yellow is the default variant upstream -- its install.sh takes
-        # no color flag (running "./install.sh" alone installs yellow).
-        info "==> Reversal: yellow"
-        (cd "$REVERSAL_DIR" && ./install.sh) \
-            || warn "Reversal install.sh failed for color: yellow"
+        # The archive extracts to a directory named Reversal-icon-theme-master
+        # (or similar). Locate the directory that contains install.sh so we
+        # can run it from there, regardless of the exact folder name.
+        REVERSAL_INSTALL="$(find "$ICONS_TMP" -maxdepth 2 -name 'install.sh' -type f | head -n1)"
 
-        # The other three variants need the -y <color> flag.
-        for color in orange black grey; do
-            info "==> Reversal: $color"
-            (cd "$REVERSAL_DIR" && ./install.sh -t "$color") \
-                || warn "Reversal install.sh failed for color: $color"
-        done
+        if [[ -n "$REVERSAL_INSTALL" ]]; then
+            REVERSAL_DIR="$(dirname "$REVERSAL_INSTALL")"
+            chmod +x "$REVERSAL_INSTALL"
 
-        info "Reversal icon theme installed (yellow, orange, black, grey)."
+            log "Installing Reversal icon theme color variants..."
+
+            # Yellow is the default variant upstream -- its install.sh takes
+            # no color flag (running "./install.sh" alone installs yellow).
+            info "==> Reversal: yellow"
+            (cd "$REVERSAL_DIR" && ./install.sh) \
+                || warn "Reversal install.sh failed for color: yellow"
+
+            # The other three variants need the -t <color> flag.
+            for color in orange black grey; do
+                info "==> Reversal: $color"
+                (cd "$REVERSAL_DIR" && ./install.sh -t "$color") \
+                    || warn "Reversal install.sh failed for color: $color"
+            done
+
+            info "Reversal icon theme installed (yellow, orange, black, grey)."
+        else
+            warn "install.sh not found in Reversal archive -- skipping icon theme installation."
+        fi
+
+        rm -rf "$ICONS_TMP"
     else
-        warn "install.sh not found in Reversal archive -- skipping icon theme installation."
+        warn "Could not download Reversal icon theme from ${ICONS_BASE_URL}/icons/"
+        rm -rf "$ICONS_TMP"
     fi
 
-    rm -rf "$ICONS_TMP"
-else
-    warn "Could not download Reversal icon theme from ${ICONS_BASE_URL}/icons/"
-    rm -rf "$ICONS_TMP"
-fi
+    # Download and install cursor theme (Deepin dark).
+    # Note: unlike the Reversal icons, the cursor theme is a ready-to-use
+    # directory of cursor files, so we just extract it straight into
+    # /usr/share/icons/ -- no install.sh needed.
+    log "Downloading Deepin dark cursor theme..."
+    CURSOR_ARCHIVE="/tmp/DeppinDark-cursors.tar.xz"
+    if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
+        log "Extracting Deepin dark cursor theme to /usr/share/icons/..."
+        tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
+        rm -f "$CURSOR_ARCHIVE"
+        info "Deepin dark cursor theme installed."
+    else
+        warn "Could not download Deepin dark cursor theme from ${ICONS_BASE_URL}/cursor/"
+    fi
 
-# Download and install cursor theme (Deepin dark).
-# Note: unlike the Reversal icons, the cursor theme is a ready-to-use
-# directory of cursor files, so we just extract it straight into
-# /usr/share/icons/ -- no install.sh needed.
-log "Downloading Deepin dark cursor theme..."
-CURSOR_ARCHIVE="/tmp/DeppinDark-cursors.tar.xz"
-if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
-    log "Extracting Deepin dark cursor theme to /usr/share/icons/..."
-    tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
-    rm -f "$CURSOR_ARCHIVE"
-    info "Deepin dark cursor theme installed."
-else
-    warn "Could not download Deepin dark cursor theme from ${ICONS_BASE_URL}/cursor/"
-fi
+    # Update the icon cache so the new themes are picked up immediately.
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        log "Updating icon cache..."
+        for dir in /usr/share/icons/*/; do
+            if [[ -f "${dir}/index.theme" ]]; then
+                gtk-update-icon-cache -f -t "$dir" 2>/dev/null || true
+            fi
+        done
+        info "Icon cache updated."
+    fi
 
-# Update the icon cache so the new themes are picked up immediately.
-if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    log "Updating icon cache..."
-    for dir in /usr/share/icons/*/; do
-        if [[ -f "${dir}/index.theme" ]]; then
-            gtk-update-icon-cache -f -t "$dir" 2>/dev/null || true
-        fi
-    done
-    info "Icon cache updated."
 fi
 
 log "Enabling $DM_SERVICE..."
