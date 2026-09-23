@@ -342,8 +342,8 @@ if [[ "$DE_CHOICE" == "1" ]]; then
             gsettings set org.gnome.desktop.interface icon-theme 'Reversal' \
             || warn "Could not set GNOME icon-theme to Reversal."
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface cursor-theme 'DeepinV20-dark' \
-            || warn "Could not set GNOME cursor-theme to Deepin-dark."
+            gsettings set org.gnome.desktop.interface cursor-theme 'DeppinDark-cursors' \
+            || warn "Could not set GNOME cursor-theme to DeppinDark-cursors."
         info "GNOME dark theme + slate accent set (applies on first login)."
     else
         warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
