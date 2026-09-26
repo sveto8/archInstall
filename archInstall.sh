@@ -194,6 +194,75 @@ else
     info "RTC will be set to UTC (Linux default)."
 fi
 
+# ---------------- WAKE-ON-LAN (WOL) ----------------
+#
+# Wake-on-LAN needs two things: the NIC's driver/firmware told to keep
+# listening for a magic packet (`ethtool -s <iface> wol g`), and that
+# setting re-applied on every boot, since most drivers reset it to "off"
+# each time the interface comes up. We detect the wired interface name
+# here (from the live environment -- predictable names like enp39s0 are
+# derived from the PCI topology, so they carry over to the installed
+# system on the same hardware) rather than hardcoding one, and install a
+# templated systemd service that re-applies the setting at every boot.
+
+ENABLE_WOL="no"
+WOL_IFACE=""
+
+echo
+read -r -p "Enable Wake-on-LAN (WOL)? [y/N] " WOL_ANSWER
+if [[ "$WOL_ANSWER" =~ ^[Yy]$ ]]; then
+    # Wired interfaces only: anything under /sys/class/net without a
+    # "wireless" subdirectory and that isn't loopback. WOL only applies
+    # to Ethernet NICs, so Wi-Fi adapters are excluded here.
+    WOL_CANDIDATES=()
+    for ifc in /sys/class/net/*; do
+        name="$(basename "$ifc")"
+        [[ "$name" == "lo" ]] && continue
+        [[ -d "$ifc/wireless" ]] && continue
+        WOL_CANDIDATES+=("$name")
+    done
+
+    if [[ "${#WOL_CANDIDATES[@]}" -eq 0 ]]; then
+        warn "No wired network interface detected -- skipping Wake-on-LAN."
+    elif [[ "${#WOL_CANDIDATES[@]}" -eq 1 ]]; then
+        WOL_IFACE="${WOL_CANDIDATES[0]}"
+        info "Detected network interface: $WOL_IFACE"
+    else
+        echo "Multiple wired interfaces detected:"
+        select_i=1
+        for c in "${WOL_CANDIDATES[@]}"; do
+            echo "  $select_i) $c"
+            ((select_i++))
+        done
+        read -r -p "Which interface should have WOL enabled? [1]: " WOL_PICK
+        WOL_PICK="${WOL_PICK:-1}"
+        if [[ "$WOL_PICK" =~ ^[0-9]+$ ]] && [[ "$WOL_PICK" -ge 1 && "$WOL_PICK" -le "${#WOL_CANDIDATES[@]}" ]]; then
+            WOL_IFACE="${WOL_CANDIDATES[$((WOL_PICK-1))]}"
+        else
+            warn "Invalid choice -- skipping Wake-on-LAN."
+        fi
+    fi
+
+    # Best-effort capability check -- purely informational, never blocks
+    # the install. ethtool may not be present on the live ISO itself.
+    if [[ -n "$WOL_IFACE" ]] && command -v ethtool >/dev/null 2>&1; then
+        if ethtool "$WOL_IFACE" 2>/dev/null | grep -qi 'Supports Wake-on:.*g'; then
+            info "$WOL_IFACE reports support for 'g' (magic packet) Wake-on-LAN."
+        else
+            warn "$WOL_IFACE does not appear to report 'g' Wake-on-LAN support (continuing anyway -- some drivers misreport this)."
+        fi
+    fi
+
+    if [[ -n "$WOL_IFACE" ]]; then
+        ENABLE_WOL="yes"
+        info "Wake-on-LAN will be enabled on $WOL_IFACE (installs 'ethtool', enables wol@${WOL_IFACE}.service)."
+    else
+        ENABLE_WOL="no"
+    fi
+else
+    info "Wake-on-LAN will not be configured."
+fi
+
 # ---------------- PARTITIONING ----------------
 
 log "Wiping and partitioning $DEVICE..."
@@ -328,6 +397,7 @@ log "Installing base system (pacstrap)..."
 PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
           grub efibootmgr sudo networkmanager vim git zram-generator)
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
+[[ "$ENABLE_WOL" == "yes" ]] && PACKAGES+=(ethtool)
 
 pacstrap -K /mnt "${PACKAGES[@]}"
 
@@ -424,6 +494,26 @@ HOSTS_EOF
 
 # Enable NetworkManager
 systemctl enable NetworkManager
+
+# Wake-on-LAN: most NIC drivers reset "wol g" back to off on every boot,
+# so a one-shot systemd service (templated on the interface name) is
+# needed to re-apply it after each boot, not just once here.
+if [[ "$ENABLE_WOL" == "yes" ]]; then
+    cat > /etc/systemd/system/wol@.service <<'WOL_EOF'
+[Unit]
+Description=Wake-on-LAN for %i
+Requires=network.target
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ethtool -s %i wol g
+
+[Install]
+WantedBy=multi-user.target
+WOL_EOF
+    systemctl enable "wol@${WOL_IFACE}.service"
+fi
 
 # Configure ZRAM swap for better performance and reduced SSD wear.
 # A zram device is created in RAM, compressed, and used as swap.
