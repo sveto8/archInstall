@@ -132,7 +132,8 @@ case "$DE_CHOICE" in
                 power-profiles-daemon   # power profile settings in gnome-settings
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
-
+                gnome-browser-connector  # GNOME integration for web browsers
+                
                 gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
             )     
