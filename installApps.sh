@@ -64,7 +64,6 @@ REPO_PACKAGES=(
     cups                                # printing system
     system-config-printer               # GUI printer management
     eza
-    lact
 )
 
 AUR_PACKAGES=(
@@ -97,16 +96,14 @@ echo "Optional PACMAN packages:"
 echo
 
 echo
-read -r -p "Install LibreOffice still? [Y/n] " INSTALL_LIBREOFFICE
+read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
 if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
     REPO_PACKAGES+=(libreoffice-still)
 fi
 
 echo
-read -r -p "Install Lact (AMD GPU OC tool) [Y/n]" INSTALL_LACT
-if [[ "$INSTALL_LACT" =~ ^[Yy]$ ]]; then
-    REPO_PACKAGES+=(lact)
-fi
+read -r -p "Install Lact (AMD GPU OC tool)? [Y/n] " INSTALL_LACT
+[[ "$INSTALL_LACT" =~ ^[Nn]$ ]] || REPO_PACKAGES+=(lact)
 
 echo
 echo "Optional AUR packages:"
