@@ -64,6 +64,7 @@ REPO_PACKAGES=(
     cups                                # printing system
     system-config-printer               # GUI printer management
     eza
+    lact
 )
 
 AUR_PACKAGES=(
@@ -92,7 +93,23 @@ WORK_AUR=(
 # ---------------- OPTIONAL PACKAGE PROMPTS ----------------
 
 echo
-echo "Optional packages:"
+echo "Optional PACMAN packages:"
+echo
+
+echo
+read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
+if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
+    REPO_PACKAGES+=(libreoffice-still)
+fi
+
+echo
+read -r -p "Install Lact [y/N]" INSTALL_LACT
+if [[ "$INSTALL_LACT" =~ ^[Yy]$ ]]; then
+    REPO_PACKAGES+=(lact)
+fi
+
+echo
+echo "Optional AUR packages:"
 echo
 
 echo
@@ -114,12 +131,6 @@ echo
 read -r -p "Install OnlyOffice (AUR)? [y/N] " INSTALL_ONLYOFFICE
 if [[ "$INSTALL_ONLYOFFICE" =~ ^[Yy]$ ]]; then
     AUR_PACKAGES+=(onlyoffice-bin)
-fi
-
-echo
-read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
-if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
-    REPO_PACKAGES+=(libreoffice-still)
 fi
 
 # ---------------- GNOME-SPECIFIC: NAUTILUS ADMIN ----------------
