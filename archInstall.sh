@@ -263,6 +263,56 @@ else
     info "Wake-on-LAN will not be configured."
 fi
 
+# ---------------- WI-FI CARRY-OVER (iwd -> NetworkManager) ----------------
+#
+# A connection made with iwctl on the live ISO lives only in the live
+# system's RAM, so the installed system would boot with NetworkManager
+# but no saved network -- and no internet for the next scripts. If the
+# live ISO has saved WPA-PSK networks (/var/lib/iwd/*.psk), offer to
+# write them as NetworkManager connection profiles on the new system
+# (done after pacstrap). Open and 802.1X/enterprise networks are not
+# carried over; for those use 'nmtui' after the first boot.
+
+IWD_DIR="/var/lib/iwd"
+WIFI_CARRY="no"
+WIFI_PSK_FILES=()
+
+# iwd stores SSIDs containing anything besides [A-Za-z0-9 _-] as
+# "=" + hex of the SSID bytes in the file name; decode that back.
+iwd_ssid_from_file() {
+    local name
+    name="$(basename "$1" .psk)"
+    if [[ "$name" == =* ]]; then
+        local hex="${name#=}" out="" i
+        for ((i = 0; i < ${#hex}; i += 2)); do
+            out+="$(printf "\\x${hex:i:2}")"
+        done
+        printf '%s' "$out"
+    else
+        printf '%s' "$name"
+    fi
+}
+
+if [[ -d "$IWD_DIR" ]]; then
+    shopt -s nullglob
+    WIFI_PSK_FILES=("$IWD_DIR"/*.psk)
+    shopt -u nullglob
+fi
+
+if [[ "${#WIFI_PSK_FILES[@]}" -gt 0 ]]; then
+    WIFI_NAMES=()
+    for f in "${WIFI_PSK_FILES[@]}"; do
+        WIFI_NAMES+=("$(iwd_ssid_from_file "$f")")
+    done
+    echo
+    echo "Saved Wi-Fi network(s) on this live system: ${WIFI_NAMES[*]}"
+    read -r -p "Copy them to the installed system so it is online after reboot? [Y/n] " WIFI_ANSWER
+    if [[ ! "$WIFI_ANSWER" =~ ^[Nn]$ ]]; then
+        WIFI_CARRY="yes"
+        info "Wi-Fi network(s) will be carried over to NetworkManager."
+    fi
+fi
+
 # ---------------- PARTITIONING ----------------
 
 log "Wiping and partitioning $DEVICE..."
@@ -395,7 +445,8 @@ fi
 log "Installing base system (pacstrap)..."
 
 PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
-          grub efibootmgr sudo networkmanager vim git zram-generator)
+          grub efibootmgr sudo networkmanager wpa_supplicant vim git
+          zram-generator dialog)
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
 [[ "$ENABLE_WOL" == "yes" ]] && PACKAGES+=(ethtool)
 
@@ -405,6 +456,64 @@ genfstab -U /mnt >> /mnt/etc/fstab
 
 log "/etc/fstab:"
 cat /mnt/etc/fstab
+
+# ---------------- WI-FI CARRY-OVER: WRITE NM PROFILES ----------------
+
+if [[ "$WIFI_CARRY" == "yes" ]]; then
+    log "Copying saved Wi-Fi network(s) to NetworkManager..."
+    NM_CONN_DIR="/mnt/etc/NetworkManager/system-connections"
+    mkdir -p "$NM_CONN_DIR"
+    wifi_idx=0
+    for f in "${WIFI_PSK_FILES[@]}"; do
+        ssid="$(iwd_ssid_from_file "$f")"
+        # Prefer the plain passphrase; fall back to the 64-hex PSK
+        # (NetworkManager accepts either in the psk= field).
+        psk="$(sed -n 's/^Passphrase=//p' "$f" | head -n1)"
+        [[ -n "$psk" ]] || psk="$(sed -n 's/^PreSharedKey=//p' "$f" | head -n1)"
+        if [[ -z "$ssid" || -z "$psk" ]]; then
+            warn "Could not read credentials for '$ssid' -- skipping (use 'nmtui' after reboot)."
+            continue
+        fi
+        if [[ "$ssid" == *\;* ]]; then
+            warn "SSID '$ssid' contains ';' which NetworkManager keyfiles can't store reliably -- skipping (use 'nmtui' after reboot)."
+            continue
+        fi
+        wifi_idx=$((wifi_idx + 1))
+        safe="$(printf '%s' "$ssid" | tr -c 'A-Za-z0-9._-' '_')"
+        out="${NM_CONN_DIR}/wifi-${wifi_idx}-${safe}.nmconnection"
+        # Keyfile values: backslash must be escaped.
+        ssid_esc="${ssid//\\/\\\\}"
+        psk_esc="${psk//\\/\\\\}"
+        (
+            umask 077
+            cat > "$out" <<NM_EOF
+[connection]
+id=${ssid_esc}
+uuid=$(cat /proc/sys/kernel/random/uuid)
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=${ssid_esc}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${psk_esc}
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+NM_EOF
+        )
+        chmod 600 "$out"
+        info "Saved profile for '$ssid'."
+    done
+    [[ "$wifi_idx" -gt 0 ]] || WIFI_CARRY="no"
+fi
 
 # ---------------- USER ACCOUNT + PASSWORDS (interactive) ----------------
 #
@@ -613,6 +722,10 @@ echo "============================================================"
 echo "1. umount -R /mnt"
 echo "2. cryptsetup close cryptroot"
 echo "3. reboot, remove the install media"
+if [[ "$WIFI_CARRY" != "yes" ]]; then
+    echo "   (No Wi-Fi network was carried over. If you have no Ethernet, run"
+    echo "    'nmtui' after reboot to connect, or: nmcli device wifi connect \"SSID\" password \"...\")"
+fi
 echo "4. After reboot, log in and run:"
 if [[ -f /mnt/archInstall/arch-manager.sh ]]; then
     echo "   sudo /archInstall/arch-manager.sh"
