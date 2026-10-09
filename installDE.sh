@@ -133,7 +133,7 @@ case "$DE_CHOICE" in
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
                 gnome-browser-connector  # GNOME integration for web browsers
-                
+
                 gnome-tweaks            # not part of either group but essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
             )     
@@ -161,6 +161,7 @@ case "$DE_CHOICE" in
                 dolphin
                 konsole
                 sddm
+                plasma-nm               # Wi-Fi/network applet + settings (not part of plasma-desktop)
                 "${WAYLAND_COMMON[@]}"
             )
         else
@@ -170,6 +171,7 @@ case "$DE_CHOICE" in
                 dolphin
                 konsole
                 sddm
+                plasma-nm               # Wi-Fi/network applet + settings (not part of plasma-desktop)
                 "${WAYLAND_COMMON[@]}"
             )
         fi
@@ -184,6 +186,7 @@ case "$DE_CHOICE" in
                 xfce4-goodies           # official group -- extra plugins/apps
                 lightdm
                 lightdm-gtk-greeter
+                network-manager-applet  # nm-applet tray icon (XFCE has no built-in network UI)
                 "${X11_COMMON[@]}"
             )
         else
@@ -191,6 +194,7 @@ case "$DE_CHOICE" in
                 xfce4
                 lightdm
                 lightdm-gtk-greeter
+                network-manager-applet  # nm-applet tray icon (XFCE has no built-in network UI)
                 "${X11_COMMON[@]}"
             )
         fi
