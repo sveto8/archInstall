@@ -27,9 +27,17 @@ if [[ ! -f "$LIB" && -f "$SCRIPT_DIR/scripts/lib.sh" ]]; then
     LIB="$SCRIPT_DIR/scripts/lib.sh"
 fi
 if [[ ! -f "$LIB" ]]; then
-    curl -fsSL -o "$SCRIPT_DIR/lib.sh" "${SCRIPT_URL}/lib.sh" \
-        || { echo "ERROR: lib.sh not found next to $0 and the download failed." >&2; exit 1; }
-    LIB="$SCRIPT_DIR/lib.sh"
+    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "${SCRIPT_URL}/lib.sh" 2>/dev/null || true)"
+    if [[ "$_code" == "200" ]]; then
+        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
+        LIB="$SCRIPT_DIR/lib.sh"
+    else
+        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
+        echo "       URL: ${SCRIPT_URL}/lib.sh  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
+        echo "       Put lib.sh (and the other scripts) in the same folder as arch-manager.sh and run it again." >&2
+        exit 1
+    fi
 fi
 # shellcheck source=lib.sh
 source "$LIB"
@@ -88,19 +96,27 @@ de_installed() {
 download_single_script() {
     local script="$1"
     local dest="${DOWNLOAD_DIR}/${script}"
+    local url="${SCRIPT_URL}/${script}"
+    local tmp="${dest}.tmp" code
 
     printf '  Downloading %s ... ' "$script"
-    if curl -fsSL -o "$dest" "${SCRIPT_URL}/${script}"; then
+    code="$(curl -sSL -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null || true)"
+    if [[ "$code" == "200" ]]; then
+        mv "$tmp" "$dest"
         chmod +x "$dest"
         if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
             chown "$REAL_USER:$REAL_USER" "$dest" 2>/dev/null || true
         fi
         echo "OK"
         return 0
-    else
-        echo "FAIL"
-        return 1
     fi
+    rm -f "$tmp"     # never keep an HTML error page as a "script"
+    case "${code:-000}" in
+        404) echo "FAIL (HTTP 404 -- not in the repo: $url)" ;;
+        000) echo "FAIL (no network / DNS problem: $url)" ;;
+        *)   echo "FAIL (HTTP $code: $url)" ;;
+    esac
+    return 1
 }
 
 download_all() {
@@ -114,12 +130,12 @@ download_all() {
     log "All scripts downloaded successfully."
 }
 
-# Copies scripts that archInstall.sh placed on the installed system
-# (/archInstall/scripts, or a scripts/ folder next to the manager) into the
-# download folder, so they don't have to be fetched again.
+# Uses LOCAL copies before going to the network: scripts lying next to the
+# manager (e.g. copied from a USB stick), in a scripts/ folder next to it, or
+# the ones archInstall.sh placed on the installed system (/archInstall/scripts).
 seed_from_local() {
     local d s
-    for d in "$SCRIPT_DIR/scripts" /archInstall/scripts; do
+    for d in "$SCRIPT_DIR" "$SCRIPT_DIR/scripts" /archInstall/scripts; do
         [[ -d "$d" ]] || continue
         for s in "${SCRIPTS[@]}"; do
             if [[ ! -f "$DOWNLOAD_DIR/$s" && -f "$d/$s" ]]; then
@@ -281,7 +297,8 @@ if [[ $# -gt 0 ]]; then
             ;;
         --help) echo "Usage: $0 [--download|--install|--help|<script.sh>]"; exit 0 ;;
         *)
-            if [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
+            seed_from_local
+            if in_array "$1" "${SCRIPTS[@]}" || [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
                 run_script "$1"
                 exit "$RUN_SCRIPT_RC"
             else
