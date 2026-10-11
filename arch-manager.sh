@@ -150,7 +150,8 @@ seed_from_local() {
 # ---------------- RUNNING A SCRIPT ----------------
 #
 # Always returns 0; the script's exit code is left in RUN_SCRIPT_RC (so
-# callers never trip over "set -e").
+# callers never trip over "set -e"). Exit code 130 means "cancelled by
+# the user" -- see abort() in lib.sh.
 RUN_SCRIPT_RC=0
 
 run_script() {
@@ -212,6 +213,8 @@ report_result() {
     local script="$1"
     if [[ "$RUN_SCRIPT_RC" -eq 0 ]]; then
         msg_box "$script" "$script completed successfully."
+    elif [[ "$RUN_SCRIPT_RC" -eq 130 ]]; then
+        msg_box "$script" "$script was cancelled -- nothing was changed."
     else
         msg_box "$script" "$script FAILED (exit code $RUN_SCRIPT_RC).\n\nCheck the messages and log files, fix the problem and run it again."
     fi
@@ -227,6 +230,12 @@ install_remaining() {
             fi
         fi
         run_script "$script"
+        # A cancel in any dialog means the user chose to stop -- do NOT
+        # continue with the remaining steps and do not report success.
+        if [[ "$RUN_SCRIPT_RC" -eq 130 ]]; then
+            msg_box "$script" "$script was cancelled -- stopping the remaining steps."
+            return 0
+        fi
         report_result "$script"
         if [[ "$RUN_SCRIPT_RC" -ne 0 ]]; then
             ask_yes "Continue?" "$script failed.\n\nContinue with the remaining steps anyway?" no || return 0
@@ -259,14 +268,23 @@ main() {
                     ask_yes "Not the live ISO" "This does not look like the Arch live ISO.\n\narchInstall.sh WIPES a whole disk and is meant to be run from the live ISO only.\n\nRun it anyway?" no || continue
                 fi
                 run_script "archInstall.sh"
-                if [[ "$RUN_SCRIPT_RC" -eq 0 ]]; then
-                    clear
-                    echo "Installation phase completed. Reboot into your new system when ready,"
-                    echo "then run: sudo /archInstall/arch-manager.sh"
-                else
-                    msg_box "archInstall.sh" "archInstall.sh did not finish successfully (exit code $RUN_SCRIPT_RC).\n\nDo NOT reboot yet. Check the errors, fix them and run it again."
-                fi
-                exit 0
+                case "$RUN_SCRIPT_RC" in
+                    0)
+                        clear
+                        echo "Installation phase completed. Reboot into your new system when ready,"
+                        echo "then run: sudo /archInstall/arch-manager.sh"
+                        exit 0
+                        ;;
+                    130)
+                        # User cancelled in one of the installer dialogs --
+                        # return to the menu, don't claim success.
+                        continue
+                        ;;
+                    *)
+                        msg_box "archInstall.sh" "archInstall.sh did not finish successfully (exit code $RUN_SCRIPT_RC).\n\nDo NOT reboot yet. Check the errors, fix them and run it again."
+                        exit 0
+                        ;;
+                esac
                 ;;
             2) run_script "setupAfterInstall.sh"; report_result "setupAfterInstall.sh" ;;
             3) run_script "installDE.sh";         report_result "installDE.sh" ;;
