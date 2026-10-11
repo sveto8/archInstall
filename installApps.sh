@@ -11,7 +11,7 @@ set -o errtrace
 #
 # Flow: ask everything up front (checklist / yes-no / input boxes),
 # show a confirmation summary, then install unattended with live
-# output in a dialog box. Full output is also saved to a log file.
+# progress in a dialog box. Full output is also saved to a log file.
 #
 # Official-repo packages are installed with plain pacman; anything
 # not in the official repos goes through yay (AUR). yay is only
@@ -38,10 +38,6 @@ fi
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
-# Plain progress helpers used while the install runs inside the dialog box.
-say()     { printf '%s\n' "$*"; }
-section() { printf '\n===== %s =====\n' "$*"; }
-
 FAILED_FILE=""
 SKIPPED_FILE=""
 SUDO_KEEPALIVE_PID=""
@@ -65,14 +61,24 @@ command -v pacman >/dev/null || die "pacman not found -- is this an Arch system?
 log "Checking sudo access (you may be asked for your password)..."
 sudo -v || die "sudo access is required."
 
-# Keep the sudo timestamp fresh: AUR builds can easily outlast sudo's
-# default 15-minute timeout, and a password prompt in the middle of a
-# dialog screen would garble the UI.
+# Background keepalive: refresh the sudo timestamp every ~30 seconds so
+# long AUR builds (which can easily exceed sudo's default 15-minute
+# timeout) don't trigger a password prompt in the middle of the install
+# -- that prompt would corrupt the dialog --gauge display and stall the
+# whole run. IMPORTANT: use `sudo -n -v` (explicitly updates the
+# timestamp) rather than `sudo -n true` (which only checks it on some
+# sudo builds and does NOT extend the timeout).
+#
+# The loop exits when either the parent shell dies (kill -0 $$) or a
+# refresh fails -- it also writes the failure into $LOG_FILE so the
+# install summary can report it.
 (
-    while true; do
-        sudo -n true 2>/dev/null || exit 0
-        sleep 50
-        kill -0 "$$" 2>/dev/null || exit 0
+    while kill -0 "$$" 2>/dev/null; do
+        sleep 30
+        if ! sudo -n -v 2>/dev/null; then
+            echo "$(date): sudo keepalive: timestamp refresh failed" >> "$LOG_FILE"
+            exit 0
+        fi
     done
 ) &
 SUDO_KEEPALIVE_PID=$!
@@ -198,6 +204,14 @@ SUMMARY="Repo (pacman):\n  ${REPO_PACKAGES[*]}\n\nAUR (yay):\n  ${AUR_PACKAGES[*
 dlg --title "Confirm" --no-collapse --cr-wrap --yesno "$SUMMARY" 0 "$BOX_W" || abort
 
 # ---------------- INSTALL HELPERS ----------------
+#
+# All sudo calls during the install use `-n` (non-interactive). Rationale:
+# sudo writes its password prompt directly to /dev/tty, bypassing the
+# stderr redirect that run_with_gauge applies. If the timestamp somehow
+# expires mid-install, a normal `sudo pacman ...` would spray a prompt
+# over the --gauge dialog (see: the "Sorry, try again" corruption).
+# With `-n`, sudo fails cleanly instead -- the failed package is logged
+# and reported in the summary, and the rest of the install continues.
 
 # Checks whether a package name exists (official repo OR AUR) before we
 # attempt to install it, so a typo/renamed/removed package is skipped
@@ -218,7 +232,7 @@ install_repo() {
         echo "$pkg" >> "$SKIPPED_FILE"
         return 0
     fi
-    if ! sudo pacman -S --needed --noconfirm --noprogressbar "$pkg"; then
+    if ! sudo -n pacman -S --needed --noconfirm --noprogressbar "$pkg"; then
         warn "$pkg failed to install -- continuing with the rest."
         echo "$pkg" >> "$FAILED_FILE"
     fi
@@ -239,10 +253,11 @@ install_aur() {
 
 # run_install -- driven by run_with_gauge()
 #
-# Prints dialog --gauge frames on stdout; every command's output is
-# redirected to $LOG_FILE so the bar stays clean. The gauge percentage
-# is computed from the total number of work items (base-devel + yay +
-# every chosen package) so the bar fills steadily instead of jumping.
+# Prints dialog --gauge frames on stdout (with a phase checklist + the
+# current message + a percentage); every command's output is redirected
+# to $LOG_FILE so the bar stays clean. The gauge percentage is computed
+# from the total number of work items (base-devel + yay + every chosen
+# package) so the bar fills steadily instead of jumping.
 #
 # NOTE: the body is deliberately not indented -- we keep the same
 # style as the other scripts in this repository.
@@ -250,19 +265,57 @@ install_aur() {
 run_install() {
     local total current=0 pkg yay_tmp
     local log="$LOG_FILE"
-    local gauge
-    gauge() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2"; }
+
+    # ---- Phase checklist shown inside the gauge prompt ----
+    local -a PHASES=(
+        "Build tools (base-devel, git, yay)"
+        "Official-repo packages"
+        "AUR packages"
+        "Extra packages"
+        "Post-install tweaks (Java, CUPS)"
+        "Done"
+    )
+    local CURRENT_PHASE=0
+
+    _phase_prompt() {
+        local i out=""
+        for ((i=0; i<${#PHASES[@]}; i++)); do
+            if (( i < CURRENT_PHASE )); then
+                out+="  [x] ${PHASES[i]}"$'\n'
+            elif (( i == CURRENT_PHASE )); then
+                out+="  [>] ${PHASES[i]}"$'\n'
+            else
+                out+="  [ ] ${PHASES[i]}"$'\n'
+            fi
+        done
+        printf '%s' "$out"
+    }
+
+    gauge_msg() {
+        local pct="$1" msg="$2"
+        {
+            printf 'XXX\n%d\n' "$pct"
+            _phase_prompt
+            printf '\n%s\n' "$msg"
+            printf 'XXX\n'
+        }
+    }
+    set_phase() { CURRENT_PHASE="$1"; }
 
     total=$(( 2 + ${#REPO_PACKAGES[@]} + ${#AUR_PACKAGES[@]} + ${#EXTRA_PACKAGES[@]} ))
     if (( total < 1 )); then total=1; fi
 
     # ---- bootstrap yay ----
-    gauge $((current * 100 / total)) "Preparing build tools (base-devel, git)..."
-    sudo pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1
+    set_phase 0
+    gauge_msg $((current * 100 / total)) "Preparing build tools (base-devel, git)..."
+    if ! sudo -n pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1; then
+        warn "Failed to install base-devel/git -- sudo timestamp may have expired."
+        echo "base-devel git" >> "$FAILED_FILE"
+    fi
     current=$((current + 1))
 
     if ! command -v yay >/dev/null 2>&1; then
-        gauge $((current * 100 / total)) "Building yay from AUR (this can take a while)..."
+        gauge_msg $((current * 100 / total)) "Building yay from AUR (this can take a while)..."
         yay_tmp="$(mktemp -d)"
         git clone https://aur.archlinux.org/yay.git "$yay_tmp/yay" >> "$log" 2>&1
         ( cd "$yay_tmp/yay" && makepkg -si --noconfirm ) >> "$log" 2>&1
@@ -271,24 +324,27 @@ run_install() {
     current=$((current + 1))
 
     # ---- official repos ----
+    set_phase 1
     for pkg in "${REPO_PACKAGES[@]}"; do
         current=$((current + 1))
-        gauge $((current * 100 / total)) "[$current/$total] Installing $pkg (pacman)..."
+        gauge_msg $((current * 100 / total)) "[$current/$total] Installing $pkg (pacman)..."
         install_repo "$pkg" >> "$log" 2>&1
     done
 
     # ---- AUR ----
+    set_phase 2
     for pkg in "${AUR_PACKAGES[@]}"; do
         current=$((current + 1))
-        gauge $((current * 100 / total)) "[$current/$total] Installing $pkg (AUR)..."
+        gauge_msg $((current * 100 / total)) "[$current/$total] Installing $pkg (AUR)..."
         install_aur "$pkg" >> "$log" 2>&1
     done
 
     # ---- extras ----
+    set_phase 3
     if [[ "${#EXTRA_PACKAGES[@]}" -gt 0 ]]; then
         for pkg in "${EXTRA_PACKAGES[@]}"; do
             current=$((current + 1))
-            gauge $((current * 100 / total)) "[$current/$total] Installing $pkg..."
+            gauge_msg $((current * 100 / total)) "[$current/$total] Installing $pkg..."
             if ! package_exists "$pkg"; then
                 echo "$pkg" >> "$SKIPPED_FILE"
                 continue
@@ -302,21 +358,34 @@ run_install() {
     fi
 
     # ---- default Java ----
+    set_phase 4
     if [[ -d /usr/lib/jvm/java-11-openjdk ]]; then
         if [[ "$(archlinux-java get 2>/dev/null)" != "java-11-openjdk" ]]; then
-            gauge 99 "Setting OpenJDK 11 as the default JVM..."
-            sudo archlinux-java set java-11-openjdk >> "$log" 2>&1
+            gauge_msg 99 "Setting OpenJDK 11 as the default JVM..."
+            sudo -n archlinux-java set java-11-openjdk >> "$log" 2>&1 || \
+                warn "Could not set default Java (sudo may have timed out)."
         fi
     fi
 
     # ---- printing ----
-    gauge 99 "Enabling CUPS (printing)..."
-    sudo systemctl enable --now cups.service >> "$log" 2>&1
+    gauge_msg 99 "Enabling CUPS (printing)..."
+    sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
+        warn "Could not enable CUPS (sudo may have timed out)."
 
-    gauge 100 "Done."
+    set_phase 5
+    gauge_msg 100 "Done."
 }
 
 # ---------------- RUN INSTALL (progress bar in a dialog box) ----------------
+
+# Re-verify sudo is still cached right before entering the dialog: if the
+# timestamp expired between the initial `sudo -v` and now, we want to
+# re-authenticate BEFORE the dialog opens, not in the middle of it.
+if ! sudo -n -v 2>/dev/null; then
+    clear
+    log "Re-authenticating sudo before the install begins..."
+    sudo -v || die "sudo access is required."
+fi
 
 run_with_gauge "Installing applications" "$LOG_FILE" run_install
 
@@ -346,6 +415,7 @@ else
             RESULT+="  - $pkg\n"
         done
         RESULT+="Re-run 'yay -S <package>' or 'sudo pacman -S <package>' individually to see the actual error.\n"
+        RESULT+="(If the failure was a sudo timeout, re-run this script; the second run will skip already-installed packages.)\n"
     fi
 fi
 
