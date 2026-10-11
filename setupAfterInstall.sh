@@ -1191,6 +1191,9 @@ exec 1>&3
 exec 3>&-
 }
 
+# Taller gauge so the phase tree + sub-steps fit comfortably.
+GAUGE_HEIGHT=22
+
 run_with_gauge "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup
 
 if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
