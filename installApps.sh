@@ -266,26 +266,53 @@ run_install() {
     local total current=0 pkg yay_tmp
     local log="$LOG_FILE"
 
-    # ---- Phase checklist shown inside the gauge prompt ----
-    local -a PHASES=(
-        "Build tools (base-devel, git, yay)"
+    # ---- Phase tree shown inside the gauge prompt ----
+    #
+    # PHASE_NAMES is the static list of phases; CUR_PHASE is the 0-based
+    # index of the phase currently running; CUR_ITEMS is the list of
+    # packages/steps inside that phase; CUR_IDX is the index of the item
+    # currently being processed. Only the CURRENT phase expands into its
+    # sub-items -- the rest stay collapsed into one line each.
+    local -a PHASE_NAMES=(
+        "Build tools"
         "Official-repo packages"
         "AUR packages"
         "Extra packages"
-        "Post-install tweaks (Java, CUPS)"
+        "Post-install tweaks"
         "Done"
     )
-    local CURRENT_PHASE=0
+    local CUR_PHASE=0
+    local -a CUR_ITEMS=()
+    local CUR_IDX=0
+    local WIN=5   # how many sub-items to show around the current one
 
     _phase_prompt() {
-        local i out=""
-        for ((i=0; i<${#PHASES[@]}; i++)); do
-            if (( i < CURRENT_PHASE )); then
-                out+="  [x] ${PHASES[i]}"$'\n'
-            elif (( i == CURRENT_PHASE )); then
-                out+="  [>] ${PHASES[i]}"$'\n'
+        local i j n start end out=""
+        for ((i=0; i<${#PHASE_NAMES[@]}; i++)); do
+            if (( i < CUR_PHASE )); then
+                out+="  [x] ${PHASE_NAMES[i]}"$'\n'
+            elif (( i == CUR_PHASE )); then
+                out+="  [>] ${PHASE_NAMES[i]}"$'\n'
+                n=${#CUR_ITEMS[@]}
+                if (( n > 0 )); then
+                    start=$(( CUR_IDX - WIN/2 ))
+                    (( start < 0 )) && start=0
+                    end=$(( start + WIN ))
+                    (( end > n )) && end=$n
+                    (( start > 0 )) && out+="        ..."$'\n'
+                    for ((j=start; j<end; j++)); do
+                        if (( j < CUR_IDX )); then
+                            out+="        [x] ${CUR_ITEMS[j]}"$'\n'
+                        elif (( j == CUR_IDX )); then
+                            out+="        [>] ${CUR_ITEMS[j]}"$'\n'
+                        else
+                            out+="        [ ] ${CUR_ITEMS[j]}"$'\n'
+                        fi
+                    done
+                    (( end < n )) && out+="        ..."$'\n'
+                fi
             else
-                out+="  [ ] ${PHASES[i]}"$'\n'
+                out+="  [ ] ${PHASE_NAMES[i]}"$'\n'
             fi
         done
         printf '%s' "$out"
@@ -300,18 +327,21 @@ run_install() {
             printf 'XXX\n'
         }
     }
-    set_phase() { CURRENT_PHASE="$1"; }
 
     total=$(( 2 + ${#REPO_PACKAGES[@]} + ${#AUR_PACKAGES[@]} + ${#EXTRA_PACKAGES[@]} ))
     if (( total < 1 )); then total=1; fi
 
-    # ---- bootstrap yay ----
-    set_phase 0
-    gauge_msg $((current * 100 / total)) "Preparing build tools (base-devel, git)..."
+    # ---- Phase 0: build tools (base-devel, git, yay) ----
+    CUR_PHASE=0
+    CUR_ITEMS=(base-devel git yay)
+    CUR_IDX=0
+
+    gauge_msg $((current * 100 / total)) "Installing base-devel, git..."
     if ! sudo -n pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1; then
         warn "Failed to install base-devel/git -- sudo timestamp may have expired."
         echo "base-devel git" >> "$FAILED_FILE"
     fi
+    CUR_IDX=1
     current=$((current + 1))
 
     if ! command -v yay >/dev/null 2>&1; then
@@ -321,44 +351,57 @@ run_install() {
         ( cd "$yay_tmp/yay" && makepkg -si --noconfirm ) >> "$log" 2>&1
         rm -rf "$yay_tmp"
     fi
+    CUR_IDX=2
     current=$((current + 1))
 
-    # ---- official repos ----
-    set_phase 1
+    # ---- Phase 1: official repos ----
+    CUR_PHASE=1
+    CUR_ITEMS=("${REPO_PACKAGES[@]}")
+    CUR_IDX=0
     for pkg in "${REPO_PACKAGES[@]}"; do
         current=$((current + 1))
-        gauge_msg $((current * 100 / total)) "[$current/$total] Installing $pkg (pacman)..."
+        gauge_msg $((current * 100 / total)) "[$current/$total] $pkg (pacman)"
         install_repo "$pkg" >> "$log" 2>&1
+        CUR_IDX=$((CUR_IDX + 1))
     done
 
-    # ---- AUR ----
-    set_phase 2
+    # ---- Phase 2: AUR ----
+    CUR_PHASE=2
+    CUR_ITEMS=("${AUR_PACKAGES[@]}")
+    CUR_IDX=0
     for pkg in "${AUR_PACKAGES[@]}"; do
         current=$((current + 1))
-        gauge_msg $((current * 100 / total)) "[$current/$total] Installing $pkg (AUR)..."
+        gauge_msg $((current * 100 / total)) "[$current/$total] $pkg (AUR)"
         install_aur "$pkg" >> "$log" 2>&1
+        CUR_IDX=$((CUR_IDX + 1))
     done
 
-    # ---- extras ----
-    set_phase 3
+    # ---- Phase 3: extras ----
+    CUR_PHASE=3
     if [[ "${#EXTRA_PACKAGES[@]}" -gt 0 ]]; then
+        CUR_ITEMS=("${EXTRA_PACKAGES[@]}")
+        CUR_IDX=0
         for pkg in "${EXTRA_PACKAGES[@]}"; do
             current=$((current + 1))
-            gauge_msg $((current * 100 / total)) "[$current/$total] Installing $pkg..."
+            gauge_msg $((current * 100 / total)) "[$current/$total] $pkg"
             if ! package_exists "$pkg"; then
                 echo "$pkg" >> "$SKIPPED_FILE"
-                continue
-            fi
-            if pacman -Si "$pkg" >/dev/null 2>&1; then
+            elif pacman -Si "$pkg" >/dev/null 2>&1; then
                 install_repo "$pkg" >> "$log" 2>&1
             else
                 install_aur "$pkg" >> "$log" 2>&1
             fi
+            CUR_IDX=$((CUR_IDX + 1))
         done
+    else
+        CUR_ITEMS=()
     fi
 
-    # ---- default Java ----
-    set_phase 4
+    # ---- Phase 4: post-install tweaks ----
+    CUR_PHASE=4
+    CUR_ITEMS=("Java default" "CUPS enable")
+    CUR_IDX=0
+
     if [[ -d /usr/lib/jvm/java-11-openjdk ]]; then
         if [[ "$(archlinux-java get 2>/dev/null)" != "java-11-openjdk" ]]; then
             gauge_msg 99 "Setting OpenJDK 11 as the default JVM..."
@@ -366,16 +409,18 @@ run_install() {
                 warn "Could not set default Java (sudo may have timed out)."
         fi
     fi
+    CUR_IDX=1
 
-    # ---- printing ----
     gauge_msg 99 "Enabling CUPS (printing)..."
     sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
         warn "Could not enable CUPS (sudo may have timed out)."
+    CUR_IDX=2
 
-    set_phase 5
+    # ---- Phase 5: done ----
+    CUR_PHASE=5
+    CUR_ITEMS=()
     gauge_msg 100 "Done."
 }
-
 # ---------------- RUN INSTALL (progress bar in a dialog box) ----------------
 
 # Re-verify sudo is still cached right before entering the dialog: if the
@@ -386,6 +431,10 @@ if ! sudo -n -v 2>/dev/null; then
     log "Re-authenticating sudo before the install begins..."
     sudo -v || die "sudo access is required."
 fi
+
+# The phase tree with sub-items needs more vertical space than the
+# default 8-row gauge.
+GAUGE_HEIGHT=20
 
 run_with_gauge "Installing applications" "$LOG_FILE" run_install
 
