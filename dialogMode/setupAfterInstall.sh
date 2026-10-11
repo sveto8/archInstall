@@ -64,6 +64,10 @@ ENABLE_BTRFS_QUOTA="yes"
 # uses grub-mount, which relies on FUSE3 and needs NTFS support to read
 # the Windows partition). GRUB also needs GRUB_DISABLE_OS_PROBER=false
 # in /etc/default/grub -- both are handled automatically below.
+#
+# With "yes" you are asked how rigorous the scan should be: only Windows/
+# Linux on INTERNAL disks (default; USB sticks, external drives and
+# optical media are skipped), everything os-prober finds, or none.
 ENABLE_OS_PROBER="yes"
 
 # Plymouth themes base URL (your GitHub repo)
@@ -147,6 +151,39 @@ set_grub_option() {
     else
         printf '%s=%s\n' "$key" "$value" >> "$file"
     fi
+}
+
+# ---------------- OS-PROBER HELPERS ----------------
+#
+# By default os-prober scans EVERY partition it can see, so USB sticks
+# (Arch/Windows installers, rescue sticks), external drives, etc. show up
+# as boot menu entries. With OS_PROBER_MODE="internal" we tell GRUB to skip
+# filesystems on removable/USB-attached disks via GRUB_OS_PROBER_SKIP_LIST
+# (a space-separated list of "<fs UUID>@<device>" -- the form that works on
+# both older and newer GRUB). The list lives in /etc/default/grub, so it
+# also applies to later automatic grub-mkconfig runs (kernel updates,
+# grub-btrfs).
+
+# Prints "UUID@/dev/part" for every filesystem on a removable (RM=1) or
+# USB-attached (TRAN=usb) disk, including optical drives.
+external_skip_list() {
+    local disk rm tran part uuid out=()
+    while read -r disk rm tran; do
+        [[ "$rm" == "1" || "$tran" == "usb" ]] || continue
+        while read -r part uuid; do
+            [[ -n "$uuid" ]] && out+=("${uuid}@/dev/${part}")
+        done < <(lsblk -rno NAME,UUID "/dev/${disk}" | awk 'NF==2')
+    done < <(lsblk -dno NAME,RM,TRAN | awk '{print $1, $2, ($3 == "" ? "-" : $3)}')
+    echo "${out[*]:-}"
+}
+
+# True if the given partition (/dev/...) sits on a removable/USB disk.
+is_external_disk_part() {
+    local pk rm tran
+    pk="$(lsblk -no PKNAME "$1" 2>/dev/null | head -n1)"
+    [[ -n "$pk" ]] || pk="$(basename "$1")"
+    read -r rm tran < <(lsblk -dno RM,TRAN "/dev/${pk}" 2>/dev/null | awk '{print $1, ($2 == "" ? "-" : $2)}') || return 1
+    [[ "$rm" == "1" || "$tran" == "usb" ]]
 }
 
 # ---------------- BASIC CHECKS ----------------
@@ -287,6 +324,21 @@ PLYMOUTH_SELECTED="$(dlg_capture --title "Plymouth boot splash" --default-item n
     "${PLY_ITEMS[@]}")" || abort
 [[ "$PLYMOUTH_SELECTED" != "none" ]] || PLYMOUTH_SELECTED=""
 
+# ---------------- OTHER OPERATING SYSTEMS (os-prober) ----------------
+
+OS_PROBER_MODE="internal"
+if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
+    OS_PROBER_MODE="$(dlg_capture --title "Other operating systems" --default-item internal \
+        --menu "How should GRUB look for other operating systems (e.g. Windows or another Linux)?" \
+        0 "$BOX_W" 0 \
+        internal "Windows/Linux on INTERNAL disks only (recommended)" \
+        all      "Everything os-prober finds (USB sticks, external disks, ...)" \
+        off      "Don't add other operating systems to the menu")" || abort
+    [[ "$OS_PROBER_MODE" != "off" ]] || ENABLE_OS_PROBER="no"
+else
+    OS_PROBER_MODE="off"
+fi
+
 # ---------------- CONFIRM ----------------
 
 SUMMARY_FILE="$(mktemp)"
@@ -306,7 +358,7 @@ printf '%s\n' "Microcode   : ${UCODE_PKG:-none}"
 printf '%s\n' "GRUB Theme  : ${GRUB_THEME_NAME:-none}"
 printf '%s\n' "Plymouth    : ${PLYMOUTH_SELECTED:-none}"
 printf '%s\n' "UEFI entry  : $GRUB_BOOTLOADER_ID"
-printf '%s\n' "OS prober   : $ENABLE_OS_PROBER"
+printf '%s\n' "OS prober   : $ENABLE_OS_PROBER (mode: $OS_PROBER_MODE)"
 printf '%s\n' "============================================================"
 printf '\n'
 printf '%s\n' "The script will configure:"
@@ -333,7 +385,11 @@ else
     printf '%s\n' "  * Btrfs quota support: SKIPPED (ENABLE_BTRFS_QUOTA=no)"
 fi
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
-    printf '%s\n' "  * os-prober enabled (GRUB will scan for other OSes)"
+    if [[ "$OS_PROBER_MODE" == "internal" ]]; then
+        printf '%s\n' "  * os-prober enabled -- internal disks only (USB/removable skipped)"
+    else
+        printf '%s\n' "  * os-prober enabled -- scans every disk it can see"
+    fi
 fi
 printf '%s\n' "============================================================"
 printf '\n'
@@ -669,6 +725,25 @@ set_grub_option "GRUB_SAVEDEFAULT" "true"  "$GRUB_DEFAULT_FILE"
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     log "Enabling os-prober so GRUB detects other operating systems..."
     set_grub_option "GRUB_DISABLE_OS_PROBER" "false" "$GRUB_DEFAULT_FILE"
+
+    if [[ "$OS_PROBER_MODE" == "internal" ]]; then
+        OS_SKIP_LIST="$(external_skip_list)"
+        set_grub_option "GRUB_OS_PROBER_SKIP_LIST" "\"${OS_SKIP_LIST}\"" "$GRUB_DEFAULT_FILE"
+        if [[ -n "$OS_SKIP_LIST" ]]; then
+            info "os-prober will skip these USB/removable filesystems:"
+            for entry in $OS_SKIP_LIST; do info "  $entry"; done
+        else
+            info "No USB/removable disks with filesystems are connected right now."
+        fi
+        info "(Only devices connected NOW are listed. A USB stick with a different"
+        info " UUID plugged in later can still be detected -- re-run this step or add"
+        info " its UUID@device to GRUB_OS_PROBER_SKIP_LIST in /etc/default/grub.)"
+    elif grep -qE '^#?[[:space:]]*GRUB_OS_PROBER_SKIP_LIST=' "$GRUB_DEFAULT_FILE"; then
+        # "all" mode: clear any skip list left by an earlier run.
+        set_grub_option "GRUB_OS_PROBER_SKIP_LIST" '""' "$GRUB_DEFAULT_FILE"
+    fi
+elif [[ "$OS_PROBER_MODE" == "off" ]]; then
+    set_grub_option "GRUB_DISABLE_OS_PROBER" "true" "$GRUB_DEFAULT_FILE"
 fi
 
 # Build the command line for systemd's sd-encrypt hook.
@@ -823,6 +898,11 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
             continue
         fi
 
+        # In "internal" mode don't even look at USB/removable disks.
+        if [[ "$OS_PROBER_MODE" == "internal" ]] && is_external_disk_part "$dev"; then
+            continue
+        fi
+
         if mount -o ro "$dev" "$WIN_ESP_MOUNT" 2>/dev/null; then
             if [[ -f "$WIN_ESP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]]; then
                 WIN_ESP="$dev"
@@ -918,6 +998,11 @@ fi
 echo
 echo "--- GRUB command line ---"
 grep -E '^[[:space:]]*GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
+
+echo
+echo "--- Other operating systems in the GRUB menu ---"
+OS_ENTRIES="$(grep -E "^menuentry '.*osprober" /boot/grub/grub.cfg 2>/dev/null | sed -E "s/^menuentry '([^']*)'.*/  \1/" || true)"
+echo "${OS_ENTRIES:-  (none found)}"
 
 echo
 echo "--- GRUB saved default ---"
