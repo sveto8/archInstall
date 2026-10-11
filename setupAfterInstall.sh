@@ -98,16 +98,41 @@ GRUB_DEFAULT_FILE="/etc/default/grub"
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
 # / poly-dark / none), not hardcoded here.
 
+# Some GRUB versions (2.12+) auto-add a menuentry for every UEFI "Boot####"
+# variable in NVRAM -- "UiApp", "UEFI VBOX CD-ROM", "UEFI VBOX HARDDISK",
+# "PXE", and even our own "GRUB" / "Arch Linux" entries. These are pure
+# clutter (you never want to boot the firmware's boot list from the boot
+# menu) and are stripped out of /boot/grub/grub.cfg right after it is
+# generated. The plain "UEFI Firmware Settings" entry is NOT affected --
+# it has a different title.
+STRIP_EFI_BOOTNEXT_ENTRIES="yes"
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
-    _url="https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh"
-    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "$_url" 2>/dev/null || true)"
-    if [[ "$_code" == "200" ]]; then
-        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
+    # Download to a temporary file FIRST (never write a partial file
+    # directly next to the script -- the folder may be a read-only or
+    # permission-quirky mount). Verify the download produced a non-empty
+    # file, then move it into place. If the script folder turns out to be
+    # unwritable, fall back to keeping lib.sh in $TMPDIR.
+    _lib_tmp="$(mktemp "${TMPDIR:-/tmp}/lib.sh.XXXXXX")" || {
+        echo "ERROR: could not create a temporary file for lib.sh." >&2
+        exit 1
+    }
+    _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
+        "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" 2>/dev/null || true)"
+    if [[ -s "$_lib_tmp" ]]; then
+        if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
+            :
+        else
+            _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
+            mv "$_lib_tmp" "$_lib_fallback"
+            echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
+            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+        fi
     else
-        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
-        echo "       URL: $_url  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
+        echo "       URL: https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh (HTTP ${_code:-000})" >&2
         echo "       Put lib.sh in the same folder as this script and run it again." >&2
         exit 1
     fi
@@ -193,6 +218,47 @@ is_external_disk_part() {
     [[ -n "$pk" ]] || pk="$(basename "$1")"
     read -r rm tran < <(lsblk -dno RM,TRAN "/dev/${pk}" 2>/dev/null | awk '{print $1, ($2 == "" ? "-" : $2)}') || return 1
     [[ "$rm" == "1" || "$tran" == "usb" ]]
+}
+
+# ---------------- GRUB: STRIP 'EFI BootNext' ENTRIES ----------------
+#
+# Newer GRUB versions (2.12+) add a menuentry for every UEFI "Boot####"
+# variable in NVRAM, so the menu gets polluted with entries like
+# "UEFI Firmware Settings" (kept -- that one is useful), "UiApp",
+# "UEFI VBOX CD-ROM", "UEFI VBOX HARDDISK", "PXE", and even our own
+# "GRUB" / "Arch Linux" entries. Only the ones whose title ends with
+# "(EFI BootNext)" are removed; everything else (including submenu
+# wrappers that only contained such entries -- they are simply left
+# empty) is preserved.
+#
+# Implementation: an awk state machine that skips a `menuentry ...
+# (EFI BootNext) ... { ... }` block entirely, tracking brace depth so
+# that nested { } inside the block don't confuse it.
+strip_efi_bootnext_entries() {
+    local cfg="/boot/grub/grub.cfg"
+    [[ -f "$cfg" ]] || return 0
+    grep -q '(EFI BootNext)' "$cfg" 2>/dev/null || return 0
+
+    local tmp
+    tmp="$(mktemp)"
+    awk '
+        /^[[:space:]]*menuentry .*\(EFI BootNext\)/ {
+            skip = 1
+            depth = 0
+            n = gsub(/\{/, "{"); depth += n
+            n = gsub(/\}/, "}"); depth -= n
+            if (depth <= 0) skip = 0
+            next
+        }
+        skip {
+            n = gsub(/\{/, "{"); depth += n
+            n = gsub(/\}/, "}"); depth -= n
+            if (depth <= 0) skip = 0
+            next
+        }
+        { print }
+    ' "$cfg" > "$tmp"
+    mv "$tmp" "$cfg"
 }
 
 # ---------------- BASIC CHECKS ----------------
@@ -400,6 +466,9 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
         printf '%s\n' "  * os-prober enabled -- scans every disk it can see"
     fi
 fi
+if [[ "$STRIP_EFI_BOOTNEXT_ENTRIES" == "yes" ]]; then
+    printf '%s\n' "  * strip 'EFI BootNext' clutter entries from the GRUB menu"
+fi
 printf '%s\n' "============================================================"
 printf '\n'
 
@@ -420,11 +489,16 @@ rm -f "$SUMMARY_FILE"
 ask_yes "Confirm" "Apply this configuration now?\n\nBackups of the files that get changed are written to:\n  $BACKUP_DIR" yes || abort
 
 # ============================================================
-# SETUP (unattended; live output in a dialog box)
+# SETUP (unattended; live progress in a dialog --gauge)
 #
 # Everything below runs inside run_setup(). NOTE: the body is
 # deliberately not indented -- the heredocs inside must keep their
 # terminators in column 0.
+#
+# run_with_gauge gives the function FD 3 pointing at the gauge; stdout
+# is redirected inside run_setup to $LOG_FILE so that every log/info/warn
+# line and every command's output are captured cleanly. Only gauge_msg
+# writes the percent+message frames to FD 3.
 # ============================================================
 
 run_setup() {
@@ -433,6 +507,8 @@ exec 1>>"$LOG_FILE"
 gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
 
 # ---------------- BACKUPS ----------------
+
+gauge_msg 2 "Backing up configuration files..."
 
 log "Backing up configuration files..."
 
@@ -452,6 +528,8 @@ done
 info "Backups: $BACKUP_DIR"
 
 # ---------------- PACKAGES ----------------
+
+gauge_msg 5 "Installing required packages..."
 
 log "Installing required packages..."
 
@@ -482,6 +560,7 @@ pacman -S --needed --noconfirm --noprogressbar "${PACKAGES[@]}"
 # ---------------- GRUB THEME INSTALL ----------------
 
 if [[ -n "$GRUB_THEME_NAME" ]]; then
+    gauge_msg 10 "Installing GRUB theme: $GRUB_THEME_NAME..."
     log "Installing GRUB theme: $GRUB_THEME_NAME..."
 
     mkdir -p /boot/grub/themes
@@ -527,6 +606,7 @@ fi
 # ---------------- PLYMOUTH THEME INSTALL ----------------
 
 if [[ -n "$PLYMOUTH_SELECTED" ]]; then
+    gauge_msg 15 "Installing Plymouth theme: $PLYMOUTH_SELECTED..."
     log "Installing Plymouth theme: $PLYMOUTH_SELECTED..."
 
     mkdir -p "$PLYMOUTH_TMP"
@@ -593,6 +673,8 @@ fi
 
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
 
+gauge_msg 20 "Checking /.snapshots..."
+
 log "Checking /.snapshots..."
 
 SNAPSHOT_SOURCE="$(findmnt -n -o SOURCE /.snapshots)"
@@ -602,6 +684,8 @@ SNAPSHOT_SOURCE="$(findmnt -n -o SOURCE /.snapshots)"
 chmod 750 /.snapshots || true
 
 # ---------------- SNAPPER CONFIG ----------------
+
+gauge_msg 25 "Configuring Snapper for / ..."
 
 log "Configuring Snapper for / ..."
 
@@ -641,6 +725,8 @@ snapper -c "$SNAPPER_CONFIG" get-config >/dev/null
 
 # ---------------- SNAPPER POLICY ----------------
 
+gauge_msg 30 "Configuring snapshot retention..."
+
 log "Configuring snapshot retention..."
 
 snapper -c "$SNAPPER_CONFIG" set-config \
@@ -663,6 +749,7 @@ snapper -c "$SNAPPER_CONFIG" set-config \
 # ---------------- BTRFS QUOTA ----------------
 
 if [[ "$ENABLE_BTRFS_QUOTA" == "yes" ]]; then
+    gauge_msg 35 "Enabling Btrfs quotas for Snapper..."
     log "Enabling Btrfs quotas for Snapper..."
     snapper -c "$SNAPPER_CONFIG" setup-quota || \
         warn "Snapper quota setup returned non-zero. Check: btrfs qgroup show /"
@@ -672,6 +759,8 @@ else
 fi
 
 # ---------------- SYSTEMD TIMERS ----------------
+
+gauge_msg 40 "Enabling Snapper timers..."
 
 log "Enabling Snapper timers..."
 
@@ -684,10 +773,13 @@ else
     warn "snapper-boot.timer is not available in this Snapper version."
 fi
 
+gauge_msg 45 "Enabling fstrim.timer (periodic TRIM)..."
 log "Enabling fstrim.timer (periodic TRIM)..."
 systemctl enable --now fstrim.timer
 
 # ---------------- MKINITCPIO ----------------
+
+gauge_msg 50 "Configuring mkinitcpio..."
 
 log "Configuring mkinitcpio..."
 
@@ -710,6 +802,8 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 EOF
 
 # ---------------- GRUB CONFIG ----------------
+
+gauge_msg 58 "Configuring GRUB kernel parameters..."
 
 log "Configuring GRUB kernel parameters..."
 
@@ -808,6 +902,8 @@ fi
 
 # ---------------- GRUB INSTALL ----------------
 
+gauge_msg 66 "Installing GRUB for UEFI (boot entry '$GRUB_BOOTLOADER_ID')..."
+
 log "Installing/reinstalling GRUB for UEFI with boot entry '$GRUB_BOOTLOADER_ID'..."
 
 grub-install \
@@ -869,6 +965,8 @@ fi
 
 # ---------------- GRUB-BTRFS ----------------
 
+gauge_msg 74 "Enabling grub-btrfs daemon..."
+
 log "Enabling grub-btrfs daemon..."
 
 if systemctl list-unit-files grub-btrfsd.service >/dev/null 2>&1; then
@@ -878,6 +976,8 @@ else
 fi
 
 # ---------------- INITRAMFS ----------------
+
+gauge_msg 78 "Rebuilding initramfs..."
 
 log "Rebuilding initramfs..."
 
@@ -898,6 +998,7 @@ WIN_ESP=""
 WIN_ESP_MOUNT="/mnt/win-esp"
 
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
+    gauge_msg 82 "Searching for a Windows ESP (for os-prober detection)..."
     log "Searching for a Windows ESP (for os-prober detection)..."
     mkdir -p "$WIN_ESP_MOUNT"
 
@@ -932,9 +1033,27 @@ fi
 
 # ---------------- GRUB CONFIG ----------------
 
+gauge_msg 88 "Generating GRUB configuration..."
+
 log "Generating GRUB configuration..."
 
 grub-mkconfig -o /boot/grub/grub.cfg
+
+# ---------------- STRIP 'EFI BootNext' ENTRIES FROM GRUB MENU ----------------
+#
+# Newer GRUB versions add a menuentry for every UEFI Boot#### variable in
+# NVRAM (UiApp, CD-ROM, PXE, and even our own 'Arch Linux' / 'GRUB'
+# entries). These entries just clutter the boot menu -- you boot the OS
+# from the disk, not by re-invoking the firmware's boot list. Only the
+# entries whose title ends with "(EFI BootNext)" are removed; the
+# "UEFI Firmware Settings" entry and everything else stay untouched.
+
+if [[ "$STRIP_EFI_BOOTNEXT_ENTRIES" == "yes" ]]; then
+    gauge_msg 92 "Removing 'EFI BootNext' entries from the GRUB menu..."
+    log "Removing 'EFI BootNext' entries from the GRUB menu..."
+    strip_efi_bootnext_entries
+    info "EFI BootNext entries stripped from /boot/grub/grub.cfg."
+fi
 
 # ---------------- WINDOWS ESP CLEANUP ----------------
 #
@@ -950,6 +1069,8 @@ fi
 
 # ---------------- INITIAL SNAPSHOT ----------------
 
+gauge_msg 95 "Creating initial protected system snapshot..."
+
 log "Creating initial protected system snapshot..."
 
 INITIAL_SNAPSHOT_ID="$(
@@ -960,6 +1081,8 @@ INITIAL_SNAPSHOT_ID="$(
 )"
 
 # ---------------- CLEANUP OLD SNAPSHOTS ----------------
+
+gauge_msg 98 "Running initial Snapper cleanup..."
 
 log "Running initial Snapper cleanup..."
 
@@ -1015,6 +1138,11 @@ echo
 echo "--- Other operating systems in the GRUB menu ---"
 OS_ENTRIES="$(grep -E "^menuentry '.*osprober" /boot/grub/grub.cfg 2>/dev/null | sed -E "s/^menuentry '([^']*)'.*/  \1/" || true)"
 echo "${OS_ENTRIES:-  (none found)}"
+
+echo
+echo "--- EFI BootNext entries left in the GRUB menu ---"
+BOOTNEXT_LEFT="$(grep -c '(EFI BootNext)' /boot/grub/grub.cfg 2>/dev/null || true)"
+echo "  ${BOOTNEXT_LEFT:-0} (should be 0)"
 
 echo
 echo "--- GRUB saved default ---"
@@ -1076,12 +1204,19 @@ echo "Configuration backups:"
 echo "  $BACKUP_DIR"
 echo
 echo "============================================================"
+
+gauge_msg 100 "Setup complete."
+
+# Restore stdout so the caller (run_with_gauge) sees a clean pipe.
+exec 1>&3
+exec 3>&-
 }
 
-run_on_terminal "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup nowait
+run_with_gauge "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup
 
-if [[ "$RUN_RC" -ne 0 ]]; then
-    msg_box "Setup FAILED" "The setup did not finish.\n\nNothing was deleted -- backups of the changed files are in:\n  $BACKUP_DIR\n\nSee the log for details:\n  $LOG_FILE"
+if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
+    _tail="$(tail -n 30 "$LOG_FILE" 2>/dev/null || echo '(log unavailable)')"
+    msg_box "Setup FAILED" "The setup did not finish.\n\nLast lines of the log:\n\n${_tail}\n\nNothing was deleted -- backups of the changed files are in:\n  $BACKUP_DIR\n\nFull log:\n  $LOG_FILE"
     exit 1
 fi
 
