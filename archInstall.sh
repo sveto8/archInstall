@@ -419,6 +419,50 @@ run_install() {
 # captures the full transcript in $LOG_FILE.
 exec 3>&1
 exec 1>>"$LOG_FILE"
+
+# ---- Phase checklist shown inside the gauge prompt ----
+local -a PHASES=(
+    "User info collected"
+    "Disk partitioned"
+    "Encryption & filesystems"
+    "Base system installed (pacstrap)"
+    "System configured (chroot)"
+    "Desktop environment"
+    "Finalizing"
+)
+local CURRENT_PHASE=0
+
+_phase_prompt() {
+    local i out=""
+    for ((i=0; i<${#PHASES[@]}; i++)); do
+        if (( i < CURRENT_PHASE )); then
+            out+="  [x] ${PHASES[i]}"$'\n'
+        elif (( i == CURRENT_PHASE )); then
+            out+="  [>] ${PHASES[i]}"$'\n'
+        else
+            out+="  [ ] ${PHASES[i]}"$'\n'
+        fi
+    done
+    printf '%s' "$out"
+}
+
+# New gauge_msg: prints the phase checklist, then a blank line, then the
+# current message, above the progress bar. Called from anywhere inside
+# run_install (including inside pipelines -- it only reads CURRENT_PHASE).
+gauge_msg() {
+    local pct="$1" msg="$2"
+    {
+        printf 'XXX\n%d\n' "$pct"
+        _phase_prompt
+        printf '\n%s\n' "$msg"
+        printf 'XXX\n'
+    } >&3
+}
+
+# set_phase <N> -- advance to the N-th phase (0-based). Must be called
+# OUTSIDE pipelines (it modifies a local var).
+set_phase() { CURRENT_PHASE="$1"; }
+
 gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
 
 # ---------------- PARTITIONING ----------------
@@ -429,6 +473,7 @@ log "Wiping and partitioning $DEVICE..."
 
 echo
 echo "==> Wiping existing filesystem signatures..."
+set_phase 1
 wipefs -af "$DEVICE"
 
 echo
@@ -464,6 +509,7 @@ gauge_msg 6 "Formatting ESP and /boot..."
 
 log "Formatting ESP and /boot..."
 
+set_phase 2
 mkfs.fat -F32 -n EFI "$ESP"
 mkfs.ext4 -F -L boot "$BOOTPART"
 sync
@@ -562,6 +608,7 @@ PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
 # installing pkg" lines drive the gauge between 21% and 43%. stdbuf -oL
 # forces line-buffered output so the gauge updates smoothly instead of
 # in bursts.
+set_phase 3
 stdbuf -oL pacstrap -K /mnt "${PACKAGES[@]}" 2>&1 | while IFS= read -r line; do
     printf '%s\n' "$line"
     if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
@@ -678,6 +725,7 @@ gauge_msg 51 "Configuring the new system (chroot)..."
 log "Configuring the new system (chroot)..."
 
 # --- CHROOT SCRIPT ---
+set_phase 4
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
@@ -861,6 +909,7 @@ else
 fi
 
 # Scripts already next to this one (incl. lib.sh), then anything missing from the repo.
+set_phase 6
 cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
 cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh   # the manager sources it from its own folder
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
