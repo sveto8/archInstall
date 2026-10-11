@@ -92,7 +92,51 @@ ui_init() {
     LOG_W=$(( TERM_COLS - 4 ))
 }
 
-dlg() { dialog --backtitle "$BACKTITLE" "$@"; }
+# Number of screen lines a text needs at the current box width (counts \n
+# escapes / real newlines and estimates word wrapping).
+_text_lines() {
+    printf '%b' "$1" | awk -v w=$(( BOX_W - 6 )) '
+        { l = length($0); n += (l == 0) ? 1 : int((l + w - 1) / w) }
+        END { print n + 0 }'
+}
+
+# Box geometry for a --menu/--checklist with <n> items: the list gets exactly
+# as many rows as there are items (so everything is visible at once and the
+# box is no bigger than needed); only if that would not fit on the screen is
+# the list capped and made scrollable.
+#   _menu_geometry <text> <item_count>   -> sets MENU_H (box) and MENU_MH (list)
+_menu_geometry() {
+    local tl avail
+    tl="$(_text_lines "$1")"
+    avail=$(( TERM_LINES - tl - 7 ))
+    (( avail < 3 )) && avail=3
+    MENU_MH=$2
+    (( MENU_MH > avail )) && MENU_MH=$avail
+    (( MENU_MH < 1 )) && MENU_MH=1
+    MENU_H=$(( tl + MENU_MH + 7 ))
+}
+
+# dialog wrapper. For --menu / --checklist / --radiolist the height and the
+# list-height arguments the caller passes (normally 0 0) are replaced with
+# values computed from the real item count -- passing 0 makes dialog show a
+# big empty box with only a row or two of the list visible.
+dlg() {
+    local args=("$@") n=$# i kind="" per=2 count
+    for ((i = 0; i < n; i++)); do
+        case "${args[i]}" in
+            --menu|--checklist|--radiolist) kind="${args[i]}"; break ;;
+        esac
+    done
+    if [[ -n "$kind" ]]; then
+        [[ "$kind" == "--menu" ]] || per=3
+        # layout: <kind> TEXT HEIGHT WIDTH LIST-HEIGHT item...
+        count=$(( (n - i - 5) / per ))
+        _menu_geometry "${args[i+1]}" "$count"
+        args[i+2]="$MENU_H"
+        args[i+4]="$MENU_MH"
+    fi
+    dialog --backtitle "$BACKTITLE" "${args[@]}"
+}
 
 # Like dlg, but what the user selected/typed comes back on stdout
 # (dialog itself writes results to stderr).
@@ -108,11 +152,10 @@ abort() {
 # ---------------- DIALOG WIDGET HELPERS ----------------
 # Text may contain \n; it is expanded by dialog.
 
-# Height that fits a text (lines + frame), capped to the terminal.
+# Height that fits a text (wrapped lines + frame/buttons), capped to the terminal.
 _text_height() {
-    local n h
-    n="$(printf '%b' "$1" | wc -l)"
-    h=$(( n + 8 ))
+    local h
+    h=$(( $(_text_lines "$1") + 8 ))
     (( h > TERM_LINES - 2 )) && h=$(( TERM_LINES - 2 ))
     printf '%s' "$h"
 }
