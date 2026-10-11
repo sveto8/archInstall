@@ -1,0 +1,738 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+set -o errtrace
+
+# ============================================================
+# Arch Linux: Base install with LUKS2 + Btrfs  ("Phase 0")
+#
+# Run this from the Arch ISO LIVE environment (not from an
+# already-installed system). It WIPES the target device.
+#
+# Produces exactly the layout expected by setup-btrfs-snapper.sh:
+#
+#   /efi         unencrypted ESP  (FAT32)
+#   /boot        unencrypted      (ext4)
+#
+#   LUKS2
+#     └── Btrfs
+#          ├── @             -> /
+#          ├── @home        -> /home
+#          └── @snapshots   -> /.snapshots
+#
+# After this script finishes, reboot into the new system and run
+# setup-btrfs-snapper.sh as root to finish Snapper/GRUB/Plymouth/quota,
+# then installDE.sh to install a desktop environment (GNOME, KDE Plasma,
+# COSMIC, or none). This script only produces a bootable, CLI-only
+# base system -- no desktop environment is installed here.
+# ============================================================
+
+# ---------------- CONFIGURATION (edit before running) ----------------
+
+ESP_SIZE="1GiB"
+BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
+HOSTNAME="monarch"
+TIMEZONE="Europe/Zagreb"
+LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
+LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the system
+KEYMAP="us"
+MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
+
+# ---------------- COLORS ----------------
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m' # No Color
+
+# -----------------------------------------------------------------------
+# -----------------------------------------------------------------------
+
+log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
+info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
+warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
+die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
+error() { printf '\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; }
+
+trap 'die "Failed at line $LINENO."' ERR
+
+# ---------------- BASIC CHECKS ----------------
+
+[[ $EUID -eq 0 ]] || die "Run this script as root (from the Arch ISO live environment)."
+[[ -d /sys/firmware/efi ]] || die "Not booted in UEFI mode."
+
+command -v sgdisk >/dev/null || die "sgdisk not found (package: gptfdisk)."
+command -v cryptsetup >/dev/null || die "cryptsetup not found."
+command -v mkfs.btrfs >/dev/null || die "mkfs.btrfs not found (package: btrfs-progs)."
+command -v pacstrap >/dev/null || die "pacstrap not found (are you on the Arch ISO?)."
+
+# ---------------- SELECT DISK ----------------
+
+echo
+echo "============================================================"
+echo " Available disks"
+echo "============================================================"
+lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
+echo
+
+read -r -p "Disk to install onto (e.g. /dev/sda, /dev/nvme0n1): " DEVICE
+[[ -n "$DEVICE" ]] || die "No disk entered."
+[[ -b "$DEVICE" ]] || die "$DEVICE is not a block device."
+
+# Refuse to run against something that is currently mounted (e.g. the live USB itself),
+# but offer to clean up leftover mounts from a previous, interrupted run of this script.
+if lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -q .; then
+    warn "$DEVICE (or a partition on it) has active mounts, possibly left over from a previous run:"
+    lsblk "$DEVICE"
+    echo
+    read -r -p "Unmount everything under $DEVICE and continue? [Y/n] " UNMOUNT_ANSWER
+    [[ "$UNMOUNT_ANSWER" =~ ^[Nn]$ ]] && die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
+    log "Unmounting leftover mounts..."
+    umount -R /mnt 2>/dev/null || true
+    cryptsetup close cryptroot 2>/dev/null || true
+    sleep 1
+    STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -v '^$' || true)"
+    if [[ -n "$STILL_MOUNTED" ]]; then
+        die "Could not fully unmount $DEVICE. Unmount manually (umount -R /mnt; cryptsetup close cryptroot) and re-run."
+    fi
+    info "Unmounted and closed cryptroot successfully."
+fi
+
+# partition suffix: /dev/nvme0n1 -> nvme0n1p1, /dev/sda -> sda1
+if [[ "$DEVICE" == *nvme* || "$DEVICE" == *mmcblk* ]]; then
+    SUF="p"
+else
+    SUF=""
+fi
+ESP="${DEVICE}${SUF}1"
+BOOTPART="${DEVICE}${SUF}2"
+LUKSPART="${DEVICE}${SUF}3"
+
+UCODE_PKG=""
+if grep -qi 'AuthenticAMD' /proc/cpuinfo; then
+    UCODE_PKG="amd-ucode"
+elif grep -qi 'GenuineIntel' /proc/cpuinfo; then
+    UCODE_PKG="intel-ucode"
+fi
+
+# ---------------- CONFIRM ----------------
+
+printf '\n'
+echo "============================================================"
+echo " THIS WILL DESTROY ALL DATA ON: $DEVICE"
+echo "============================================================"
+lsblk "$DEVICE"
+echo
+echo "Planned layout:"
+echo "  ${ESP}      -> ESP (FAT32, $ESP_SIZE)          -> /efi"
+echo "  ${BOOTPART} -> ext4 ($BOOT_SIZE)                -> /boot"
+echo "  ${LUKSPART} -> LUKS2 -> Btrfs (@ @home @snapshots)"
+echo "  Hostname:   $HOSTNAME"
+echo "  Timezone:   $TIMEZONE"
+echo "  Locale:     $LOCALE"
+echo "  Microcode:  ${UCODE_PKG:-none detected}"
+echo "============================================================"
+echo
+read -r -p "Type WIPE (all caps) to continue: " CONFIRM
+[[ "$CONFIRM" == "WIPE" ]] || { echo "Cancelled."; exit 0; }
+
+# ---------------- REGULAR USER ----------------
+
+echo
+read -r -p "Username for the new regular user (leave empty to skip): " NEW_USERNAME
+if [[ -n "$NEW_USERNAME" ]]; then
+    if [[ "$NEW_USERNAME" == "root" ]]; then
+        die "Refusing to create a regular user named 'root'."
+    fi
+    read -r -p "Should $NEW_USERNAME be a superuser (added to wheel + sudo)? [Y/n] " MAKE_SUDO
+    [[ "$MAKE_SUDO" =~ ^[Nn]$ ]] && MAKE_SUDO="no" || MAKE_SUDO="yes"
+    info "User: $NEW_USERNAME (sudo: $MAKE_SUDO). You'll set the password interactively at the end."
+else
+    warn "No regular user will be created; only root will exist on the new system."
+    MAKE_SUDO="no"
+fi
+
+# ---------------- ROOT PASSWORD ----------------
+#
+# No separate question here: if a sudo-enabled user was just created,
+# root stays locked automatically (use sudo instead). A root password
+# is only requested if there's no sudo user, since otherwise nothing
+# could log into the system at all.
+
+if [[ -n "$NEW_USERNAME" && "$MAKE_SUDO" == "yes" ]]; then
+    SET_ROOT_PASSWORD="no"
+    info "Sudo-enabled user created -- root account stays locked (no root password)."
+else
+    SET_ROOT_PASSWORD="yes"
+    info "No sudo-enabled user configured -- you'll be asked to set a root password so you can still log in."
+fi
+
+# ---------------- HARDWARE CLOCK (RTC) ----------------
+#
+# Linux keeps the hardware clock in UTC by default. Windows, on the
+# other hand, assumes the hardware clock is in LOCAL time. On a dual-
+# boot machine, if both OSes assume their own convention, Windows will
+# show the wrong time (offset by your timezone).
+#
+# Options:
+#   UTC   -> Linux default. Recommended for Linux-only machines.
+#   LOCAL -> Windows-compatible. Recommended if you dual-boot Windows
+#            and don't want to change the registry on the Windows side.
+
+echo
+echo "Hardware clock (RTC) mode:"
+echo "  1) UTC (Linux default, recommended unless dual-booting Windows)"
+echo "  2) Local time (use this if you dual-boot Windows)"
+read -r -p "Choice [1]: " RTC_CHOICE
+RTC_CHOICE="${RTC_CHOICE:-1}"
+
+if [[ "$RTC_CHOICE" == "2" ]]; then
+    RTC_MODE="local"
+    info "RTC will be set to LOCAL time (Windows-compatible)."
+else
+    RTC_MODE="utc"
+    info "RTC will be set to UTC (Linux default)."
+fi
+
+# ---------------- WAKE-ON-LAN (WOL) ----------------
+#
+# Wake-on-LAN needs two things: the NIC's driver/firmware told to keep
+# listening for a magic packet (`ethtool -s <iface> wol g`), and that
+# setting re-applied on every boot, since most drivers reset it to "off"
+# each time the interface comes up. We detect the wired interface name
+# here (from the live environment -- predictable names like enp39s0 are
+# derived from the PCI topology, so they carry over to the installed
+# system on the same hardware) rather than hardcoding one, and install a
+# templated systemd service that re-applies the setting at every boot.
+
+ENABLE_WOL="no"
+WOL_IFACE=""
+
+echo
+read -r -p "Enable Wake-on-LAN (WOL)? [y/N] " WOL_ANSWER
+if [[ "$WOL_ANSWER" =~ ^[Yy]$ ]]; then
+    # Wired interfaces only: anything under /sys/class/net without a
+    # "wireless" subdirectory and that isn't loopback. WOL only applies
+    # to Ethernet NICs, so Wi-Fi adapters are excluded here.
+    WOL_CANDIDATES=()
+    for ifc in /sys/class/net/*; do
+        name="$(basename "$ifc")"
+        [[ "$name" == "lo" ]] && continue
+        [[ -d "$ifc/wireless" ]] && continue
+        WOL_CANDIDATES+=("$name")
+    done
+
+    if [[ "${#WOL_CANDIDATES[@]}" -eq 0 ]]; then
+        warn "No wired network interface detected -- skipping Wake-on-LAN."
+    elif [[ "${#WOL_CANDIDATES[@]}" -eq 1 ]]; then
+        WOL_IFACE="${WOL_CANDIDATES[0]}"
+        info "Detected network interface: $WOL_IFACE"
+    else
+        echo "Multiple wired interfaces detected:"
+        select_i=1
+        for c in "${WOL_CANDIDATES[@]}"; do
+            echo "  $select_i) $c"
+            ((select_i++))
+        done
+        read -r -p "Which interface should have WOL enabled? [1]: " WOL_PICK
+        WOL_PICK="${WOL_PICK:-1}"
+        if [[ "$WOL_PICK" =~ ^[0-9]+$ ]] && [[ "$WOL_PICK" -ge 1 && "$WOL_PICK" -le "${#WOL_CANDIDATES[@]}" ]]; then
+            WOL_IFACE="${WOL_CANDIDATES[$((WOL_PICK-1))]}"
+        else
+            warn "Invalid choice -- skipping Wake-on-LAN."
+        fi
+    fi
+
+    # Best-effort capability check -- purely informational, never blocks
+    # the install. ethtool may not be present on the live ISO itself.
+    if [[ -n "$WOL_IFACE" ]] && command -v ethtool >/dev/null 2>&1; then
+        if ethtool "$WOL_IFACE" 2>/dev/null | grep -qi 'Supports Wake-on:.*g'; then
+            info "$WOL_IFACE reports support for 'g' (magic packet) Wake-on-LAN."
+        else
+            warn "$WOL_IFACE does not appear to report 'g' Wake-on-LAN support (continuing anyway -- some drivers misreport this)."
+        fi
+    fi
+
+    if [[ -n "$WOL_IFACE" ]]; then
+        ENABLE_WOL="yes"
+        info "Wake-on-LAN will be enabled on $WOL_IFACE (installs 'ethtool', enables wol@${WOL_IFACE}.service)."
+    else
+        ENABLE_WOL="no"
+    fi
+else
+    info "Wake-on-LAN will not be configured."
+fi
+
+# ---------------- WI-FI CARRY-OVER (iwd -> NetworkManager) ----------------
+#
+# A connection made with iwctl on the live ISO lives only in the live
+# system's RAM, so the installed system would boot with NetworkManager
+# but no saved network -- and no internet for the next scripts. If the
+# live ISO has saved WPA-PSK networks (/var/lib/iwd/*.psk), offer to
+# write them as NetworkManager connection profiles on the new system
+# (done after pacstrap). Open and 802.1X/enterprise networks are not
+# carried over; for those use 'nmtui' after the first boot.
+
+IWD_DIR="/var/lib/iwd"
+WIFI_CARRY="no"
+WIFI_PSK_FILES=()
+
+# iwd stores SSIDs containing anything besides [A-Za-z0-9 _-] as
+# "=" + hex of the SSID bytes in the file name; decode that back.
+iwd_ssid_from_file() {
+    local name
+    name="$(basename "$1" .psk)"
+    if [[ "$name" == =* ]]; then
+        local hex="${name#=}" out="" i
+        for ((i = 0; i < ${#hex}; i += 2)); do
+            out+="$(printf "\\x${hex:i:2}")"
+        done
+        printf '%s' "$out"
+    else
+        printf '%s' "$name"
+    fi
+}
+
+if [[ -d "$IWD_DIR" ]]; then
+    shopt -s nullglob
+    WIFI_PSK_FILES=("$IWD_DIR"/*.psk)
+    shopt -u nullglob
+fi
+
+if [[ "${#WIFI_PSK_FILES[@]}" -gt 0 ]]; then
+    WIFI_NAMES=()
+    for f in "${WIFI_PSK_FILES[@]}"; do
+        WIFI_NAMES+=("$(iwd_ssid_from_file "$f")")
+    done
+    echo
+    echo "Saved Wi-Fi network(s) on this live system: ${WIFI_NAMES[*]}"
+    read -r -p "Copy them to the installed system so it is online after reboot? [Y/n] " WIFI_ANSWER
+    if [[ ! "$WIFI_ANSWER" =~ ^[Nn]$ ]]; then
+        WIFI_CARRY="yes"
+        info "Wi-Fi network(s) will be carried over to NetworkManager."
+    fi
+fi
+
+# ---------------- PARTITIONING ----------------
+
+log "Wiping and partitioning $DEVICE..."
+
+echo
+echo "==> Wiping existing filesystem signatures..."
+wipefs -af "$DEVICE"
+
+echo
+echo "==> Wiping existing GPT/MBR partition table..."
+sgdisk --zap-all "$DEVICE"
+
+echo
+echo "==> Creating EFI partition (${ESP_SIZE})..."
+sgdisk -n1:0:+${ESP_SIZE} -t1:ef00 -c1:"EFI" "$DEVICE"
+
+echo
+echo "==> Creating boot partition (${BOOT_SIZE})..."
+sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot" "$DEVICE"
+
+echo
+echo "==> Creating root partition (remaining disk space)..."
+sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
+
+echo
+echo "==> Disk partitioning completed."
+
+partprobe "$DEVICE"
+udevadm settle
+sleep 3
+
+for p in "$ESP" "$BOOTPART" "$LUKSPART"; do
+    [[ -b "$p" ]] || die "$p does not exist yet -- the kernel may not have re-read the partition table. Try running 'partprobe $DEVICE' manually, then re-run this script."
+done
+
+# ---------------- FORMAT ESP + /boot ----------------
+
+log "Formatting ESP and /boot..."
+
+mkfs.fat -F32 -n EFI "$ESP"
+mkfs.ext4 -F -L boot "$BOOTPART"
+sync
+udevadm settle
+
+# ---------------- LUKS2 ----------------
+
+log "Creating LUKS2 container on $LUKSPART..."
+info "You will be prompted for a passphrase."
+
+for attempt in 1 2 3; do
+    if cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; then
+        break
+    fi
+
+    if [[ "$attempt" -eq 3 ]]; then
+        error "LUKS2 formatting failed after 3 attempts. Aborting."
+        exit 1
+    fi
+
+    warn "LUKS2 formatting was cancelled or confirmation was incorrect."
+    warn "Please try again. Attempt $((attempt + 1)) of 3."
+done
+
+log "Opening LUKS2 container..."
+cryptsetup open "$LUKSPART" cryptroot || {
+    error "Failed to open LUKS2 container."
+    exit 1
+}
+
+LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
+info "LUKS UUID: $LUKS_UUID"
+
+# ---------------- BTRFS ----------------
+
+log "Creating Btrfs filesystem and subvolumes..."
+
+mkfs.btrfs -L cryptroot /dev/mapper/cryptroot
+
+mount /dev/mapper/cryptroot /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@home
+btrfs subvolume create /mnt/@snapshots
+umount /mnt
+
+mount -o "${MOUNT_OPTS},subvol=@" /dev/mapper/cryptroot /mnt
+mkdir -p /mnt/{home,.snapshots,boot,efi}
+mount -o "${MOUNT_OPTS},subvol=@home" /dev/mapper/cryptroot /mnt/home
+mount -o "${MOUNT_OPTS},subvol=@snapshots" /dev/mapper/cryptroot /mnt/.snapshots
+mount "$BOOTPART" /mnt/boot
+mount "$ESP" /mnt/efi
+
+# ---------------- OPTIMIZE MIRRORLIST (reflector) ----------------
+#
+# Use reflector to rank mirrors by speed and keep only the fastest
+# HTTPS mirrors. This speeds up pacstrap and all subsequent package
+# installs on the live system.
+#
+# The Arch ISO ships with reflector, but install it if missing.
+
+log "Optimizing pacman mirrorlist with reflector..."
+
+REFLECTOR_AVAILABLE=1
+if ! command -v reflector >/dev/null 2>&1; then
+    pacman -S --needed --noconfirm reflector || REFLECTOR_AVAILABLE=0
+fi
+
+if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
+    # Backup the original mirrorlist (optional but recommended)
+    cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
+
+    # Rank the 20 most recently synchronized HTTPS mirrors by download rate
+    # and write the result back to /etc/pacman.d/mirrorlist. Only mirrors
+    # that have synced within the last 12 hours are considered.
+    #
+    # Non-fatal by design: the disk is already partitioned/formatted at
+    # this point, so a transient reflector/network hiccup shouldn't abort
+    # the whole install over what is just a speed optimization.
+    if reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist; then
+        info "Mirrorlist updated with the fastest HTTPS mirrors."
+    else
+        warn "reflector failed -- restoring the original mirrorlist and continuing with it."
+        cp /etc/pacman.d/mirrorlist.bak /etc/pacman.d/mirrorlist 2>/dev/null || true
+    fi
+else
+    warn "Could not install reflector -- continuing with the default mirrorlist."
+fi
+
+# ---------------- PACSTRAP ----------------
+
+log "Installing base system (pacstrap)..."
+
+PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
+          grub efibootmgr sudo networkmanager wpa_supplicant vim git
+          zram-generator dialog)
+[[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
+[[ "$ENABLE_WOL" == "yes" ]] && PACKAGES+=(ethtool)
+
+pacstrap -K /mnt "${PACKAGES[@]}"
+
+genfstab -U /mnt >> /mnt/etc/fstab
+
+log "/etc/fstab:"
+cat /mnt/etc/fstab
+
+# ---------------- WI-FI CARRY-OVER: WRITE NM PROFILES ----------------
+
+if [[ "$WIFI_CARRY" == "yes" ]]; then
+    log "Copying saved Wi-Fi network(s) to NetworkManager..."
+    NM_CONN_DIR="/mnt/etc/NetworkManager/system-connections"
+    mkdir -p "$NM_CONN_DIR"
+    wifi_idx=0
+    for f in "${WIFI_PSK_FILES[@]}"; do
+        ssid="$(iwd_ssid_from_file "$f")"
+        # Prefer the plain passphrase; fall back to the 64-hex PSK
+        # (NetworkManager accepts either in the psk= field).
+        psk="$(sed -n 's/^Passphrase=//p' "$f" | head -n1)"
+        [[ -n "$psk" ]] || psk="$(sed -n 's/^PreSharedKey=//p' "$f" | head -n1)"
+        if [[ -z "$ssid" || -z "$psk" ]]; then
+            warn "Could not read credentials for '$ssid' -- skipping (use 'nmtui' after reboot)."
+            continue
+        fi
+        if [[ "$ssid" == *\;* ]]; then
+            warn "SSID '$ssid' contains ';' which NetworkManager keyfiles can't store reliably -- skipping (use 'nmtui' after reboot)."
+            continue
+        fi
+        wifi_idx=$((wifi_idx + 1))
+        safe="$(printf '%s' "$ssid" | tr -c 'A-Za-z0-9._-' '_')"
+        out="${NM_CONN_DIR}/wifi-${wifi_idx}-${safe}.nmconnection"
+        # Keyfile values: backslash must be escaped.
+        ssid_esc="${ssid//\\/\\\\}"
+        psk_esc="${psk//\\/\\\\}"
+        (
+            umask 077
+            cat > "$out" <<NM_EOF
+[connection]
+id=${ssid_esc}
+uuid=$(cat /proc/sys/kernel/random/uuid)
+type=wifi
+autoconnect=true
+
+[wifi]
+mode=infrastructure
+ssid=${ssid_esc}
+
+[wifi-security]
+key-mgmt=wpa-psk
+psk=${psk_esc}
+
+[ipv4]
+method=auto
+
+[ipv6]
+addr-gen-mode=default
+method=auto
+NM_EOF
+        )
+        chmod 600 "$out"
+        info "Saved profile for '$ssid'."
+    done
+    [[ "$wifi_idx" -gt 0 ]] || WIFI_CARRY="no"
+fi
+
+# ---------------- USER ACCOUNT + PASSWORDS (interactive) ----------------
+#
+# Done right after pacstrap, before the longer unattended steps below
+# (mkinitcpio -P, grub-install, grub-mkconfig), so you answer all the
+# prompts up front and can then walk away while the rest runs.
+
+if [[ -n "${NEW_USERNAME}" ]]; then
+    log "Creating user ${NEW_USERNAME}..."
+    if [[ "${MAKE_SUDO}" == "yes" ]]; then
+        arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
+        # Enable the wheel group in sudoers (validated with visudo -c before activating).
+        arch-chroot /mnt cp /etc/sudoers /etc/sudoers.bak
+        arch-chroot /mnt sed -i -E 's/^# %wheel ALL=\(ALL:ALL\) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
+        arch-chroot /mnt visudo -c -f /etc/sudoers || {
+            arch-chroot /mnt cp /etc/sudoers.bak /etc/sudoers
+            warn "sudoers edit failed validation, reverted."
+        }
+        arch-chroot /mnt rm -f /etc/sudoers.bak
+    else
+        arch-chroot /mnt useradd -m -s /bin/bash "${NEW_USERNAME}"
+    fi
+
+    log "Set the password for ${NEW_USERNAME} now:"
+    until arch-chroot /mnt passwd "${NEW_USERNAME}"; do
+        echo "Passwords did not match or were rejected -- try again."
+    done
+fi
+
+if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
+    log "Set the root password now:"
+    until arch-chroot /mnt passwd; do
+        echo "Passwords did not match or were rejected -- try again."
+    done
+else
+    info "Skipping root password as requested -- root account stays locked."
+fi
+
+info "All passwords set. The rest of the install runs unattended from here."
+
+# ---------------- CHROOT CONFIGURATION (unattended) ----------------
+
+log "Configuring the new system (chroot)..."
+
+# --- CHROOT SCRIPT ---
+arch-chroot /mnt /bin/bash <<CHROOT_EOF
+set -Eeuo pipefail
+
+# Set hostname and time
+echo "$HOSTNAME" > /etc/hostname
+ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+
+# Hardware clock: either UTC (Linux default) or LOCAL (Windows-friendly).
+# The /etc/adjtime file records the chosen mode for hwclock/systemd.
+if [[ "$RTC_MODE" == "local" ]]; then
+    hwclock --systohc --localtime
+else
+    hwclock --systohc --utc
+fi
+
+# --- Enable locales ---
+# Enable en_US.UTF-8
+sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
+grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
+
+# Enable hr_HR.UTF-8
+sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
+grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
+
+locale-gen
+
+# Set system locale and keymap
+echo "LANG=${LOCALE}" > /etc/locale.conf
+echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
+
+# Export LANGUAGE to avoid "NO" in GDM and other display managers
+mkdir -p /etc/profile.d
+echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
+chmod 644 /etc/profile.d/locale.sh
+
+# Hosts file
+cat >> /etc/hosts <<HOSTS_EOF
+127.0.0.1   localhost
+::1         localhost
+127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+HOSTS_EOF
+
+# Enable NetworkManager
+systemctl enable NetworkManager
+
+# Wake-on-LAN: most NIC drivers reset "wol g" back to off on every boot,
+# so a one-shot systemd service (templated on the interface name) is
+# needed to re-apply it after each boot, not just once here.
+if [[ "$ENABLE_WOL" == "yes" ]]; then
+    cat > /etc/systemd/system/wol@.service <<'WOL_EOF'
+[Unit]
+Description=Wake-on-LAN for %i
+Requires=network.target
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/ethtool -s %i wol g
+
+[Install]
+WantedBy=multi-user.target
+WOL_EOF
+    systemctl enable "wol@${WOL_IFACE}.service"
+fi
+
+# Configure ZRAM swap for better performance and reduced SSD wear.
+# A zram device is created in RAM, compressed, and used as swap.
+# This is especially useful on systems with limited RAM or SSDs.
+# The config below creates a zram device sized at 50% of RAM,
+# using the zstd compression algorithm.
+cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
+[zram0]
+zram-size = ram / 2
+compression-algorithm = zstd
+swap-priority = 100
+fs-type = swap
+ZRAM_EOF
+
+# Initramfs: systemd-based with proper hooks
+sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
+cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
+
+HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block sd-encrypt filesystems fsck)
+HOOKS_EOF
+mkinitcpio -P
+
+# GRUB: add LUKS, locale, and keymap to kernel command line
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
+
+# Install GRUB for UEFI
+grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
+grub-mkconfig -o /boot/grub/grub.cfg
+
+if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
+    echo "==> WARNING: /boot/grub/grub.cfg has no menuentry -- GRUB will likely drop to a rescue shell on boot." >&2
+fi
+
+CHROOT_EOF
+
+# ---------------- DONE ----------------
+
+# ========================================================
+# Installation complete – copy manager script to installed system
+# ========================================================
+log "Base install complete."
+
+# Create /archInstall directory on the new system
+log "Creating /archInstall directory on the new system..."
+mkdir -p /mnt/archInstall
+
+# Find the manager script
+MANAGER_SCRIPT=""
+if [[ -f "/arch-setup/arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="/arch-setup/arch-manager.sh"
+elif [[ -f "$(dirname "$0")/arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="$(dirname "$0")/arch-manager.sh"
+elif [[ -f "./arch-manager.sh" ]]; then
+    MANAGER_SCRIPT="./arch-manager.sh"
+fi
+
+if [[ -n "$MANAGER_SCRIPT" && -f "$MANAGER_SCRIPT" ]]; then
+    log "Copying arch-manager.sh to /archInstall on the new system..."
+    cp "$MANAGER_SCRIPT" /mnt/archInstall/arch-manager.sh
+    chmod +x /mnt/archInstall/arch-manager.sh
+    
+    # Also copy all other scripts if they exist
+    if [[ -d "/arch-setup/downloads" ]]; then
+        log "Copying all installation scripts to /archInstall..."
+        mkdir -p /mnt/archInstall/scripts
+        cp -r /arch-setup/downloads/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
+        chmod +x /mnt/archInstall/scripts/*.sh 2>/dev/null || true
+    fi
+    
+    printf '\n'
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}After reboot, run:${NC}"
+    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+    printf '%s\n' "${YELLOW}  (or as root: ${CYAN}/archInstall/arch-manager.sh${YELLOW})${NC}"
+    printf '\n'
+    printf '%s\n' "${GREEN}All scripts are available in:${NC}"
+    printf '%s\n' "${CYAN}  /archInstall/scripts/${NC}"
+else
+    printf '\n'
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
+    printf '%s\n' "${YELLOW}=======================================${NC}"
+    printf '%s\n' "${RED}WARNING: arch-manager.sh not found!${NC}"
+    printf '%s\n' "${YELLOW}After reboot, download it again:${NC}"
+    printf '%s\n' "${CYAN}  sudo mkdir -p /archInstall${NC}"
+    printf '%s\n' "${CYAN}  sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh${NC}"
+    printf '%s\n' "${CYAN}  sudo chmod +x /archInstall/arch-manager.sh${NC}"
+    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
+fi
+
+echo
+echo "============================================================"
+echo " NEXT STEPS"
+echo "============================================================"
+echo "1. umount -R /mnt"
+echo "2. cryptsetup close cryptroot"
+echo "3. reboot, remove the install media"
+if [[ "$WIFI_CARRY" != "yes" ]]; then
+    echo "   (No Wi-Fi network was carried over. If you have no Ethernet, run"
+    echo "    'nmtui' after reboot to connect, or: nmcli device wifi connect \"SSID\" password \"...\")"
+fi
+echo "4. After reboot, log in and run:"
+if [[ -f /mnt/archInstall/arch-manager.sh ]]; then
+    echo "   sudo /archInstall/arch-manager.sh"
+else
+    echo "   sudo mkdir -p /archInstall"
+    echo "   sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh"
+    echo "   sudo chmod +x /archInstall/arch-manager.sh"
+    echo "   sudo /archInstall/arch-manager.sh"
+fi
+echo "============================================================"

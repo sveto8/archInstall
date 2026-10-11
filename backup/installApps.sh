@@ -1,0 +1,308 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+set -o errtrace
+
+# ============================================================
+# Arch Linux: application install (Phase 2)
+#
+# Run this as your REGULAR user (NOT root, NOT via sudo) after
+# archInstall.sh + setupAfterInstall.sh have already been run and
+# you're on your normal desktop. makepkg/yay refuse to run as root.
+#
+# Official-repo packages are installed with plain pacman; anything
+# not in the official repos goes through yay (AUR). yay is only
+# bootstrapped (via pacman + makepkg) to handle that AUR subset --
+# it isn't used for packages pacman already provides.
+# ============================================================
+
+log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
+info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
+warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
+die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
+
+trap 'die "Failed at line $LINENO."' ERR
+
+# ---------------- BASIC CHECKS ----------------
+
+[[ $EUID -ne 0 ]] || die "Run this as your regular user, not root/sudo (makepkg refuses to run as root)."
+
+command -v pacman >/dev/null || die "pacman not found -- is this an Arch system?"
+
+log "Checking sudo access (you may be asked for your password)..."
+sudo -v || die "sudo access is required."
+
+# ---------------- BOOTSTRAP YAY (for the AUR packages below) ----------------
+
+sudo pacman -S --needed --noconfirm base-devel git
+
+if ! command -v yay >/dev/null 2>&1; then
+    log "yay not found, building it from AUR..."
+    YAY_TMP="$(mktemp -d)"
+    git clone https://aur.archlinux.org/yay.git "$YAY_TMP/yay"
+    (cd "$YAY_TMP/yay" && makepkg -si --noconfirm)
+    rm -rf "$YAY_TMP"
+else
+    info "yay already installed."
+fi
+
+# ---------------- PACKAGE LISTS ----------------
+#
+# REPO_PACKAGES -> plain pacman (official repos)
+# AUR_PACKAGES  -> yay (not in official repos)
+#
+# Work-related packages are asked separately and added later.
+
+# Base packages (always installed)
+REPO_PACKAGES=(
+    terminator
+    guake
+    qmmp
+    kolourpaint
+    mission-center
+    stow
+    hplip                               # HP printer support
+    cups                                # printing system
+    system-config-printer               # GUI printer management
+    eza
+)
+
+AUR_PACKAGES=(
+    google-chrome
+    sublime-text-4
+    peazip
+    python-pyqt5                        # for hp-setup
+)
+
+# Work-related packages (optional, asked below)
+WORK_REPO=(
+    jdk11-openjdk
+    meld
+    code                                # open-source VS Code
+    remmina
+)
+
+WORK_AUR=(
+    intellij-idea-community-edition
+    postman-bin
+    f5vpn-ng                            # F5 VPN client
+    ferdium-bin                         # Ferdium messaging client    
+    snx-rs                              # VPN 
+)
+
+# ---------------- OPTIONAL PACKAGE PROMPTS ----------------
+
+echo
+echo "Optional PACMAN packages:"
+echo
+
+echo
+read -r -p "Install LibreOffice still? [y/N] " INSTALL_LIBREOFFICE
+if [[ "$INSTALL_LIBREOFFICE" =~ ^[Yy]$ ]]; then
+    REPO_PACKAGES+=(libreoffice-still)
+fi
+
+echo
+read -r -p "Install Lact (AMD GPU OC tool)? [Y/n] " INSTALL_LACT
+[[ "$INSTALL_LACT" =~ ^[Nn]$ ]] || REPO_PACKAGES+=(lact)
+
+echo
+echo "Optional AUR packages:"
+echo
+
+echo
+read -r -p "Install CoolerControl (AUR)? [Y/n] " INSTALL_COOLERCONTROLL
+[[ "$INSTALL_COOLERCONTROLL" =~ ^[Nn]$ ]] || AUR_PACKAGES+=(coolercontrol-bin)
+
+#read -r -p "Install snx-rs (Check Point VPN client, AUR, slow build)? [y/N] " INSTALL_SNX
+#if [[ "$INSTALL_SNX" =~ ^[Yy]$ ]]; then
+#    AUR_PACKAGES+=(snx-rs)
+#fi
+
+echo
+read -r -p "Install WPS Office (AUR)? [y/N] " INSTALL_WPS
+if [[ "$INSTALL_WPS" =~ ^[Yy]$ ]]; then
+    AUR_PACKAGES+=(wps-office ttf-wps-fonts)
+fi
+
+echo
+read -r -p "Install OnlyOffice (AUR)? [y/N] " INSTALL_ONLYOFFICE
+if [[ "$INSTALL_ONLYOFFICE" =~ ^[Yy]$ ]]; then
+    AUR_PACKAGES+=(onlyoffice-bin)
+fi
+
+# ---------------- GNOME-SPECIFIC: NAUTILUS ADMIN ----------------
+#
+# nautilus-admin-gtk4 is a Nautilus-specific AUR package that adds an
+# "Open as Administrator" entry to the right-click context menu. It is
+# only meaningful when GNOME (or at least Nautilus) is installed, so we
+# only offer it when gnome-shell is detected on the system.
+
+if pacman -Qq gnome-shell >/dev/null 2>&1; then
+    echo
+    info "GNOME detected -- offering Nautilus admin extension."
+    read -r -p "Install nautilus-admin-gtk4 (Open as Administrator in Nautilus)? [Y/n] " INSTALL_NAUTILUS_ADMIN
+    [[ "$INSTALL_NAUTILUS_ADMIN" =~ ^[Nn]$ ]] || AUR_PACKAGES+=(nautilus-admin-gtk4)
+else
+    info "GNOME not detected -- skipping Nautilus admin extension."
+fi
+
+# Dynamically build the list of work packages for the prompt
+WORK_PACKAGES_LIST=("${WORK_REPO[@]}" "${WORK_AUR[@]}")
+WORK_PROMPT="Install work programs ($(IFS=,; echo "${WORK_PACKAGES_LIST[*]}"))? [y/N] "
+
+echo
+read -r -p "$WORK_PROMPT" INSTALL_WORK
+if [[ "$INSTALL_WORK" =~ ^[Yy]$ ]]; then
+    REPO_PACKAGES+=("${WORK_REPO[@]}")
+    AUR_PACKAGES+=("${WORK_AUR[@]}")
+fi
+
+# ---------------- EXTRA PACKAGES ----------------
+
+echo
+echo "Current package list:"
+echo "  repo (pacman): ${REPO_PACKAGES[*]}"
+echo "  AUR (yay):     ${AUR_PACKAGES[*]}"
+echo
+read -r -p "Any extra packages to add (space-separated, blank to skip): " -a EXTRA_PACKAGES
+
+# ---------------- HELPERS ----------------
+
+# Checks whether a package name exists (official repo OR AUR) before we
+# attempt to install it, so a typo/renamed/removed package is skipped
+# with a clear message instead of failing mid-transaction.
+package_exists() {
+    local pkg="$1"
+    pacman -Si "$pkg" >/dev/null 2>&1 && return 0
+    yay -Si "$pkg" >/dev/null 2>&1 && return 0
+    return 1
+}
+
+FAILED=()
+SKIPPED=()
+
+install_repo() {
+    local pkg="$1"
+    if ! pacman -Si "$pkg" >/dev/null 2>&1; then
+        warn "$pkg not found in official repos -- skipping."
+        SKIPPED+=("$pkg")
+        return
+    fi
+    if ! sudo pacman -S --needed --noconfirm "$pkg"; then
+        warn "$pkg failed to install -- continuing with the rest."
+        FAILED+=("$pkg")
+    fi
+}
+
+install_aur() {
+    local pkg="$1"
+    if ! package_exists "$pkg"; then
+        warn "$pkg not found (repo or AUR) -- skipping."
+        SKIPPED+=("$pkg")
+        return
+    fi
+    if ! yay -S --needed --noconfirm "$pkg"; then
+        warn "$pkg failed to install -- continuing with the rest."
+        FAILED+=("$pkg")
+    fi
+}
+
+# ---------------- INSTALL: REPO ----------------
+
+log "Installing official-repo packages via pacman..."
+
+for pkg in "${REPO_PACKAGES[@]}"; do
+    echo
+    info "==> $pkg"
+    install_repo "$pkg"
+done
+
+# ---------------- INSTALL: AUR ----------------
+
+log "Installing AUR packages via yay..."
+
+for pkg in "${AUR_PACKAGES[@]}"; do
+    echo
+    info "==> $pkg"
+    install_aur "$pkg"
+done
+
+# ---------------- INSTALL: EXTRA (user-supplied) ----------------
+
+if [[ "${#EXTRA_PACKAGES[@]}" -gt 0 ]]; then
+    log "Installing extra packages you added..."
+    for pkg in "${EXTRA_PACKAGES[@]}"; do
+        echo
+        info "==> $pkg"
+        if ! package_exists "$pkg"; then
+            warn "$pkg does not exist in the official repos or AUR -- skipping (check the name)."
+            SKIPPED+=("$pkg")
+            continue
+        fi
+        if pacman -Si "$pkg" >/dev/null 2>&1; then
+            install_repo "$pkg"
+        else
+            install_aur "$pkg"
+        fi
+    done
+fi
+
+# ---------------- POST-INSTALL: DEFAULT JAVA ----------------
+
+log "Checking OpenJDK 11..."
+
+if [[ -d /usr/lib/jvm/java-11-openjdk ]]; then
+    if [[ "$(archlinux-java get 2>/dev/null)" == "java-11-openjdk" ]]; then
+        info "OpenJDK 11 is already the default JVM."
+    else
+        log "Setting OpenJDK 11 as the default JVM..."
+        sudo archlinux-java set java-11-openjdk
+        info "Default Java: $(archlinux-java get)"
+    fi
+else
+    warn "OpenJDK 11 is not installed."
+fi
+
+# ---------------- POST-INSTALL: PRINTING ----------------
+
+log "Enabling CUPS (printing)..."
+
+sudo systemctl enable --now cups.service
+
+info "To add your HP printer, run 'hp-setup' interactively (from hplip) once you're at the desktop."
+
+# ---------------- DONE ----------------
+
+log "App install complete."
+
+echo
+echo "============================================================"
+echo " SUMMARY"
+echo "============================================================"
+if [[ "${#FAILED[@]}" -eq 0 && "${#SKIPPED[@]}" -eq 0 ]]; then
+    echo "All packages installed successfully."
+else
+    if [[ "${#SKIPPED[@]}" -gt 0 ]]; then
+        echo "SKIPPED (package name not found):"
+        for pkg in "${SKIPPED[@]}"; do
+            echo "  - $pkg"
+        done
+    fi
+    if [[ "${#FAILED[@]}" -gt 0 ]]; then
+        echo "FAILED (found, but install errored):"
+        for pkg in "${FAILED[@]}"; do
+            echo "  - $pkg"
+        done
+        echo "Re-run 'yay -S <package>' or 'sudo pacman -S <package>' individually to see the actual error."
+    fi
+fi
+echo
+echo "Manual steps still needed:"
+if printf '%s\n' "${AUR_PACKAGES[@]}" | grep -qx "snx-rs"; then
+    echo "  - snx-rs: takes a while to build from source, this is expected."
+fi
+echo "  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB."
+echo "  - F5 VPN (f5vpn-ng): if it fails to build or launch, check the AUR comment page --"
+echo "    this package tracks F5's own client releases and occasionally needs a library"
+echo "    fix (libxml2/webkit2gtk) after a system update."
+echo "============================================================"

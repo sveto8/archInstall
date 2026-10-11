@@ -1,0 +1,521 @@
+----------
+
+NOTE - This is a hobby project created primarily for my personal needs. 
+
+----------
+
+
+# Arch Linux: LUKS2 + Btrfs + Snapper + DE + apps install scripts
+
+Four scripts that together take a machine from an Arch ISO boot to a
+fully configured, encrypted, snapshotted Arch install with GRUB (+
+theme), grub-btrfs, Snapper, a Plymouth boot theme, a desktop
+environment, and a personal application set — plus an optional
+menu-driven wrapper that downloads and runs them for you.
+
+```
+archInstall.sh        Phase 0   — run from the Arch ISO live environment
+setupAfterInstall.sh  Phase 1   — run on the new system, after first boot
+installDE.sh           Phase 1.5 — run as root, installs a desktop environment
+installApps.sh         Phase 2   — run as your regular user, once at the desktop
+arch-manager.sh        optional  — menu that downloads + runs the four above
+```
+
+`setupAfterInstall.sh` and `installDE.sh` can be run in either order —
+neither depends on the other.
+
+## Resulting layout
+
+```
+/efi         unencrypted ESP (FAT32)
+/boot        unencrypted (ext4)
+
+LUKS2
+ └── Btrfs
+      ├── @             -> /
+      ├── @home        -> /home
+      └── @snapshots   -> /.snapshots
+```
+
+`/home` is intentionally **not** managed by Snapper — only `/` is snapshotted.
+
+## Getting the scripts onto the Arch ISO
+
+The live environment has network access (`iwctl` for Wi-Fi, wired usually
+works out of the box via dhcpcd). Download the raw file directly — not
+the GitHub web page URL (`github.com/.../blob/...`), which returns HTML,
+not the script:
+
+```bash
+curl -O https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh
+chmod +x arch-manager.sh
+./arch-manager.sh
+```
+
+Rule of thumb: `github.com` → `raw.githubusercontent.com`, drop `/blob/`,
+keep `branch/path` as-is.
+
+If the repo is private, add an auth header with a
+[personal access token](https://github.com/settings/tokens) (never paste
+real tokens into chat, logs, or commit them — treat a leaked token as
+compromised and revoke it immediately):
+
+```bash
+curl -H "Authorization: token <GITHUB_PAT>" \
+     -O https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh
+```
+
+If the repo is public (recommended for this use case — nothing in these
+scripts is sensitive), no auth header is needed.
+
+## Order of operations
+
+### 1. `archInstall.sh` — from the Arch ISO
+
+Wipes and partitions the target disk, sets up LUKS2 + Btrfs, and
+installs a minimal, bootable, CLI-only base system. No desktop
+environment is installed here — that's `installDE.sh`, run later.
+
+1. Basic sanity checks (root, UEFI, required tools present)
+2. Lists disks (`lsblk`) and asks which one to install onto
+3. Confirms with a typed `WIPE` before touching anything
+4. Asks for a regular username (optional) and whether it should have
+   sudo — if a sudo user is created, root stays locked (no root
+   password question); otherwise you're asked to set one, since
+   there'd be no other way to log in
+5. Asks whether the hardware clock (RTC) should be UTC (Linux default)
+   or local time — pick local time if you dual-boot Windows and don't
+   want to touch the Windows registry, since Windows otherwise assumes
+   the RTC is local time while Linux defaults to UTC, showing the wrong
+   time on whichever OS you didn't just boot
+6. Asks `[y/N]` whether to enable Wake-on-LAN. If yes, it auto-detects
+   the wired network interface(s) present (from `/sys/class/net`,
+   skipping loopback and anything with a `wireless` subdirectory —
+   Wi-Fi doesn't support WOL) rather than requiring you to know/type a
+   name like `enp39s0` yourself; with more than one wired interface it
+   asks which one. If `ethtool` happens to be available on the live ISO
+   it also prints a best-effort check of whether the NIC reports
+   supporting `g` (magic packet) WOL — informational only, it never
+   blocks the choice, since some drivers misreport this
+7. If the live ISO has saved Wi-Fi networks (`/var/lib/iwd/*.psk`, i.e.
+   you connected with `iwctl`), lists them and asks `[Y/n]` whether to
+   carry them over. A connection made on the live ISO lives only in its
+   RAM, so without this the installed system would boot with
+   NetworkManager but no saved network — and no internet for the next
+   scripts. After `pacstrap` the script writes each network as a
+   NetworkManager profile
+   (`/etc/NetworkManager/system-connections/wifi-N-<ssid>.nmconnection`,
+   mode 600, WPA/WPA2-PSK, autoconnect), so the first boot comes up
+   online by itself. Limits: open networks, 802.1X/enterprise and SSIDs
+   containing `;` are not carried over, and WPA3-only (SAE) networks
+   are written as WPA-PSK so they won't connect; in those cases (or if
+   you answer `n`) the final "NEXT STEPS" screen tells you to run
+   `nmtui` after reboot
+8. Partitions the disk: ESP → `/efi`, ext4 → `/boot`, LUKS2 → Btrfs
+9. Creates the `@`, `@home`, `@snapshots` subvolumes and mounts them
+10. Ranks pacman mirrors by speed with `reflector` (installing it first
+   if missing) and writes the fastest HTTPS mirrors to
+   `/etc/pacman.d/mirrorlist` — speeds up `pacstrap` and everything
+   after it; non-fatal if it fails (the disk is already
+   partitioned/formatted by this point, so a mirror-ranking hiccup
+   shouldn't abort the whole install — it just falls back to the
+   original mirrorlist)
+11. `pacstrap`s the base system (+ microcode package auto-detected from
+    CPU vendor, + `ethtool` if WOL was enabled in step 6, + `wpa_supplicant`
+    (NetworkManager's Wi-Fi backend) and `dialog` (used by the
+    dialog-based scripts from first boot))
+12. Creates the regular user and sets its password, then sets the root
+    password if needed — all *before* the long unattended steps, so you
+    can walk away once passwords are set
+13. Unattended: hostname, timezone, locale (`en_US.UTF-8` +
+    `hr_HR.UTF-8` generated by default), keymap, hardware clock mode
+    (per step 5), `/etc/hosts`, minimal `mkinitcpio.conf` (systemd +
+    `sd-encrypt`, no Plymouth yet), GRUB install + config. If WOL was
+    enabled, also writes a templated `wol@.service` systemd unit
+    (`ExecStart=/usr/bin/ethtool -s %i wol g`) and enables it for the
+    detected interface (e.g. `wol@enp39s0.service`) — this re-applies
+    the WOL setting on every boot, since most NIC drivers reset it to
+    off each time the interface comes up
+14. If `arch-manager.sh` can be found nearby (checked in a few likely
+    spots, including the current directory), copies it to
+    `/mnt/archInstall/arch-manager.sh`, and — if any scripts were
+    already downloaded to `~/arch-setup/downloads/` — copies those into
+    `/mnt/archInstall/scripts/` too, so everything is ready to use
+    immediately after reboot without re-downloading; if `arch-manager.sh`
+    can't be found, prints the manual `curl` command to fetch it after
+    reboot instead
+
+At the end: `umount -R /mnt`, `cryptsetup close cryptroot`, reboot.
+
+### 2. `setupAfterInstall.sh` — after first boot, as root
+
+Run this on the newly installed system. It does **not** touch
+partitioning, formatting, or LUKS — it assumes `archInstall.sh` (or an
+equivalent manual install) already produced the layout above.
+
+1. Verifies the expected layout (Btrfs root, `/efi`, `/boot`,
+   `/.snapshots` mounted, fstab entry for `/.snapshots` present)
+2. Detects the LUKS2 backing device (via `cryptsetup status`, with an
+   `lsblk` fallback) and CPU vendor for microcode
+3. Asks which GRUB boot menu theme to install: `Xenlism-Arch`,
+   `arch-linux`, `poly-dark`, or none — downloads the matching
+   `<name>.tar.xz` from the repo's `grub-themes/` folder, extracts it to
+   `/boot/grub/themes/<name>/`, and points `GRUB_THEME` at it in
+   `/etc/default/grub` (skipped entirely, without failing the script, if
+   the archive can't be downloaded)
+4. Asks which Plymouth boot splash theme to install: `cuts_alt`,
+   `hud_3`, `linux-penguin`, `metal_ball`, or none — downloads the
+   matching `<name>.tar.xz` from the repo's `plymouth-themes/` folder
+   (same non-fatal-if-unavailable behavior as the GRUB theme step)
+5. Shows a summary and asks for confirmation
+6. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
+   `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`.
+   From here on, every `/etc/default/grub` option the script touches
+   (`GRUB_TIMEOUT`, `GRUB_DEFAULT`, `GRUB_SAVEDEFAULT`,
+   `GRUB_DISABLE_OS_PROBER`, `GRUB_THEME`, `GRUB_CMDLINE_LINUX_DEFAULT`)
+   goes through a helper that finds the existing line — commented out or
+   not — and edits it in place, rather than appending a new value to the
+   bottom of the file (which would leave a stale duplicate, commented or
+   otherwise, above the one GRUB actually reads)
+7. Installs: `btrfs-progs`, `cryptsetup`, `snapper`, `snap-pac`, `grub`,
+   `grub-btrfs`, `inotify-tools`, `btrfs-assistant`, `plymouth`, `git`,
+   microcode package
+8. Sets up the Snapper config for `/` (creates it against the existing
+   `@snapshots` subvolume rather than letting Snapper create its own),
+   with number + timeline retention policy and space-based cleanup
+   (Btrfs quota/qgroups — can be disabled via `ENABLE_BTRFS_QUOTA=no`)
+9. Enables `snapper-cleanup.timer`, `snapper-timeline.timer`,
+   `snapper-boot.timer`, `fstrim.timer`
+10. Installs the selected Plymouth theme (if any), verifying the
+    extracted `.plymouth` file exists and setting it as default with
+    `plymouth-set-default-theme` — a failed download or missing theme
+    file doesn't fail the script, it just leaves Plymouth on its default
+    theme
+11. Rewrites `mkinitcpio.conf` HOOKS to the full systemd + Plymouth +
+    `sd-encrypt` set and rebuilds the initramfs
+12. Rewrites the GRUB kernel cmdline (`rd.luks.name=`, `root=`,
+    `rootflags=subvol=@`, `quiet splash`, …), reinstalls GRUB under a
+    named UEFI boot entry (`GRUB_BOOTLOADER_ID="Arch Linux"` by
+    default, shown in your firmware's boot menu), enables `os-prober`
+    by default (`ENABLE_OS_PROBER=yes` — set it to `no` if you don't
+    dual-boot another OS or prefer picking it from the firmware boot
+    menu instead of GRUB's), enables `grub-btrfsd`, regenerates
+    `grub.cfg`
+13. Removes stale UEFI boot entries named exactly `GRUB` or `UEFI OS`
+    left behind by `archInstall.sh`'s temporary `--bootloader-id=GRUB
+    --removable` install — but only entries whose device path matches
+    *this* install's own ESP (compared by `PARTUUID`), so boot entries
+    belonging to other OSes or other disks (e.g. a Windows install) are
+    never touched
+14. Creates and cleans up an initial protected snapshot
+15. Prints a final status report (filesystems, subvolumes, LUKS status,
+    Snapper config/snapshots, timers, Plymouth theme, GRUB theme, GRUB
+    cmdline)
+
+### 3. `installDE.sh` — on the installed system, as root
+
+Run any time after `archInstall.sh` (before or after
+`setupAfterInstall.sh`, order doesn't matter). Installs a desktop
+environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
+
+1. Not running as root? Re-launches itself with `sudo` (asks for your
+   password) instead of just refusing
+2. Picks the target user automatically if there's exactly one regular
+   (UID ≥ 1000) account on the system; otherwise asks which one
+3. Asks for a desktop environment: **GNOME** or **KDE Plasma** (both
+   Wayland), **XFCE** (X11 — its Wayland session is still
+   experimental/unstable upstream, so X11 is the stable choice here),
+   or none/cancel — and, if one is chosen, full or minimal package set.
+   GNOME full installs the official `gnome` group plus a curated
+   `gnome-extra`-style set (Boxes, Builder, Chatty, d-spy, dconf Editor,
+   Ghex, Calls, Sound Recorder, Endeavour, Manuals, Sysprof, Tweaks,
+   `power-profiles-daemon`, `bluez`/`bluez-utils`) with the games left
+   out; GNOME minimal is a small hand-picked set (shell, Control
+   Center, Nautilus, a terminal, GDM, `power-profiles-daemon`,
+   `bluez`/`bluez-utils`); KDE uses a curated Wayland-focused package
+   set (`plasma-desktop`, `plasma-workspace-wayland`, Dolphin, Konsole,
+   SDDM, plus `plasma-nm` for the Wi-Fi/network applet, which
+   `plasma-desktop` doesn't pull in — not the full `plasma`
+   meta-group) for both modes; XFCE uses the official `xfce4` group
+   (+ `xfce4-goodies` for full) with LightDM + `lightdm-gtk-greeter`,
+   plus `network-manager-applet` (XFCE has no built-in network UI;
+   GNOME's shell has its own) GNOME and KDE share a common set of
+   portal/Qt/polkit packages needed for Wayland apps; XFCE gets an
+   equivalent X11 set (Xorg server + portals/polkit, no Qt-Wayland bits)
+4. Shows a summary (user, DE, package list) and asks for confirmation
+   (default is yes — press Enter to proceed, or type `n` to cancel)
+5. Installs the packages
+6. **GNOME only:** downloads and installs the
+   [Reversal icon theme](https://github.com/yeyushengfan258/Reversal-icon-theme)
+   from this repo's `icons/Reversal-icon-theme-master.tar.xz` — extracted
+   to a temp dir and built via its own `install.sh`, once per color
+   variant (`yellow` default, then `orange`, `black`, `grey` via `-t
+   <color>`) — plus a Deepin-style dark cursor theme from
+   `cursor/DeppinDark-cursors.tar.xz`, extracted straight into
+   `/usr/share/icons/` (no build step needed, unlike the icons). A
+   failed download or a missing `install.sh` in the archive warns and
+   skips that theme rather than failing the script; the icon cache is
+   refreshed afterwards so both themes show up immediately in
+   theme pickers
+7. Enables the matching display manager/greeter (`gdm.service` /
+   `sddm.service` / `lightdm.service`)
+8. **GNOME only:** sets the dark color scheme
+   (`org.gnome.desktop.interface color-scheme=prefer-dark` +
+   `gtk-theme=Adwaita-dark` for older GTK3 apps, plus `accent-color=slate`
+   on GNOME 47+), directories-before-files in GTK file dialogs, an
+   always-visible "Log Out" entry in the GNOME shell menu, and the
+   Reversal icon theme + dark cursor theme installed in step 6 — all as
+   defaults for the target user, applied via a temporary
+   `dbus-run-session` since there's no live GNOME session yet to talk to
+9. **GNOME only:** enables `bluetooth.service` and sets
+   `AutoEnable=true` in `/etc/bluetooth/main.conf` so the adapter comes
+   up powered after boot instead of staying soft-blocked until you
+   toggle it manually
+10. **GNOME only:** enables `power-profiles-daemon.service` (needed for
+    Settings → Power to work)
+11. **XFCE only:** explicitly sets `lightdm-gtk-greeter` as the greeter
+    in `/etc/lightdm/lightdm.conf`'s `[Seat:*]` section (LightDM
+    otherwise often comes up with no greeter session configured at all)
+
+You can re-run this later to install a different desktop environment or
+change from full to minimal (or vice versa) — it doesn't remove
+anything from a previous run, it only adds.
+
+### 4. `installApps.sh` — at the desktop, as your regular user
+
+Run this **as your normal user, not root/sudo** — `makepkg`/`yay` refuse
+to run as root. It installs applications on top of the base system from
+the two scripts above; it doesn't touch partitioning, LUKS, Snapper, or
+GRUB at all.
+
+The UI is **`dialog`-based (ncurses)**: all questions are asked up front
+as proper menus, you confirm once, then the install runs unattended with
+live output inside a dialog box. Works on a plain TTY (no desktop
+needed). Keys: `SPACE` toggles a checkbox, `ENTER` confirms, `ESC`
+cancels (nothing is installed on cancel).
+
+1. Refuses to run as root; checks `sudo` access and starts a background
+   `sudo` keep-alive (long AUR builds can outlast sudo's 15-minute
+   timeout, and a password prompt would garble the dialog screen).
+   Installs `dialog` itself if it's missing
+2. **Optional packages checklist** — defaults shown below (Enter
+   without touching anything gives you these):
+
+   | Item | Package(s) | Default |
+   |------|-----------|---------|
+   | Lact (AMD GPU control/overclock) | `lact` (repo) | **on** |
+   | CoolerControl (fan/cooling control) | `coolercontrol-bin` (AUR) | **on** |
+   | Nautilus "Open as Administrator" | `nautilus-admin-gtk4` (AUR) | **on** — only listed if GNOME is detected |
+   | LibreOffice | `libreoffice-still` (repo) | off |
+   | WPS Office | `wps-office` + `ttf-wps-fonts` (AUR) | off |
+   | OnlyOffice | `onlyoffice-bin` (AUR) | off |
+
+3. **Work programs** yes/no box — defaults to **No**. The box lists the
+   exact packages so you know what you're agreeing to: `jdk11-openjdk`,
+   `meld`, `code` (open-source VS Code build), `remmina` from the repos,
+   plus `intellij-idea-community-edition`, `postman-bin`, `f5vpn-ng`
+   (F5 BIG-IP APM VPN client — can occasionally need a library fix after
+   a libxml2/webkit2gtk update), `ferdium-bin`, `snx-rs` (Check Point
+   VPN client, slow Rust build) from AUR — useful for splitting a
+   personal machine from a work machine without editing the script
+4. **Extra packages** input box (space-separated, blank to skip) —
+   official-repo and AUR names both work
+5. **Confirmation** box showing the final repo / AUR / extra lists;
+   answering No (or `ESC`) at any dialog above aborts cleanly
+6. Installs unattended, with live output in a dialog box (also saved to
+   `~/installApps.log`):
+   - bootstraps `yay` if missing (`base-devel` + `git` via `pacman`, then
+     `yay` itself built from AUR with `makepkg`)
+   - always-installed base set — **Repo:** `terminator`, `guake`,
+     `qmmp`, `kolourpaint`, `mission-center`, `stow`, `eza`, `hplip` +
+     `cups` + `system-config-printer` (printer support); **AUR:**
+     `google-chrome`, `sublime-text-4`, `peazip`, `python-pyqt5` (needed
+     for `hp-setup`'s GUI)
+   - then whatever you picked above
+7. Every package — list-defined or typed in — is checked with
+   `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
+   skipped with a warning instead of aborting the whole run. Genuine
+   install failures (found, but errored) are collected and reported,
+   not fatal to the rest of the run
+8. Sets OpenJDK 11 as the default JVM (`archlinux-java set`) if it was
+   installed (part of the work bundle), and enables the CUPS service
+9. Final summary dialog: what was skipped/failed, and manual next steps
+   (`hp-setup` for the actual printer; a note about `snx-rs` build time
+   and `f5vpn-ng` library fixes, shown only if those were selected)
+
+You can re-run `installApps.sh` any time later to add more software —
+it's idempotent (`--needed` skips already-installed packages) and shows
+the dialogs every time.
+
+### `arch-manager.sh` — optional menu-driven wrapper
+
+Not part of the numbered phases — a convenience front-end that
+downloads the four scripts above from the repo and lets you run them
+from a menu instead of typing filenames yourself. Scripts are
+downloaded **on demand** (only the one you're about to run, if it isn't
+already on disk) rather than all four up front — menu option 6 exists
+if you want to fetch everything at once.
+
+- Downloads go to `~/arch-setup/downloads/` — resolved via `$SUDO_USER`
+  if the manager itself is run with `sudo`, so files land in *your*
+  home even then, not `/root`
+- Shows a status line (Arch? Live ISO? root?) before the menu every time
+- Menu:
+  1. Run `archInstall.sh`, then — if it succeeded — copy
+     `arch-manager.sh` and every downloaded script into the new user's
+     `~/arch-setup/` on the just-installed system (found by scanning
+     `/mnt/etc/passwd` for the first regular user), then exit so you can
+     reboot
+  2. Run `setupAfterInstall.sh` only
+  3. Run `installDE.sh` only
+  4. Run `installApps.sh` only
+  5. Run `setupAfterInstall.sh` → `installDE.sh` → `installApps.sh` in
+     sequence (everything *except* `archInstall.sh`, meant for after
+     you've already rebooted into the new system)
+  6. Download all four scripts now
+- Runs `archInstall.sh` / `setupAfterInstall.sh` / `installDE.sh` with
+  `sudo` automatically if not already root; runs `installApps.sh` as
+  the real non-root user even if the manager itself is currently root
+  (drops privileges via `runuser`), since `installApps.sh` must not run
+  as root
+- CLI shortcuts: `./arch-manager.sh --download` (fetch all four),
+  `--install` (fetch + run **only** `archInstall.sh`, i.e. Phase 0 —
+  intentionally does *not* chain into the other three scripts, since
+  those expect to run on the already-rebooted target system, not
+  immediately after `archInstall.sh` inside the live ISO), or
+  `./arch-manager.sh <script-name.sh>` to run one script directly
+- Edit `SCRIPT_URL` near the top of the file to point at your own fork
+  if you're not using `sveto8/archInstall`
+
+## GRUB themes
+
+`setupAfterInstall.sh` downloads the selected theme from
+`grub-themes/<name>.tar.xz` in this repo, so that folder needs to exist
+alongside the scripts with matching archive names. Current themes:
+
+| Menu name      | Archive                              | Source |
+|-----------------|--------------------------------------|--------|
+| `Xenlism-Arch`  | `grub-themes/Xenlism-Arch.tar.xz`    | [xenlism/Grub-themes](https://github.com/xenlism/Grub-themes) |
+| `arch-linux`    | `grub-themes/arch-linux.tar.xz`      | [gnome-look.org/p/1230780](https://www.gnome-look.org/p/1230780) |
+| `poly-dark`     | `grub-themes/poly-dark.tar.xz`       | [gnome-look.org/p/1482847](https://www.gnome-look.org/p/1482847) |
+
+Each archive must extract to a single top-level folder with the same
+name as the archive (e.g. `poly-dark.tar.xz` → `poly-dark/theme.txt`,
+not `poly-dark-1.0/theme.txt`) — the script installs to
+`/boot/grub/themes/<name>/` and expects `theme.txt` at that exact path.
+To add a theme: drop a correctly-named `.tar.xz` into `grub-themes/` in
+the repo and add a matching menu entry in `setupAfterInstall.sh`.
+
+## Plymouth themes
+
+Same pattern as GRUB themes, separate folder: `setupAfterInstall.sh`
+downloads the selected theme from `plymouth-themes/<name>.tar.xz` in
+this repo. Current themes:
+
+| Menu name      | Archive                                   | Source |
+|-----------------|-------------------------------------------|--------|
+| `cuts_alt`      | `plymouth-themes/cuts_alt.tar.xz`         | [adi1090x/plymouth-themes](https://github.com/adi1090x/plymouth-themes) |
+| `hud_3`         | `plymouth-themes/hud_3.tar.xz`            | [adi1090x/plymouth-themes](https://github.com/adi1090x/plymouth-themes) |
+| `linux-penguin` | `plymouth-themes/linux-penguin.tar.xz`    | [yucellmustafa/plymouth-linux](https://github.com/yucellmustafa/plymouth-linux) |
+| `metal_ball`    | `plymouth-themes/metal_ball.tar.xz`       | [adi1090x/plymouth-themes](https://github.com/adi1090x/plymouth-themes) |
+
+Each archive should extract to `/usr/share/plymouth/themes/<name>/`
+with a `<name>.plymouth` file inside. If the archive extracts under a
+different name, the script tries to find any `.plymouth` file and move
+its folder into place automatically; if that also fails, it warns and
+leaves the default Plymouth theme active rather than failing the whole
+script. To add a theme: drop a correctly-named `.tar.xz` into
+`plymouth-themes/` in the repo and add its name to the `PLYMOUTH_THEMES`
+array near the top of `setupAfterInstall.sh`.
+
+## Icon & cursor themes (GNOME only)
+
+`installDE.sh` downloads these from this repo whenever GNOME is chosen
+(any other DE skips this step entirely):
+
+| What            | Archive                                          | Source |
+|-----------------|---------------------------------------------------|--------|
+| Icon theme      | `icons/Reversal-icon-theme-master.tar.xz`         | [yeyushengfan258/Reversal-icon-theme](https://github.com/yeyushengfan258/Reversal-icon-theme) |
+| Cursor theme    | `cursor/DeppinDark-cursors.tar.xz`                | Deepin-style dark cursor set (same author's Pling/GitHub uploads) |
+
+Unlike the icon theme, the cursor archive is expected to be a
+ready-to-use cursor directory (no `install.sh`), so it's extracted
+directly into `/usr/share/icons/`. The icon archive, by contrast, ships
+its own `install.sh` and is run once per color variant to produce
+`yellow`/`orange`/`black`/`grey` icon sets. To update either: replace
+the corresponding archive in the repo (same filename/path) — no script
+changes needed unless you rename the archive or add more color
+variants (which would require editing the `for color in orange black
+grey` loop in `installDE.sh`).
+
+## Requirements between the scripts
+
+`setupAfterInstall.sh` and `installDE.sh` both assume the exact layout
+`archInstall.sh` produces (mountpoints, subvolume names, LUKS2,
+`cryptroot` mapper name, a regular user already created). If you set up
+the base system manually instead of using `archInstall.sh`, make sure
+it matches that layout first. `installApps.sh` has no such dependency —
+it only needs a working `pacman` + `sudo`, so it also works on a
+machine that wasn't set up with the other three scripts.
+`setupAfterInstall.sh` and `installDE.sh` don't depend on each other and
+can run in either order.
+
+## Notes
+
+- `archInstall.sh` asks for confirmation before any destructive action
+  (`WIPE` typed confirmation). `setupAfterInstall.sh` and `installDE.sh`
+  ask `[y/N]` before installing/changing anything. `installApps.sh`
+  doesn't touch disks/boot config at all, so it only shows a
+  confirmation dialog with the package list, not a destructive-action
+  warning.
+- All four scripts back up what they change (where relevant) and are
+  safe to re-read before running (`bash -n script.sh` for a
+  syntax-only check).
+- `setupAfterInstall.sh` and `installDE.sh` both refuse to run as a
+  non-root user and instead **re-launch themselves with `sudo`**,
+  prompting for your password — you don't need to type `sudo` yourself.
+  This matters if you didn't set a root password in `archInstall.sh`
+  (root stays locked when you create a sudo user): `sudo` asks for
+  *your own* account password, not a root password that doesn't exist.
+- CPU microcode (`amd-ucode` / `intel-ucode`) is auto-detected from
+  `/proc/cpuinfo` in `archInstall.sh` and `setupAfterInstall.sh` —
+  useful if you run these on more than one machine with different CPU
+  vendors.
+- Disk selection in `archInstall.sh` is interactive (`lsblk` listing +
+  prompt) — nothing is hardcoded, so the same script works whether the
+  disk is `/dev/sda`, `/dev/nvme0n1`, `/dev/vda`, etc.
+- `archInstall.sh` asks whether the hardware clock should be UTC or
+  local time. This only matters if you dual-boot another OS: Windows
+  always assumes the hardware clock is local time, while Linux
+  defaults to UTC, so with mismatched conventions one of the two OSes
+  shows the wrong time. Picking local time here avoids having to change
+  a registry key on the Windows side.
+- `archInstall.sh` runs `reflector` before `pacstrap` to rank mirrors by
+  speed, so both the install itself and everything installed later pull
+  from a fast mirror. It's the one non-interactive step that can take a
+  little while depending on your connection; a `reflector` failure
+  doesn't abort the install; it just falls back to the ISO's default
+  mirrorlist.
+- Wake-on-LAN in `archInstall.sh` is opt-in (`[y/N]`) and the interface
+  name is always auto-detected, never hardcoded — useful since NIC names
+  like `enp39s0` depend on PCI topology and differ between machines. The
+  actual `ethtool -s <iface> wol g` call happens on every boot via a
+  systemd unit, not just once during install, because most NIC drivers
+  reset WOL to off on every boot/link-reset.
+- `installApps.sh` must run as your regular user (not root/sudo) —
+  `makepkg` and `yay` both refuse to build AUR packages as root. This is
+  the opposite of `setupAfterInstall.sh` and `installDE.sh`, which both
+  want root.
+- `installDE.sh` currently offers three desktop environments: GNOME,
+  KDE Plasma (both Wayland) and XFCE. XFCE is installed as an X11
+  session, not Wayland, even though the other two options are Wayland —
+  XFCE's Wayland support is still experimental/unstable upstream (known
+  issues include black screens on login with some GPU/driver
+  combinations), so X11 is the stable, working choice there.
+- The Reversal icon theme and dark cursor theme are only installed and
+  applied for GNOME — for KDE and XFCE that step is skipped entirely,
+  since `gsettings` (the mechanism used to apply them) is GNOME-specific.
+- `arch-manager.sh` is a convenience wrapper, not a replacement for
+  understanding what each script does — it just saves typing
+  `curl`/`chmod`/filenames by hand. Nothing about the four numbered
+  scripts changes when run through it.
