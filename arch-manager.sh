@@ -27,12 +27,27 @@ if [[ ! -f "$LIB" && -f "$SCRIPT_DIR/scripts/lib.sh" ]]; then
     LIB="$SCRIPT_DIR/scripts/lib.sh"
 fi
 if [[ ! -f "$LIB" ]]; then
-    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "${SCRIPT_URL}/lib.sh" 2>/dev/null || true)"
-    if [[ "$_code" == "200" ]]; then
-        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
-        LIB="$SCRIPT_DIR/lib.sh"
+    # Download to a temporary file FIRST (never write a partial file
+    # directly next to the script -- the folder may be a read-only or
+    # permission-quirky mount, e.g. a VM shared folder where root cannot
+    # write). Verify the download produced a non-empty file, then move
+    # it into place. If the script folder turns out to be unwritable,
+    # fall back to keeping lib.sh in $TMPDIR and source it from there.
+    _lib_tmp="$(mktemp "${TMPDIR:-/tmp}/lib.sh.XXXXXX")" || {
+        echo "ERROR: could not create a temporary file for lib.sh." >&2
+        exit 1
+    }
+    _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' "${SCRIPT_URL}/lib.sh" 2>/dev/null || true)"
+    if [[ -s "$_lib_tmp" ]]; then
+        if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
+            LIB="$SCRIPT_DIR/lib.sh"
+        else
+            LIB="${TMPDIR:-/tmp}/archInstall-lib.sh"
+            mv "$_lib_tmp" "$LIB"
+            echo "NOTE: $SCRIPT_DIR is not writable; using $LIB instead." >&2
+        fi
     else
-        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
         echo "       URL: ${SCRIPT_URL}/lib.sh  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
         echo "       Put lib.sh (and the other scripts) in the same folder as arch-manager.sh and run it again." >&2
