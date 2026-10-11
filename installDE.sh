@@ -516,7 +516,7 @@ echo "============================================================"
 }
 
 if (( INTERACTIVE )); then
-    run_in_box "Installing $DE_NAME" "$LOG_FILE" run_de_install
+    run_on_terminal "Installing $DE_NAME" "$LOG_FILE" run_de_install nowait
     if [[ "$RUN_RC" -ne 0 ]]; then
         msg_box "Installation FAILED" "The desktop environment install did not finish.\n\nSee the log for details:\n  $LOG_FILE"
         exit 1
