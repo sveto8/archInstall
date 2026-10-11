@@ -64,6 +64,10 @@ ENABLE_BTRFS_QUOTA="yes"
 # uses grub-mount, which relies on FUSE3 and needs NTFS support to read
 # the Windows partition). GRUB also needs GRUB_DISABLE_OS_PROBER=false
 # in /etc/default/grub -- both are handled automatically below.
+#
+# With "yes" you are asked how rigorous the scan should be: only Windows/
+# Linux on INTERNAL disks (default; USB sticks, external drives and
+# optical media are skipped), everything os-prober finds, or none.
 ENABLE_OS_PROBER="yes"
 
 # Plymouth themes base URL (your GitHub repo)
@@ -94,24 +98,21 @@ GRUB_DEFAULT_FILE="/etc/default/grub"
 # GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
 # / poly-dark / none), not hardcoded here.
 
-# ---------------- COLORS ----------------
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
-# ------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
+    curl -fsSL -o "$SCRIPT_DIR/lib.sh" "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" \
+        || { echo "ERROR: lib.sh not found next to $0 and the download failed." >&2; exit 1; }
+fi
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
+
+BACKTITLE="Arch Linux installer -- Btrfs / Snapper / GRUB"
+LOG_FILE="/root/setupAfterInstall.log"
 
 SCRIPT_NAME="$(basename "$0")"
 BACKUP_DIR="/root/btrfs-setup-backups/$(date +%Y%m%d-%H%M%S)"
 PLYMOUTH_TMP="/tmp/plymouth-theme-$$"
 PLYMOUTH_OK=0   # 0 = not installed / failed, 1 = success
-
-log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
-info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
-warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
-die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
 
 cleanup() {
     rm -rf "$PLYMOUTH_TMP" 2>/dev/null || true
@@ -152,6 +153,39 @@ set_grub_option() {
     fi
 }
 
+# ---------------- OS-PROBER HELPERS ----------------
+#
+# By default os-prober scans EVERY partition it can see, so USB sticks
+# (Arch/Windows installers, rescue sticks), external drives, etc. show up
+# as boot menu entries. With OS_PROBER_MODE="internal" we tell GRUB to skip
+# filesystems on removable/USB-attached disks via GRUB_OS_PROBER_SKIP_LIST
+# (a space-separated list of "<fs UUID>@<device>" -- the form that works on
+# both older and newer GRUB). The list lives in /etc/default/grub, so it
+# also applies to later automatic grub-mkconfig runs (kernel updates,
+# grub-btrfs).
+
+# Prints "UUID@/dev/part" for every filesystem on a removable (RM=1) or
+# USB-attached (TRAN=usb) disk, including optical drives.
+external_skip_list() {
+    local disk rm tran part uuid out=()
+    while read -r disk rm tran; do
+        [[ "$rm" == "1" || "$tran" == "usb" ]] || continue
+        while read -r part uuid; do
+            [[ -n "$uuid" ]] && out+=("${uuid}@/dev/${part}")
+        done < <(lsblk -rno NAME,UUID "/dev/${disk}" | awk 'NF==2')
+    done < <(lsblk -dno NAME,RM,TRAN | awk '{print $1, $2, ($3 == "" ? "-" : $3)}')
+    echo "${out[*]:-}"
+}
+
+# True if the given partition (/dev/...) sits on a removable/USB disk.
+is_external_disk_part() {
+    local pk rm tran
+    pk="$(lsblk -no PKNAME "$1" 2>/dev/null | head -n1)"
+    [[ -n "$pk" ]] || pk="$(basename "$1")"
+    read -r rm tran < <(lsblk -dno RM,TRAN "/dev/${pk}" 2>/dev/null | awk '{print $1, ($2 == "" ? "-" : $2)}') || return 1
+    [[ "$rm" == "1" || "$tran" == "usb" ]]
+}
+
 # ---------------- BASIC CHECKS ----------------
 
 if [[ $EUID -ne 0 ]]; then
@@ -163,6 +197,9 @@ fi
 command -v pacman >/dev/null || die "pacman not found."
 command -v findmnt >/dev/null || die "findmnt not found."
 command -v lsblk >/dev/null || die "lsblk not found."
+
+ensure_dialog
+ui_init
 
 [[ -d /sys/firmware/efi ]] || die "System was not booted in UEFI mode."
 
@@ -267,46 +304,45 @@ info "Microcode:  ${UCODE_PKG:-none detected}"
 
 GRUB_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-themes"
 
-echo
-echo "GRUB boot menu theme:"
-echo "  1) Xenlism-Arch"
-echo "  2) arch-linux"
-echo "  3) poly-dark"
-echo "  4) None / skip"
-read -r -p "Choice [4]: " GRUB_THEME_CHOICE
-GRUB_THEME_CHOICE="${GRUB_THEME_CHOICE:-4}"
-
-case "$GRUB_THEME_CHOICE" in
-    1) GRUB_THEME_NAME="Xenlism-Arch" ;;
-    2) GRUB_THEME_NAME="arch-linux" ;;
-    3) GRUB_THEME_NAME="poly-dark" ;;
-    *) GRUB_THEME_NAME="" ;;
-esac
-info "GRUB theme: ${GRUB_THEME_NAME:-none}"
+GRUB_THEME_NAME="$(dlg_capture --title "GRUB theme" --default-item none \
+    --menu "Choose a theme for the GRUB boot menu." 0 "$BOX_W" 0 \
+    none         "None / skip (plain GRUB menu)" \
+    Xenlism-Arch "Xenlism-Arch" \
+    arch-linux   "arch-linux" \
+    poly-dark    "poly-dark")" || abort
+[[ "$GRUB_THEME_NAME" != "none" ]] || GRUB_THEME_NAME=""
 
 # ---------------- PLYMOUTH THEME ----------------
 
-echo
-echo "Plymouth boot splash theme:"
-i=1
+PLY_ITEMS=(none "None / skip (no boot splash)")
 for theme in "${PLYMOUTH_THEMES[@]}"; do
-    echo "  $i) $theme"
-    ((i++))
+    PLY_ITEMS+=("$theme" "")
 done
-echo "  $i) None / skip"
-read -r -p "Choice [$i]: " PLYMOUTH_CHOICE
-PLYMOUTH_CHOICE="${PLYMOUTH_CHOICE:-$i}"
 
-PLYMOUTH_SELECTED=""
-if [[ "$PLYMOUTH_CHOICE" =~ ^[0-9]+$ ]] && [[ "$PLYMOUTH_CHOICE" -ge 1 && "$PLYMOUTH_CHOICE" -le "${#PLYMOUTH_THEMES[@]}" ]]; then
-    PLYMOUTH_SELECTED="${PLYMOUTH_THEMES[$((PLYMOUTH_CHOICE-1))]}"
-    info "Selected Plymouth theme: $PLYMOUTH_SELECTED"
+PLYMOUTH_SELECTED="$(dlg_capture --title "Plymouth boot splash" --default-item none \
+    --menu "Choose a Plymouth boot splash theme." 0 "$BOX_W" 0 \
+    "${PLY_ITEMS[@]}")" || abort
+[[ "$PLYMOUTH_SELECTED" != "none" ]] || PLYMOUTH_SELECTED=""
+
+# ---------------- OTHER OPERATING SYSTEMS (os-prober) ----------------
+
+OS_PROBER_MODE="internal"
+if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
+    OS_PROBER_MODE="$(dlg_capture --title "Other operating systems" --default-item internal \
+        --menu "How should GRUB look for other operating systems (e.g. Windows or another Linux)?" \
+        0 "$BOX_W" 0 \
+        internal "Windows/Linux on INTERNAL disks only (recommended)" \
+        all      "Everything os-prober finds (USB sticks, external disks, ...)" \
+        off      "Don't add other operating systems to the menu")" || abort
+    [[ "$OS_PROBER_MODE" != "off" ]] || ENABLE_OS_PROBER="no"
 else
-    info "No Plymouth theme selected -- skipping."
+    OS_PROBER_MODE="off"
 fi
 
 # ---------------- CONFIRM ----------------
 
+SUMMARY_FILE="$(mktemp)"
+{
 printf '\n'
 printf '%s\n' "============================================================"
 printf '%s\n' "Arch Btrfs/Snapper setup"
@@ -322,7 +358,7 @@ printf '%s\n' "Microcode   : ${UCODE_PKG:-none}"
 printf '%s\n' "GRUB Theme  : ${GRUB_THEME_NAME:-none}"
 printf '%s\n' "Plymouth    : ${PLYMOUTH_SELECTED:-none}"
 printf '%s\n' "UEFI entry  : $GRUB_BOOTLOADER_ID"
-printf '%s\n' "OS prober   : $ENABLE_OS_PROBER"
+printf '%s\n' "OS prober   : $ENABLE_OS_PROBER (mode: $OS_PROBER_MODE)"
 printf '%s\n' "============================================================"
 printf '\n'
 printf '%s\n' "The script will configure:"
@@ -349,13 +385,40 @@ else
     printf '%s\n' "  * Btrfs quota support: SKIPPED (ENABLE_BTRFS_QUOTA=no)"
 fi
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
-    printf '%s\n' "  * os-prober enabled (GRUB will scan for other OSes)"
+    if [[ "$OS_PROBER_MODE" == "internal" ]]; then
+        printf '%s\n' "  * os-prober enabled -- internal disks only (USB/removable skipped)"
+    else
+        printf '%s\n' "  * os-prober enabled -- scans every disk it can see"
+    fi
 fi
 printf '%s\n' "============================================================"
 printf '\n'
 
-read -r -p "Continue? [Y/n] " ANSWER
-[[ "$ANSWER" =~ ^[Nn]$ ]] && { echo "Cancelled."; exit 0; }
+if [[ "${#WARN_LIST[@]}" -gt 0 ]]; then
+    printf '%s\n' "Warnings from the system checks:"
+    for w in "${WARN_LIST[@]}"; do
+        printf '%s\n' "  [!] $w"
+    done
+    printf '\n'
+fi
+printf '%s\n' "(scroll with the arrow keys / PgUp / PgDn)"
+} > "$SUMMARY_FILE"
+
+dlg --title "Summary -- review before anything is changed" \
+    --exit-label "Continue" --textbox "$SUMMARY_FILE" "$LOG_H" "$LOG_W"
+rm -f "$SUMMARY_FILE"
+
+ask_yes "Confirm" "Apply this configuration now?\n\nBackups of the files that get changed are written to:\n  $BACKUP_DIR" yes || abort
+
+# ============================================================
+# SETUP (unattended; live output in a dialog box)
+#
+# Everything below runs inside run_setup(). NOTE: the body is
+# deliberately not indented -- the heredocs inside must keep their
+# terminators in column 0.
+# ============================================================
+
+run_setup() {
 
 # ---------------- BACKUPS ----------------
 
@@ -402,7 +465,7 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     PACKAGES+=(os-prober ntfs-3g fuse3)
 fi
 
-pacman -S --needed --noconfirm "${PACKAGES[@]}"
+pacman -S --needed --noconfirm --noprogressbar "${PACKAGES[@]}"
 
 # ---------------- GRUB THEME INSTALL ----------------
 
@@ -662,6 +725,25 @@ set_grub_option "GRUB_SAVEDEFAULT" "true"  "$GRUB_DEFAULT_FILE"
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     log "Enabling os-prober so GRUB detects other operating systems..."
     set_grub_option "GRUB_DISABLE_OS_PROBER" "false" "$GRUB_DEFAULT_FILE"
+
+    if [[ "$OS_PROBER_MODE" == "internal" ]]; then
+        OS_SKIP_LIST="$(external_skip_list)"
+        set_grub_option "GRUB_OS_PROBER_SKIP_LIST" "\"${OS_SKIP_LIST}\"" "$GRUB_DEFAULT_FILE"
+        if [[ -n "$OS_SKIP_LIST" ]]; then
+            info "os-prober will skip these USB/removable filesystems:"
+            for entry in $OS_SKIP_LIST; do info "  $entry"; done
+        else
+            info "No USB/removable disks with filesystems are connected right now."
+        fi
+        info "(Only devices connected NOW are listed. A USB stick with a different"
+        info " UUID plugged in later can still be detected -- re-run this step or add"
+        info " its UUID@device to GRUB_OS_PROBER_SKIP_LIST in /etc/default/grub.)"
+    elif grep -qE '^#?[[:space:]]*GRUB_OS_PROBER_SKIP_LIST=' "$GRUB_DEFAULT_FILE"; then
+        # "all" mode: clear any skip list left by an earlier run.
+        set_grub_option "GRUB_OS_PROBER_SKIP_LIST" '""' "$GRUB_DEFAULT_FILE"
+    fi
+elif [[ "$OS_PROBER_MODE" == "off" ]]; then
+    set_grub_option "GRUB_DISABLE_OS_PROBER" "true" "$GRUB_DEFAULT_FILE"
 fi
 
 # Build the command line for systemd's sd-encrypt hook.
@@ -816,6 +898,11 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
             continue
         fi
 
+        # In "internal" mode don't even look at USB/removable disks.
+        if [[ "$OS_PROBER_MODE" == "internal" ]] && is_external_disk_part "$dev"; then
+            continue
+        fi
+
         if mount -o ro "$dev" "$WIN_ESP_MOUNT" 2>/dev/null; then
             if [[ -f "$WIN_ESP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]]; then
                 WIN_ESP="$dev"
@@ -913,6 +1000,11 @@ echo "--- GRUB command line ---"
 grep -E '^[[:space:]]*GRUB_CMDLINE_LINUX_DEFAULT=' /etc/default/grub || true
 
 echo
+echo "--- Other operating systems in the GRUB menu ---"
+OS_ENTRIES="$(grep -E "^menuentry '.*osprober" /boot/grub/grub.cfg 2>/dev/null | sed -E "s/^menuentry '([^']*)'.*/  \1/" || true)"
+echo "${OS_ENTRIES:-  (none found)}"
+
+echo
 echo "--- GRUB saved default ---"
 grep -E '^[[:space:]]*(GRUB_DEFAULT|GRUB_SAVEDEFAULT|GRUB_DISABLE_OS_PROBER)=' /etc/default/grub || true
 
@@ -972,3 +1064,19 @@ echo "Configuration backups:"
 echo "  $BACKUP_DIR"
 echo
 echo "============================================================"
+}
+
+run_in_box "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup
+
+if [[ "$RUN_RC" -ne 0 ]]; then
+    msg_box "Setup FAILED" "The setup did not finish.\n\nNothing was deleted -- backups of the changed files are in:\n  $BACKUP_DIR\n\nSee the log for details:\n  $LOG_FILE"
+    exit 1
+fi
+
+msg_box "Setup complete" "Btrfs / Snapper / GRUB setup finished.\n\nBackups of the changed files:\n  $BACKUP_DIR\n\nFull log:\n  $LOG_FILE\n\nBefore rebooting you can inspect: lsblk -f, /etc/fstab, /etc/default/grub, /etc/mkinitcpio.conf"
+
+if ask_yes "Reboot" "Reboot now?" no; then
+    clear
+    reboot
+fi
+clear
