@@ -429,7 +429,7 @@ if in_array f5vpn-ng "${AUR_PACKAGES[@]}"; then
 fi
 RESULT+="\nFull log: $LOG_FILE"
 
-dlg --title "App install complete" --no-collapse --cr-wrap --msgbox "$RESULT" 0 "$BOX_W"
+dlg --clear --title "App install complete" --no-collapse --cr-wrap --msgbox "$RESULT" 0 "$BOX_W"
 
 clear
 log "App install complete. Log: $LOG_FILE"
