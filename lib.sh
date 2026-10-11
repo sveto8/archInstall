@@ -142,11 +142,13 @@ dlg() {
 # (dialog itself writes results to stderr).
 dlg_capture() { dlg "$@" 3>&1 1>&2 2>&3; }
 
-# Leave cleanly (exit 0) when the user cancels a dialog.
+# Leave cleanly when the user cancels a dialog. Exits with 130 (= 128 +
+# SIGINT), which lets callers tell a CANCEL apart from a real success
+# (exit 0) and from a real failure (any other non-zero exit code).
 abort() {
     clear
     echo "${1:-Cancelled -- nothing was changed.}"
-    exit 0
+    exit 130
 }
 
 # ---------------- DIALOG WIDGET HELPERS ----------------
@@ -241,6 +243,47 @@ run_in_box() {
     if (( had_pf )); then set -o pipefail; fi
     if (( had_e )); then set -e; fi
     if [[ -s "$ok_file" ]]; then RUN_RC=0; fi
+    rm -f "$ok_file"
+    clear
+    return 0
+}
+
+# run_with_gauge <title> <logfile> <function>
+#
+# Like run_in_box, but shows a real filling progress bar (dialog --gauge)
+# instead of scrolling output. The function must print progress frames to
+# stdout in this exact format:
+#
+#     XXX
+#     <percent 0-100>
+#     <message>
+#     XXX
+#
+# Everything the function wants to log must be redirected to a file by
+# the function itself (2>> of the subshell is already piped into
+# <logfile> by run_with_gauge). The result is returned in $RUN_GAUGE_RC
+# (0 = the function ran to the end; 1 = a command inside it failed and
+# aborted it). The function itself always returns 0.
+#
+# Same caveats as run_in_box: call it as a plain statement, then test
+# $RUN_GAUGE_RC; do NOT put the call in if / && / ||. The function runs
+# in a subshell, so report results via files, not variables.
+RUN_GAUGE_RC=1
+run_with_gauge() {
+    local title="$1" logfile="$2" func="$3" ok_file had_e=0 had_pf=0
+    RUN_GAUGE_RC=1
+    ok_file="$(mktemp)"
+    mkdir -p "$(dirname "$logfile")"
+    { echo; echo "=== $(date): $title ==="; } >> "$logfile"
+
+    if [[ $- == *e* ]]; then had_e=1; fi
+    if [[ "$SHELLOPTS" == *pipefail* ]]; then had_pf=1; fi
+    set +e +o pipefail
+    ( set -e; "$func"; echo ok > "$ok_file" ) 2>> "$logfile" \
+        | dlg --title "$title" --gauge "Starting..." 8 "$BOX_W"
+    if (( had_pf )); then set -o pipefail; fi
+    if (( had_e )); then set -e; fi
+    if [[ -s "$ok_file" ]]; then RUN_GAUGE_RC=0; fi
     rm -f "$ok_file"
     clear
     return 0
