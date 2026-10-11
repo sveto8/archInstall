@@ -199,9 +199,13 @@ else
 fi
 
 # ---------------- DISK ENCRYPTION PASSPHRASE ----------------
+#
+# The warning and the passphrase prompt are ONE screen: the warning text
+# is passed as the (optional) intro of ask_password and is shown above
+# the password field inside the same dialog. No separate msg_box.
 
-msg_box "Disk encryption" "The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
-ask_password LUKS_PASS "LUKS passphrase" || abort
+LUKS_INTRO="The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
+ask_password LUKS_PASS "LUKS passphrase" "$LUKS_INTRO" || abort
 
 # ---------------- HARDWARE CLOCK (RTC) ----------------
 #
