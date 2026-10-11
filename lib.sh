@@ -297,3 +297,56 @@ run_with_gauge() {
     clear
     return 0
 }
+
+# run_on_terminal <title> <logfile> <function> [nowait]
+#
+# Runs <function> DIRECTLY on the real terminal -- no dialog box. This is
+# used for long pacman / pacstrap / makepkg steps, where pacman's own
+# native progress bar (which needs a real TTY) is much more useful than a
+# scrolling dialog box. All output is shown live on screen AND appended
+# to <logfile> via tee.
+#
+# The result is returned in $RUN_TTY_RC (0 = the function ran to the end;
+# non-zero = the exit code of a command inside it). The function itself
+# always returns 0.
+#
+# If the 4th arg is "nowait", the "Press Enter to continue" prompt is
+# skipped -- useful when the caller shows its own message right after.
+#
+# Same caveats as run_in_box: call as a plain statement, then test
+# $RUN_TTY_RC. Do NOT put the call in if / && / || -- bash disables
+# "set -e" for everything inside such a call. The function runs in a
+# subshell, so report results via files, not variables.
+RUN_TTY_RC=1
+run_on_terminal() {
+    local title="$1" logfile="$2" func="$3" wait_after="${4:-yes}"
+    local had_e=0 had_pf=0 rc
+    RUN_TTY_RC=1
+    mkdir -p "$(dirname "$logfile")"
+    { echo; echo "=== $(date): $title ==="; } >> "$logfile"
+
+    if [[ $- == *e* ]]; then had_e=1; fi
+    if [[ "$SHELLOPTS" == *pipefail* ]]; then had_pf=1; fi
+    set +e +o pipefail
+
+    clear
+    printf '\n\033[1;36m===== %s =====\033[0m\n\n' "$title"
+    ( set -e; "$func" ) 2>&1 | tee -a "$logfile"
+    rc="${PIPESTATUS[0]}"
+
+    if (( had_pf )); then set -o pipefail; fi
+    if (( had_e )); then set -e; fi
+
+    if [[ "$rc" -eq 0 ]]; then
+        RUN_TTY_RC=0
+        printf '\n\033[1;32m[+] %s: done.\033[0m\n' "$title"
+    else
+        printf '\n\033[1;31m[!] %s: FAILED (exit code %d).\033[0m\n' "$title" "$rc"
+    fi
+    printf '\033[1;36m    (full output: %s)\033[0m\n' "$logfile"
+    if [[ "$wait_after" == "yes" ]]; then
+        printf '\nPress Enter to continue...'
+        read -r _ || true
+    fi
+    return 0
+}
