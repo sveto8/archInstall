@@ -278,6 +278,10 @@ run_in_box() {
 # $RUN_GAUGE_RC; do NOT put the call in if / && / ||. The function runs
 # in a subshell, so report results via files, not variables.
 RUN_GAUGE_RC=1
+# Height of the dialog --gauge box. Scripts that draw a phase tree with
+# sub-items (installApps.sh) set this higher before calling run_with_gauge;
+# everything else keeps the previous 8-row default.
+GAUGE_HEIGHT="${GAUGE_HEIGHT:-8}"
 run_with_gauge() {
     local title="$1" logfile="$2" func="$3" ok_file had_e=0 had_pf=0
     RUN_GAUGE_RC=1
@@ -289,7 +293,7 @@ run_with_gauge() {
     if [[ "$SHELLOPTS" == *pipefail* ]]; then had_pf=1; fi
     set +e +o pipefail
     ( set -e; "$func"; echo ok > "$ok_file" ) 2>> "$logfile" \
-        | dlg --title "$title" --gauge "Starting..." 8 "$BOX_W"
+            | dlg --title "$title" --gauge "Starting..." "$GAUGE_HEIGHT" "$BOX_W"
     if (( had_pf )); then set -o pipefail; fi
     if (( had_e )); then set -e; fi
     if [[ -s "$ok_file" ]]; then RUN_GAUGE_RC=0; fi
