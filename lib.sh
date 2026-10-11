@@ -172,7 +172,7 @@ ask_yes() {
 
 # msg_box <title> <text>
 msg_box() {
-    dlg --title "$1" --no-collapse --cr-wrap \
+    dlg --clear --title "$1" --no-collapse --cr-wrap \
         --msgbox "$2" "$(_text_height "$2")" "$BOX_W"
 }
 
