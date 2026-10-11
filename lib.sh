@@ -184,19 +184,28 @@ ask_text() {
     printf -v "$__var" '%s' "$out"
 }
 
-# ask_password <varname> <title> -> asks twice, loops until they match.
-# Returns 1 on cancel/ESC.
+# ask_password <varname> <title> [intro]
+#
+# Asks twice, loops until they match. Returns 1 on cancel/ESC.
+# If <intro> is given, it is shown above the password field -- this
+# lets a preceding "msg_box" be folded into the password prompt so the
+# user sees the warning and types the password on a single screen.
 ask_password() {
-    local __var="$1" title="$2" p1 p2
+    local __var="$1" title="$2" intro="${3:-}" p1 p2
+    local prompt1="Enter password:" prompt2="Repeat the password:"
+    if [[ -n "$intro" ]]; then
+        prompt1="${intro}\n\nEnter password:"
+        prompt2="${intro}\n\nRepeat the password:"
+    fi
     while true; do
-        p1="$(dlg_capture --title "$title" --insecure \
-            --passwordbox "Enter password:" 9 "$BOX_W")" || return 1
+        p1="$(dlg_capture --title "$title" --insecure --cr-wrap \
+            --passwordbox "$prompt1" "$(_text_height "$prompt1")" "$BOX_W")" || return 1
         if [[ -z "$p1" ]]; then
             msg_box "$title" "The password can't be empty."
             continue
         fi
-        p2="$(dlg_capture --title "$title" --insecure \
-            --passwordbox "Repeat the password:" 9 "$BOX_W")" || return 1
+        p2="$(dlg_capture --title "$title" --insecure --cr-wrap \
+            --passwordbox "$prompt2" "$(_text_height "$prompt2")" "$BOX_W")" || return 1
         if [[ "$p1" == "$p2" ]]; then
             printf -v "$__var" '%s' "$p1"
             return 0
