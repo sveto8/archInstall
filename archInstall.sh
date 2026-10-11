@@ -194,8 +194,8 @@ if [[ -n "$NEW_USERNAME" && "$MAKE_SUDO" == "yes" ]]; then
     SET_ROOT_PASSWORD="no"        # root stays locked; use sudo
 else
     SET_ROOT_PASSWORD="yes"
-    msg_box "Root password" "No sudo-enabled user will exist, so the root account needs a password to be able to log in."
-    ask_password ROOT_PASS "Root password" || abort
+    ROOT_INTRO="No sudo-enabled user will exist, so the root account needs a password to be able to log in."
+    ask_password ROOT_PASS "Root password" "$ROOT_INTRO" || abort
 fi
 
 # ---------------- DISK ENCRYPTION PASSPHRASE ----------------
