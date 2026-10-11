@@ -252,26 +252,75 @@ fi
 # ---------------- INSTALL ----------------
 #
 # Everything from here on runs inside run_de_install(): in interactive mode
-# with live output in a dialog box, in non-interactive mode directly (its
-# output then goes to the caller). The body is deliberately not indented.
+# with live output in a dialog box (with phase checklist), in
+# non-interactive mode (called from archInstall.sh's chroot) output just
+# goes to stdout so the caller can parse its "(N/M) installing" lines and
+# drive its own gauge. The body is deliberately not indented.
 
 run_de_install() {
 
-exec 3>&1
-exec 1>>"$LOG_FILE"
-gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
+# ---- Phase checklist (interactive only) ----
+local -a PHASES=(
+    "Packages installed"
+    "Icon & cursor themes"
+    "Display manager enabled"
+    "Desktop theme configured"
+    "Finalizing"
+)
+local CURRENT_PHASE=0
+
+_phase_prompt() {
+    local i out=""
+    for ((i=0; i<${#PHASES[@]}; i++)); do
+        if (( i < CURRENT_PHASE )); then
+            out+="  [x] ${PHASES[i]}"$'\n'
+        elif (( i == CURRENT_PHASE )); then
+            out+="  [>] ${PHASES[i]}"$'\n'
+        else
+            out+="  [ ] ${PHASES[i]}"$'\n'
+        fi
+    done
+    printf '%s' "$out"
+}
+
+if (( INTERACTIVE )); then
+    # Interactive: run our own gauge. FD 3 -> gauge pipe; stdout -> log.
+    exec 3>&1
+    exec 1>>"$LOG_FILE"
+    gauge_msg() {
+        local pct="$1" msg="$2"
+        {
+            printf 'XXX\n%d\n' "$pct"
+            _phase_prompt
+            printf '\n%s\n' "$msg"
+            printf 'XXX\n'
+        } >&3
+    }
+    set_phase() { CURRENT_PHASE="$1"; }
+else
+    # Non-interactive (chroot from archInstall.sh): everything goes to
+    # stdout so the caller's while-read loop can parse "(N/M) installing"
+    # lines and update ITS gauge. Our own gauge_msg is a no-op.
+    gauge_msg() { :; }
+    set_phase() { :; }
+fi
+
+set_phase 0
+gauge_msg 5 "Installing ${DE_NAME} packages -- downloading..."
 
 log "Installing $DE_NAME packages..."
 
-gauge_msg 5 "Installing ${DE_NAME} packages -- downloading..."
-
+# Stream pacman output. In interactive mode stdout goes to the log and
+# only the gauge gets the (phase + percent) frames; in non-interactive
+# mode every line (including the "(N/M) installing" markers) is printed
+# to stdout so the parent can consume it.
 stdbuf -oL pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}" 2>&1 | \
     while IFS= read -r line; do
         printf '%s\n' "$line"
         if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
             _cur="${BASH_REMATCH[1]}"
             _tot="${BASH_REMATCH[2]}"
-            gauge_msg "$(( 5 + 60 * _cur / _tot ))" "Installing ${DE_NAME} (${_cur}/${_tot})..."
+            gauge_msg "$(( 5 + 45 * _cur / _tot ))" "Installing ${DE_NAME} (${_cur}/${_tot})..."
         fi
     done
 [[ "${PIPESTATUS[0]}" -eq 0 ]] || die "pacman failed installing ${DE_NAME}."
@@ -284,7 +333,10 @@ stdbuf -oL pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}" 2>
 # just waste bandwidth, time and disk space on themes that never get
 # activated -- so it only runs for GNOME.
 
+set_phase 1
 if [[ "$DE_CHOICE" == "1" ]]; then
+    gauge_msg 55 "Downloading icon and cursor themes..."
+    log "Downloading icon and cursor themes..."
 
     ICONS_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
 
@@ -364,15 +416,18 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         done
         info "Icon cache updated."
     fi
-
 fi
 
+set_phase 2
+gauge_msg 65 "Enabling $DM_SERVICE..."
 log "Enabling $DM_SERVICE..."
 systemctl enable "$DM_SERVICE"
 
 # ---------------- GNOME: DARK THEME + SLATE ACCENT ----------------
 
+set_phase 3
 if [[ "$DE_CHOICE" == "1" ]]; then
+    gauge_msg 75 "Configuring GNOME theme for $TARGET_USER..."
     log "Setting GNOME dark theme + slate accent for $TARGET_USER..."
 
     if in_chroot; then
@@ -513,6 +568,9 @@ fi
 
 # ---------------- DONE ----------------
 
+set_phase 4
+gauge_msg 100 "Desktop environment installed."
+
 log "Desktop environment install complete."
 
 echo
@@ -528,9 +586,12 @@ if [[ "$DE_CHOICE" == "3" ]]; then
     echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
 fi
 echo "============================================================"
-gauge_msg 100 "Desktop environment installed."
-exec 1>&3
-exec 3>&-
+
+# Restore stdout in interactive mode so the caller sees a clean pipe.
+if (( INTERACTIVE )); then
+    exec 1>&3
+    exec 3>&-
+fi
 }
 
 if (( INTERACTIVE )); then
