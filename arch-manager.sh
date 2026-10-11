@@ -227,7 +227,12 @@ run_script() {
 report_result() {
     local script="$1"
     if [[ "$RUN_SCRIPT_RC" -eq 0 ]]; then
-        msg_box "$script" "$script completed successfully."
+        # Every script already shows its OWN completion dialog when it
+        # finishes successfully (setupAfterInstall.sh -> "Setup complete",
+        # installDE.sh -> "Desktop installed", installApps.sh -> "App
+        # install complete"). A second generic "completed successfully"
+        # from the manager would just be a duplicate, so skip it.
+        return 0
     elif [[ "$RUN_SCRIPT_RC" -eq 130 ]]; then
         msg_box "$script" "$script was cancelled -- nothing was changed."
     else
