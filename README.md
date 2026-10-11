@@ -64,6 +64,15 @@ chmod +x arch-manager.sh
 ./arch-manager.sh
 ```
 
+**Important:** everything is downloaded from the `main` branch of the repo,
+so **all files — including the new `lib.sh` — must be pushed to GitHub**
+first. A missing file shows up as `HTTP 404` in the error message
+(`000` = no network / DNS problem). If you want to run without GitHub (or
+test local changes), put `arch-manager.sh`, `lib.sh` and the four scripts
+**in the same folder**: the manager always prefers local copies (next to
+itself, in `scripts/`, or in `/archInstall/scripts`) over downloading, and
+every script finds `lib.sh` next to itself.
+
 The manager fetches `lib.sh` and the four phase scripts by itself (the
 first run of any script downloads a missing `lib.sh`; `dialog` is
 installed automatically if it's missing — on the live ISO that needs the
@@ -436,9 +445,11 @@ Menu:
 
 Details:
 
-- Scripts are fetched **on demand** (and `lib.sh` with them). On the
-  installed system the manager first seeds its download folder from
-  `/archInstall/scripts/`, so nothing needs re-downloading
+- Scripts are fetched **on demand** (and `lib.sh` with them), but local
+  copies win: it first seeds its download folder from files next to the
+  manager, a `scripts/` folder beside it, or `/archInstall/scripts/` (on
+  the installed system), so nothing needs re-downloading. Failed downloads
+  say why (HTTP code + URL) and never leave an HTML error page behind
 - Downloads go to `~/arch-setup/downloads/` of the *real* user (resolved
   via `$SUDO_USER` when run with `sudo`), not `/root`
 - Runs `archInstall.sh` / `setupAfterInstall.sh` / `installDE.sh` with
@@ -523,7 +534,13 @@ Sourced by all five scripts so the dialog code lives in one place:
 - `ensure_dialog` — installs `dialog` if missing (`pacman -Sy` on the live
   ISO, plain `pacman -S` on an installed system so it never does a partial
   upgrade)
-- `ui_init`, `dlg`, `dlg_capture`, `abort`, `ask_yes`, `msg_box`,
+- `dlg` sizes every `--menu` / `--checklist` itself: whatever height the
+  caller passes is replaced by one computed from the real item count and
+  text length, so the box is as small as possible, **all items are visible
+  at once** (no scrolling for a handful of disks) and the list only scrolls
+  when it truly doesn't fit the terminal. (Passing `0 0 0` to dialog does
+  *not* do this — it showed a large box with a single visible row.)
+- `ui_init`, `dlg_capture`, `abort`, `ask_yes`, `msg_box`,
   `ask_text`, `ask_password` (asks twice, loops until they match)
 - `run_in_box <title> <logfile> <function>` — runs a function with live
   output in a dialog box, appended to a log file; the result is left in
