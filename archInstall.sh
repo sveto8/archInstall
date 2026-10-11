@@ -406,7 +406,7 @@ ask_text CONFIRM "FINAL CONFIRMATION" "This is the point of no return.\n\n$DEVIC
 # run_with_gauge gives the function FD 3 pointing at the gauge; stdout
 # is redirected inside run_install to $LOG_FILE so that pacman's output
 # and our own log/info/warn lines are captured cleanly. Only
-# gauge_msg writes the percent+message frames to FD 3.
+# gauge_msg writes the percent+message+phase frames to FD 3.
 # ============================================================
 
 DE_FAILED_FILE="$(mktemp)"
@@ -446,7 +446,7 @@ _phase_prompt() {
     printf '%s' "$out"
 }
 
-# New gauge_msg: prints the phase checklist, then a blank line, then the
+# gauge_msg: prints the phase checklist, then a blank line, then the
 # current message, above the progress bar. Called from anywhere inside
 # run_install (including inside pipelines -- it only reads CURRENT_PHASE).
 gauge_msg() {
@@ -463,17 +463,15 @@ gauge_msg() {
 # OUTSIDE pipelines (it modifies a local var).
 set_phase() { CURRENT_PHASE="$1"; }
 
-gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
-
 # ---------------- PARTITIONING ----------------
 
+set_phase 1
 gauge_msg 2 "Wiping and partitioning $DEVICE..."
 
 log "Wiping and partitioning $DEVICE..."
 
 echo
 echo "==> Wiping existing filesystem signatures..."
-set_phase 1
 wipefs -af "$DEVICE"
 
 echo
@@ -505,11 +503,11 @@ done
 
 # ---------------- FORMAT ESP + /boot ----------------
 
+set_phase 2
 gauge_msg 6 "Formatting ESP and /boot..."
 
 log "Formatting ESP and /boot..."
 
-set_phase 2
 mkfs.fat -F32 -n EFI "$ESP"
 mkfs.ext4 -F -L boot "$BOOTPART"
 sync
@@ -594,6 +592,7 @@ fi
 
 # ---------------- PACSTRAP ----------------
 
+set_phase 3
 gauge_msg 21 "Installing base system (pacstrap) -- downloading, this may take a while..."
 
 log "Installing base system (pacstrap)..."
@@ -607,15 +606,14 @@ PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
 # Stream pacstrap output: everything goes to the log, and the "(N/M)
 # installing pkg" lines drive the gauge between 21% and 43%. stdbuf -oL
 # forces line-buffered output so the gauge updates smoothly instead of
-# in bursts.
-set_phase 3
+# in bursts. Every gauge update goes through gauge_msg so the phase
+# checklist stays visible while pacstrap runs.
 stdbuf -oL pacstrap -K /mnt "${PACKAGES[@]}" 2>&1 | while IFS= read -r line; do
     printf '%s\n' "$line"
     if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
         _cur="${BASH_REMATCH[1]}"
         _tot="${BASH_REMATCH[2]}"
-        printf 'XXX\n%d\nInstalling base packages (%d/%d)...\nXXX\n' \
-            "$(( 21 + 22 * _cur / _tot ))" "$_cur" "$_tot" >&3
+        gauge_msg "$(( 21 + 22 * _cur / _tot ))" "Installing base packages (${_cur}/${_tot})..."
     fi
 done
 PACSTRAP_RC="${PIPESTATUS[0]}"
@@ -720,12 +718,12 @@ fi
 
 # ---------------- CHROOT CONFIGURATION (unattended) ----------------
 
+set_phase 4
 gauge_msg 51 "Configuring the new system (chroot)..."
 
 log "Configuring the new system (chroot)..."
 
 # --- CHROOT SCRIPT ---
-set_phase 4
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
@@ -837,6 +835,7 @@ CHROOT_EOF
 # code is captured via PIPESTATUS[0] and handled manually below.
 
 if [[ -n "$DE_CHOICE" ]]; then
+    set_phase 5
     gauge_msg 55 "Installing desktop environment: $DE_LABEL ..."
     log "Installing the desktop environment: $DE_LABEL ..."
 
@@ -866,8 +865,7 @@ if [[ -n "$DE_CHOICE" ]]; then
                 if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
                     _cur="${BASH_REMATCH[1]}"
                     _tot="${BASH_REMATCH[2]}"
-                    printf 'XXX\n%d\nInstalling desktop environment (%d/%d)...\nXXX\n' \
-                        "$(( 55 + 43 * _cur / _tot ))" "$_cur" "$_tot" >&3
+                    gauge_msg "$(( 55 + 43 * _cur / _tot ))" "Installing desktop environment (${_cur}/${_tot})..."
                 fi
             done
         DE_RC="${PIPESTATUS[0]}"
@@ -887,6 +885,7 @@ fi
 
 # ---------------- COPY INSTALLER SCRIPTS TO THE NEW SYSTEM ----------------
 
+set_phase 6
 gauge_msg 98 "Copying installer scripts to /archInstall on the new system..."
 
 log "Copying the installer scripts to /archInstall on the new system..."
@@ -909,7 +908,6 @@ else
 fi
 
 # Scripts already next to this one (incl. lib.sh), then anything missing from the repo.
-set_phase 6
 cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
 cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh   # the manager sources it from its own folder
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
