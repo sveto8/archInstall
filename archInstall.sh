@@ -414,13 +414,17 @@ DE_FAILED_FILE="$(mktemp)"
 run_install() {
 
 # Save the pipe to dialog --gauge as FD 3; redirect stdout to the log.
-# Every echo / log / info / warn / pacman line ends up in the log, and
-# only gauge_msg writes to the gauge. This keeps the bar clean and still
-# captures the full transcript in $LOG_FILE.
 exec 3>&1
 exec 1>>"$LOG_FILE"
 
-# ---- Phase checklist shown inside the gauge prompt ----
+# ---- Phase tree shown inside the gauge prompt ----
+#
+# PHASES is the static list of phases; CURRENT_PHASE is the 0-based index
+# of the phase currently running; CUR_ITEMS is the list of sub-steps
+# inside that phase; CUR_IDX is the index of the sub-step currently being
+# processed. Only the CURRENT phase expands into its sub-steps -- the
+# rest stay collapsed into one line each. WIN controls how many sub-steps
+# are shown around the current one.
 local -a PHASES=(
     "User info collected"
     "Disk partitioned"
@@ -431,14 +435,35 @@ local -a PHASES=(
     "Finalizing"
 )
 local CURRENT_PHASE=0
+local -a CUR_ITEMS=()
+local CUR_IDX=0
+local WIN=5
 
 _phase_prompt() {
-    local i out=""
+    local i j n start end out=""
     for ((i=0; i<${#PHASES[@]}; i++)); do
         if (( i < CURRENT_PHASE )); then
             out+="  [x] ${PHASES[i]}"$'\n'
         elif (( i == CURRENT_PHASE )); then
             out+="  [>] ${PHASES[i]}"$'\n'
+            n=${#CUR_ITEMS[@]}
+            if (( n > 0 )); then
+                start=$(( CUR_IDX - WIN/2 ))
+                (( start < 0 )) && start=0
+                end=$(( start + WIN ))
+                (( end > n )) && end=$n
+                (( start > 0 )) && out+="        ..."$'\n'
+                for ((j=start; j<end; j++)); do
+                    if (( j < CUR_IDX )); then
+                        out+="        [x] ${CUR_ITEMS[j]}"$'\n'
+                    elif (( j == CUR_IDX )); then
+                        out+="        [>] ${CUR_ITEMS[j]}"$'\n'
+                    else
+                        out+="        [ ] ${CUR_ITEMS[j]}"$'\n'
+                    fi
+                done
+                (( end < n )) && out+="        ..."$'\n'
+            fi
         else
             out+="  [ ] ${PHASES[i]}"$'\n'
         fi
@@ -446,9 +471,8 @@ _phase_prompt() {
     printf '%s' "$out"
 }
 
-# gauge_msg: prints the phase checklist, then a blank line, then the
-# current message, above the progress bar. Called from anywhere inside
-# run_install (including inside pipelines -- it only reads CURRENT_PHASE).
+# gauge_msg: prints the phase tree, then a blank line, then the current
+# message, above the progress bar.
 gauge_msg() {
     local pct="$1" msg="$2"
     {
@@ -459,127 +483,93 @@ gauge_msg() {
     } >&3
 }
 
-# set_phase <N> -- advance to the N-th phase (0-based). Must be called
-# OUTSIDE pipelines (it modifies a local var).
-set_phase() { CURRENT_PHASE="$1"; }
+set_phase()  { CURRENT_PHASE="$1"; }
+set_items()  { CUR_ITEMS=("$@"); CUR_IDX=0; }
+advance()    { CUR_IDX=$((CUR_IDX + 1)); }
 
 # ---------------- PARTITIONING ----------------
 
 set_phase 1
-gauge_msg 2 "Wiping and partitioning $DEVICE..."
+set_items "Wiping disk signatures" "Creating partitions" "Re-reading partition table"
 
+gauge_msg 2 "Wiping filesystem signatures on $DEVICE..."
 log "Wiping and partitioning $DEVICE..."
-
-echo
-echo "==> Wiping existing filesystem signatures..."
 wipefs -af "$DEVICE"
+advance
 
-echo
-echo "==> Wiping existing GPT/MBR partition table..."
+gauge_msg 4 "Creating partitions on $DEVICE..."
 sgdisk --zap-all "$DEVICE"
-
-echo
-echo "==> Creating EFI partition (${ESP_SIZE})..."
 sgdisk -n1:0:+${ESP_SIZE} -t1:ef00 -c1:"EFI" "$DEVICE"
-
-echo
-echo "==> Creating boot partition (${BOOT_SIZE})..."
 sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot" "$DEVICE"
-
-echo
-echo "==> Creating root partition (remaining disk space)..."
 sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
+advance
 
-echo
-echo "==> Disk partitioning completed."
-
+gauge_msg 6 "Re-reading partition table..."
 partprobe "$DEVICE"
 udevadm settle
 sleep 3
-
 for p in "$ESP" "$BOOTPART" "$LUKSPART"; do
     [[ -b "$p" ]] || die "$p does not exist yet -- the kernel may not have re-read the partition table. Try running 'partprobe $DEVICE' manually, then re-run this script."
 done
+advance
 
-# ---------------- FORMAT ESP + /boot ----------------
+# ---------------- FORMAT + LUKS + BTRFS ----------------
 
 set_phase 2
-gauge_msg 6 "Formatting ESP and /boot..."
+set_items \
+    "Formatting ESP and /boot" \
+    "Creating and opening LUKS2" \
+    "Creating Btrfs and subvolumes" \
+    "Mounting filesystems" \
+    "Optimizing mirrorlist"
 
+gauge_msg 9 "Formatting ESP and /boot..."
 log "Formatting ESP and /boot..."
-
 mkfs.fat -F32 -n EFI "$ESP"
 mkfs.ext4 -F -L boot "$BOOTPART"
 sync
 udevadm settle
+advance
 
-# ---------------- LUKS2 ----------------
-
-gauge_msg 10 "Creating LUKS2 container on $LUKSPART..."
-
+gauge_msg 11 "Creating LUKS2 container on $LUKSPART..."
 log "Creating LUKS2 container on $LUKSPART..."
-
-# The passphrase collected earlier is fed through stdin (--key-file=-);
-# --batch-mode skips cryptsetup's own "type YES" prompt, since the typed
-# WIPE confirmation has already been given.
 printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --label cryptroot --batch-mode --key-file=- "$LUKSPART"
 
 gauge_msg 13 "Opening LUKS2 container..."
 log "Opening LUKS2 container..."
 printf '%s' "$LUKS_PASS" | cryptsetup open --key-file=- "$LUKSPART" cryptroot
-
 LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
 info "LUKS UUID: $LUKS_UUID"
+advance
 
-# ---------------- BTRFS ----------------
-
-gauge_msg 16 "Creating Btrfs filesystem and subvolumes..."
-
+gauge_msg 15 "Creating Btrfs filesystem and subvolumes..."
 log "Creating Btrfs filesystem and subvolumes..."
-
 mkfs.btrfs -L cryptroot /dev/mapper/cryptroot
-
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 btrfs subvolume create /mnt/@snapshots
 umount /mnt
+advance
 
+gauge_msg 17 "Mounting filesystems..."
+log "Mounting filesystems..."
 mount -o "${MOUNT_OPTS},subvol=@" /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/{home,.snapshots,boot,efi}
 mount -o "${MOUNT_OPTS},subvol=@home" /dev/mapper/cryptroot /mnt/home
 mount -o "${MOUNT_OPTS},subvol=@snapshots" /dev/mapper/cryptroot /mnt/.snapshots
 mount "$BOOTPART" /mnt/boot
 mount "$ESP" /mnt/efi
-
-# ---------------- OPTIMIZE MIRRORLIST (reflector) ----------------
-#
-# Use reflector to rank mirrors by speed and keep only the fastest
-# HTTPS mirrors. This speeds up pacstrap and all subsequent package
-# installs on the live system.
-#
-# The Arch ISO ships with reflector, but install it if missing.
+advance
 
 gauge_msg 19 "Optimizing pacman mirrorlist with reflector..."
-
 log "Optimizing pacman mirrorlist with reflector..."
-
 REFLECTOR_AVAILABLE=1
 if ! command -v reflector >/dev/null 2>&1; then
     pacman -S --needed --noconfirm reflector || REFLECTOR_AVAILABLE=0
 fi
-
 if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
-    # Backup the original mirrorlist (optional but recommended)
     cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
-
-    # Rank the 20 most recently synchronized HTTPS mirrors by download rate
-    # and write the result back to /etc/pacman.d/mirrorlist. Only mirrors
-    # that have synced within the last 12 hours are considered.
-    #
-    # Non-fatal by design: the disk is already partitioned/formatted at
-    # this point, so a transient reflector/network hiccup shouldn't abort
-    # the whole install over what is just a speed optimization.
     if reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist; then
         info "Mirrorlist updated with the fastest HTTPS mirrors."
     else
@@ -589,12 +579,14 @@ if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
 else
     warn "Could not install reflector -- continuing with the default mirrorlist."
 fi
+advance
 
 # ---------------- PACSTRAP ----------------
 
 set_phase 3
-gauge_msg 21 "Installing base system (pacstrap) -- downloading, this may take a while..."
+set_items "Downloading packages" "Installing packages"
 
+gauge_msg 21 "Installing base system (pacstrap) -- downloading, this may take a while..."
 log "Installing base system (pacstrap)..."
 
 PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
@@ -603,24 +595,36 @@ PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
 [[ "$ENABLE_WOL" == "yes" ]] && PACKAGES+=(ethtool)
 
-# Stream pacstrap output: everything goes to the log, and the "(N/M)
-# installing pkg" lines drive the gauge between 21% and 43%. stdbuf -oL
-# forces line-buffered output so the gauge updates smoothly instead of
-# in bursts. Every gauge update goes through gauge_msg so the phase
-# checklist stays visible while pacstrap runs.
-stdbuf -oL pacstrap -K /mnt "${PACKAGES[@]}" 2>&1 | while IFS= read -r line; do
+# Use a FIFO (not a pipe) so the while-loop runs in the CURRENT shell --
+# a normal `pacstrap ... | while read` puts the loop in a subshell and
+# any CUR_IDX/CUR_ITEMS updates inside it would be lost. stdbuf -oL
+# forces line buffering so the gauge updates smoothly.
+_ps_fifo="$(mktemp -u)"
+mkfifo "$_ps_fifo"
+stdbuf -oL pacstrap -K /mnt "${PACKAGES[@]}" > "$_ps_fifo" 2>&1 &
+_ps_pid=$!
+
+_first_nm=0
+while IFS= read -r line; do
     printf '%s\n' "$line"
     if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
         _cur="${BASH_REMATCH[1]}"
         _tot="${BASH_REMATCH[2]}"
+        if (( _first_nm == 0 )); then
+            _first_nm=1
+            CUR_IDX=1
+        fi
         gauge_msg "$(( 21 + 22 * _cur / _tot ))" "Installing base packages (${_cur}/${_tot})..."
     fi
-done
-PACSTRAP_RC="${PIPESTATUS[0]}"
+done < "$_ps_fifo"
+
+PACSTRAP_RC=0
+wait "$_ps_pid" || PACSTRAP_RC=$?
+rm -f "$_ps_fifo"
 [[ "$PACSTRAP_RC" -eq 0 ]] || die "pacstrap failed (exit code $PACSTRAP_RC) -- see $LOG_FILE"
+advance
 
 gauge_msg 45 "Generating /etc/fstab..."
-
 log "/etc/fstab:"
 genfstab -U /mnt >> /mnt/etc/fstab
 cat /mnt/etc/fstab
@@ -635,8 +639,6 @@ if [[ "$WIFI_CARRY" == "yes" ]]; then
     wifi_idx=0
     for f in "${WIFI_PSK_FILES[@]}"; do
         ssid="$(iwd_ssid_from_file "$f")"
-        # Prefer the plain passphrase; fall back to the 64-hex PSK
-        # (NetworkManager accepts either in the psk= field).
         psk="$(sed -n 's/^Passphrase=//p' "$f" | head -n1)"
         [[ -n "$psk" ]] || psk="$(sed -n 's/^PreSharedKey=//p' "$f" | head -n1)"
         if [[ -z "$ssid" || -z "$psk" ]]; then
@@ -650,7 +652,6 @@ if [[ "$WIFI_CARRY" == "yes" ]]; then
         wifi_idx=$((wifi_idx + 1))
         safe="$(printf '%s' "$ssid" | tr -c 'A-Za-z0-9._-' '_')"
         out="${NM_CONN_DIR}/wifi-${wifi_idx}-${safe}.nmconnection"
-        # Keyfile values: backslash must be escaped.
         ssid_esc="${ssid//\\/\\\\}"
         psk_esc="${psk//\\/\\\\}"
         (
@@ -692,7 +693,6 @@ if [[ -n "${NEW_USERNAME}" ]]; then
     log "Creating user ${NEW_USERNAME}..."
     if [[ "${MAKE_SUDO}" == "yes" ]]; then
         arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
-        # Enable the wheel group in sudoers (validated with visudo -c before activating).
         arch-chroot /mnt cp /etc/sudoers /etc/sudoers.bak
         arch-chroot /mnt sed -i -E 's/^# %wheel ALL=\(ALL:ALL\) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
         arch-chroot /mnt visudo -c -f /etc/sudoers || {
@@ -711,7 +711,6 @@ if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
     printf 'root:%s\n' "$ROOT_PASS" | arch-chroot /mnt chpasswd
     info "Root password set."
 else
-    # A fresh Arch root account has an EMPTY password, so lock it explicitly.
     arch-chroot /mnt passwd -l root
     info "Root account locked -- use sudo."
 fi
@@ -719,59 +718,57 @@ fi
 # ---------------- CHROOT CONFIGURATION (unattended) ----------------
 
 set_phase 4
-gauge_msg 51 "Configuring the new system (chroot)..."
+set_items \
+    "Hostname, timezone, locales" \
+    "Network and system services" \
+    "Initramfs (mkinitcpio)" \
+    "Bootloader (GRUB)"
 
+gauge_msg 52 "Configuring hostname, timezone, locales..."
 log "Configuring the new system (chroot)..."
 
-# --- CHROOT SCRIPT ---
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
-# Set hostname and time
 echo "$HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 
-# Hardware clock: either UTC (Linux default) or LOCAL (Windows-friendly).
-# The /etc/adjtime file records the chosen mode for hwclock/systemd.
 if [[ "$RTC_MODE" == "local" ]]; then
     hwclock --systohc --localtime
 else
     hwclock --systohc --utc
 fi
 
-# --- Enable locales ---
-# Enable en_US.UTF-8
 sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
 grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
 
-# Enable hr_HR.UTF-8
 sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
 grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
 
 locale-gen
 
-# Set system locale and keymap
 echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 
-# Export LANGUAGE to avoid "NO" in GDM and other display managers
 mkdir -p /etc/profile.d
 echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
 chmod 644 /etc/profile.d/locale.sh
 
-# Hosts file
 cat >> /etc/hosts <<HOSTS_EOF
 127.0.0.1   localhost
 ::1         localhost
 127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
 
-# Enable NetworkManager
+CHROOT_EOF
+advance
+
+gauge_msg 60 "Configuring network and system services..."
+arch-chroot /mnt /bin/bash <<CHROOT_EOF
+set -Eeuo pipefail
+
 systemctl enable NetworkManager
 
-# Wake-on-LAN: most NIC drivers reset "wol g" back to off on every boot,
-# so a one-shot systemd service (templated on the interface name) is
-# needed to re-apply it after each boot, not just once here.
 if [[ "$ENABLE_WOL" == "yes" ]]; then
     cat > /etc/systemd/system/wol@.service <<'WOL_EOF'
 [Unit]
@@ -789,11 +786,6 @@ WOL_EOF
     systemctl enable "wol@${WOL_IFACE}.service"
 fi
 
-# Configure ZRAM swap for better performance and reduced SSD wear.
-# A zram device is created in RAM, compressed, and used as swap.
-# This is especially useful on systems with limited RAM or SSDs.
-# The config below creates a zram device sized at 50% of RAM,
-# using the zstd compression algorithm.
 cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
 [zram0]
 zram-size = ram / 2
@@ -802,7 +794,13 @@ swap-priority = 100
 fs-type = swap
 ZRAM_EOF
 
-# Initramfs: systemd-based with proper hooks
+CHROOT_EOF
+advance
+
+gauge_msg 68 "Rebuilding initramfs..."
+arch-chroot /mnt /bin/bash <<CHROOT_EOF
+set -Eeuo pipefail
+
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
 cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
 
@@ -810,10 +808,15 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
-# GRUB: add LUKS, locale, and keymap to kernel command line
+CHROOT_EOF
+advance
+
+gauge_msg 74 "Installing GRUB for UEFI..."
+arch-chroot /mnt /bin/bash <<CHROOT_EOF
+set -Eeuo pipefail
+
 sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
-# Install GRUB for UEFI
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -822,21 +825,15 @@ if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
 fi
 
 CHROOT_EOF
+advance
 
 # ---------------- DESKTOP ENVIRONMENT (optional, non-fatal) ----------------
-#
-# installDE.sh runs inside the new system (chroot). Its pacman emits
-# "(N/M) installing <pkg>" lines; each one drives the gauge between 55%
-# and 98%, so the bar fills smoothly during the whole DE install instead
-# of sitting frozen on a single value for several minutes.
-#
-# NOTE: pipefail is off inside run_install (see run_with_gauge), so a
-# non-zero exit from installDE.sh does NOT abort us here -- the exit
-# code is captured via PIPESTATUS[0] and handled manually below.
 
 if [[ -n "$DE_CHOICE" ]]; then
     set_phase 5
-    gauge_msg 55 "Installing desktop environment: $DE_LABEL ..."
+    set_items "Downloading DE packages" "Installing DE packages"
+
+    gauge_msg 80 "Installing desktop environment: $DE_LABEL ..."
     log "Installing the desktop environment: $DE_LABEL ..."
 
     DE_SCRIPT="$SCRIPT_DIR/installDE.sh"
@@ -857,18 +854,32 @@ if [[ -n "$DE_CHOICE" ]]; then
         install -m 755 "$DE_SCRIPT" /mnt/root/arch-setup-tmp/installDE.sh
         install -m 644 "$SCRIPT_DIR/lib.sh" /mnt/root/arch-setup-tmp/lib.sh
 
+        # Same FIFO trick as pacstrap: the loop must run in the current
+        # shell so CUR_IDX updates persist across iterations.
+        _de_fifo="$(mktemp -u)"
+        mkfifo "$_de_fifo"
         arch-chroot /mnt env DE_CHOICE="$DE_CHOICE" INSTALL_MODE="$DE_MODE" \
                 TARGET_USER="$NEW_USERNAME" ASSUME_YES=1 INSTALL_IN_CHROOT=1 \
-                /root/arch-setup-tmp/installDE.sh 2>&1 | \
-            while IFS= read -r line; do
-                printf '%s\n' "$line"
-                if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
-                    _cur="${BASH_REMATCH[1]}"
-                    _tot="${BASH_REMATCH[2]}"
-                    gauge_msg "$(( 55 + 43 * _cur / _tot ))" "Installing desktop environment (${_cur}/${_tot})..."
+                /root/arch-setup-tmp/installDE.sh > "$_de_fifo" 2>&1 &
+        _de_pid=$!
+
+        _first_de_nm=0
+        while IFS= read -r line; do
+            printf '%s\n' "$line"
+            if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
+                _cur="${BASH_REMATCH[1]}"
+                _tot="${BASH_REMATCH[2]}"
+                if (( _first_de_nm == 0 )); then
+                    _first_de_nm=1
+                    CUR_IDX=1
                 fi
-            done
-        DE_RC="${PIPESTATUS[0]}"
+                gauge_msg "$(( 80 + 17 * _cur / _tot ))" "Installing desktop environment (${_cur}/${_tot})..."
+            fi
+        done < "$_de_fifo"
+
+        DE_RC=0
+        wait "$_de_pid" || DE_RC=$?
+        rm -f "$_de_fifo"
         [[ "$DE_RC" -eq 0 ]] && DE_OK=1
 
         rm -rf /mnt/root/arch-setup-tmp
@@ -881,13 +892,15 @@ if [[ -n "$DE_CHOICE" ]]; then
         echo "failed" > "$DE_FAILED_FILE"
         warn "Desktop environment install failed -- the base system is fine. After reboot run installDE.sh again."
     fi
+    advance
 fi
 
 # ---------------- COPY INSTALLER SCRIPTS TO THE NEW SYSTEM ----------------
 
 set_phase 6
-gauge_msg 98 "Copying installer scripts to /archInstall on the new system..."
+set_items "Copying installer scripts"
 
+gauge_msg 98 "Copying installer scripts to /archInstall on the new system..."
 log "Copying the installer scripts to /archInstall on the new system..."
 mkdir -p /mnt/archInstall/scripts
 
@@ -907,9 +920,8 @@ else
     warn "arch-manager.sh not found and could not be downloaded. After reboot: sudo curl -o /archInstall/arch-manager.sh ${REPO_RAW_URL}/arch-manager.sh"
 fi
 
-# Scripts already next to this one (incl. lib.sh), then anything missing from the repo.
 cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
-cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh   # the manager sources it from its own folder
+cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
     if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
         fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
@@ -918,15 +930,17 @@ done
 chmod +x /mnt/archInstall/*.sh /mnt/archInstall/scripts/*.sh 2>/dev/null || true
 
 cp -f "$LOG_FILE" /mnt/root/archInstall.log 2>/dev/null || true
-
 log "Base install complete."
+advance
 
 gauge_msg 100 "Installation complete."
 
-# Restore the original stdout for the caller.
 exec 1>&3
 exec 3>&-
 }
+
+# Taller gauge so the phase tree + sub-steps fit comfortably.
+GAUGE_HEIGHT=22
 
 run_with_gauge "Installing Arch Linux" "$LOG_FILE" run_install
 
