@@ -468,9 +468,8 @@ if ! sudo -n -v 2>/dev/null; then
     sudo -v || die "sudo access is required."
 fi
 
-# The phase tree with sub-items needs more vertical space than the
-# default 8-row gauge.
-GAUGE_HEIGHT=20
+# Taller gauge so the phase tree + sub-steps fit comfortably.
+GAUGE_HEIGHT=22
 
 run_with_gauge "Installing applications" "$LOG_FILE" run_install
 
