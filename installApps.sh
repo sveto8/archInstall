@@ -163,11 +163,21 @@ while IFS= read -r tag; do
 done <<< "$CHOICES"
 
 # ---------------- DIALOG: WORK PROGRAMS (default: No) ----------------
+#
+# Every package is listed on its own line so the whole list is visible
+# inside the dialog (a single long "foo bar baz" line used to be clipped).
 
-WORK_TEXT="Install the work-related programs?\n\nRepo (pacman):\n  ${WORK_REPO[*]}\n\nAUR (yay):\n  ${WORK_AUR[*]}"
+WORK_TEXT="Install the work-related programs?\n\n"
+WORK_TEXT+="Official repos (pacman):\n"
+for _p in "${WORK_REPO[@]}"; do
+    WORK_TEXT+="  - $_p\n"
+done
+WORK_TEXT+="\nAUR (yay):\n"
+for _p in "${WORK_AUR[@]}"; do
+    WORK_TEXT+="  - $_p\n"
+done
 
-if dlg --title "Work programs" --defaultno --no-collapse \
-       --yesno "$WORK_TEXT" 0 "$BOX_W"; then
+if ask_yes "Work programs" "$WORK_TEXT" no; then
     REPO_PACKAGES+=("${WORK_REPO[@]}")
     AUR_PACKAGES+=("${WORK_AUR[@]}")
 fi
@@ -185,7 +195,7 @@ read -r -a EXTRA_PACKAGES <<< "$EXTRA_INPUT"
 
 SUMMARY="Repo (pacman):\n  ${REPO_PACKAGES[*]}\n\nAUR (yay):\n  ${AUR_PACKAGES[*]}\n\nExtra:\n  ${EXTRA_PACKAGES[*]:-none}\n\nProceed with the installation?"
 
-dlg --title "Confirm" --no-collapse --yesno "$SUMMARY" 0 "$BOX_W" || abort
+dlg --title "Confirm" --no-collapse --cr-wrap --yesno "$SUMMARY" 0 "$BOX_W" || abort
 
 # ---------------- INSTALL HELPERS ----------------
 
@@ -227,84 +237,90 @@ install_aur() {
     fi
 }
 
+# run_install -- driven by run_with_gauge()
+#
+# Prints dialog --gauge frames on stdout; every command's output is
+# redirected to $LOG_FILE so the bar stays clean. The gauge percentage
+# is computed from the total number of work items (base-devel + yay +
+# every chosen package) so the bar fills steadily instead of jumping.
+#
+# NOTE: the body is deliberately not indented -- we keep the same
+# style as the other scripts in this repository.
+
 run_install() {
+    local total current=0 pkg yay_tmp
+    local log="$LOG_FILE"
+    local gauge
+    gauge() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2"; }
+
+    total=$(( 2 + ${#REPO_PACKAGES[@]} + ${#AUR_PACKAGES[@]} + ${#EXTRA_PACKAGES[@]} ))
+    if (( total < 1 )); then total=1; fi
+
     # ---- bootstrap yay ----
-    section "Preparing build tools"
-    sudo pacman -S --needed --noconfirm --noprogressbar base-devel git
+    gauge $((current * 100 / total)) "Preparing build tools (base-devel, git)..."
+    sudo pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1
+    current=$((current + 1))
 
     if ! command -v yay >/dev/null 2>&1; then
-        say "yay not found, building it from AUR..."
-        local yay_tmp
+        gauge $((current * 100 / total)) "Building yay from AUR (this can take a while)..."
         yay_tmp="$(mktemp -d)"
-        git clone https://aur.archlinux.org/yay.git "$yay_tmp/yay"
-        (cd "$yay_tmp/yay" && makepkg -si --noconfirm)
+        git clone https://aur.archlinux.org/yay.git "$yay_tmp/yay" >> "$log" 2>&1
+        ( cd "$yay_tmp/yay" && makepkg -si --noconfirm ) >> "$log" 2>&1
         rm -rf "$yay_tmp"
-    else
-        say "yay already installed."
     fi
+    current=$((current + 1))
 
     # ---- official repos ----
-    section "Official-repo packages (pacman)"
-    local pkg
     for pkg in "${REPO_PACKAGES[@]}"; do
-        say ""
-        say "==> $pkg"
-        install_repo "$pkg"
+        current=$((current + 1))
+        gauge $((current * 100 / total)) "[$current/$total] Installing $pkg (pacman)..."
+        install_repo "$pkg" >> "$log" 2>&1
     done
 
     # ---- AUR ----
-    section "AUR packages (yay)"
     for pkg in "${AUR_PACKAGES[@]}"; do
-        say ""
-        say "==> $pkg"
-        install_aur "$pkg"
+        current=$((current + 1))
+        gauge $((current * 100 / total)) "[$current/$total] Installing $pkg (AUR)..."
+        install_aur "$pkg" >> "$log" 2>&1
     done
 
     # ---- extras ----
     if [[ "${#EXTRA_PACKAGES[@]}" -gt 0 ]]; then
-        section "Extra packages"
         for pkg in "${EXTRA_PACKAGES[@]}"; do
-            say ""
-            say "==> $pkg"
+            current=$((current + 1))
+            gauge $((current * 100 / total)) "[$current/$total] Installing $pkg..."
             if ! package_exists "$pkg"; then
-                warn "$pkg does not exist in the official repos or AUR -- skipping (check the name)."
                 echo "$pkg" >> "$SKIPPED_FILE"
                 continue
             fi
             if pacman -Si "$pkg" >/dev/null 2>&1; then
-                install_repo "$pkg"
+                install_repo "$pkg" >> "$log" 2>&1
             else
-                install_aur "$pkg"
+                install_aur "$pkg" >> "$log" 2>&1
             fi
         done
     fi
 
     # ---- default Java ----
-    section "OpenJDK 11"
     if [[ -d /usr/lib/jvm/java-11-openjdk ]]; then
-        if [[ "$(archlinux-java get 2>/dev/null)" == "java-11-openjdk" ]]; then
-            say "OpenJDK 11 is already the default JVM."
-        else
-            say "Setting OpenJDK 11 as the default JVM..."
-            sudo archlinux-java set java-11-openjdk
-            say "Default Java: $(archlinux-java get)"
+        if [[ "$(archlinux-java get 2>/dev/null)" != "java-11-openjdk" ]]; then
+            gauge 99 "Setting OpenJDK 11 as the default JVM..."
+            sudo archlinux-java set java-11-openjdk >> "$log" 2>&1
         fi
-    else
-        warn "OpenJDK 11 is not installed (part of the work bundle)."
     fi
 
     # ---- printing ----
-    section "CUPS (printing)"
-    sudo systemctl enable --now cups.service
+    gauge 99 "Enabling CUPS (printing)..."
+    sudo systemctl enable --now cups.service >> "$log" 2>&1
 
-    section "Done"
+    gauge 100 "Done."
 }
 
-# ---------------- RUN INSTALL (live output in a dialog box) ----------------
+# ---------------- RUN INSTALL (progress bar in a dialog box) ----------------
 
-run_in_box "Installing applications" "$LOG_FILE" run_install
+run_with_gauge "Installing applications" "$LOG_FILE" run_install
 
-if [[ "$RUN_RC" -ne 0 ]]; then
+if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
     die "Installation stopped early -- see $LOG_FILE for details."
 fi
 
@@ -343,7 +359,7 @@ if in_array f5vpn-ng "${AUR_PACKAGES[@]}"; then
 fi
 RESULT+="\nFull log: $LOG_FILE"
 
-dlg --title "App install complete" --no-collapse --msgbox "$RESULT" 0 "$BOX_W"
+dlg --title "App install complete" --no-collapse --cr-wrap --msgbox "$RESULT" 0 "$BOX_W"
 
 clear
 log "App install complete. Log: $LOG_FILE"
