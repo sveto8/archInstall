@@ -100,8 +100,17 @@ GRUB_DEFAULT_FILE="/etc/default/grub"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
-    curl -fsSL -o "$SCRIPT_DIR/lib.sh" "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" \
-        || { echo "ERROR: lib.sh not found next to $0 and the download failed." >&2; exit 1; }
+    _url="https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh"
+    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "$_url" 2>/dev/null || true)"
+    if [[ "$_code" == "200" ]]; then
+        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
+    else
+        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
+        echo "       URL: $_url  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
+        echo "       Put lib.sh in the same folder as this script and run it again." >&2
+        exit 1
+    fi
 fi
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
