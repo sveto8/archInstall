@@ -428,6 +428,9 @@ ask_yes "Confirm" "Apply this configuration now?\n\nBackups of the files that ge
 # ============================================================
 
 run_setup() {
+exec 3>&1
+exec 1>>"$LOG_FILE"
+gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
 
 # ---------------- BACKUPS ----------------
 
