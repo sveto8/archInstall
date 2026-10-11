@@ -498,16 +498,55 @@ ask_yes "Confirm" "Apply this configuration now?\n\nBackups of the files that ge
 # run_with_gauge gives the function FD 3 pointing at the gauge; stdout
 # is redirected inside run_setup to $LOG_FILE so that every log/info/warn
 # line and every command's output are captured cleanly. Only gauge_msg
-# writes the percent+message frames to FD 3.
+# writes the percent+message+phase frames to FD 3.
 # ============================================================
 
 run_setup() {
 exec 3>&1
 exec 1>>"$LOG_FILE"
-gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
+
+# ---- Phase checklist shown inside the gauge prompt ----
+local -a PHASES=(
+    "Backups created"
+    "Packages installed"
+    "Themes installed (GRUB / Plymouth)"
+    "Snapper configured"
+    "Initramfs rebuilt"
+    "GRUB regenerated"
+    "Snapshots created"
+    "Done"
+)
+local CURRENT_PHASE=0
+
+_phase_prompt() {
+    local i out=""
+    for ((i=0; i<${#PHASES[@]}; i++)); do
+        if (( i < CURRENT_PHASE )); then
+            out+="  [x] ${PHASES[i]}"$'\n'
+        elif (( i == CURRENT_PHASE )); then
+            out+="  [>] ${PHASES[i]}"$'\n'
+        else
+            out+="  [ ] ${PHASES[i]}"$'\n'
+        fi
+    done
+    printf '%s' "$out"
+}
+
+gauge_msg() {
+    local pct="$1" msg="$2"
+    {
+        printf 'XXX\n%d\n' "$pct"
+        _phase_prompt
+        printf '\n%s\n' "$msg"
+        printf 'XXX\n'
+    } >&3
+}
+
+set_phase() { CURRENT_PHASE="$1"; }
 
 # ---------------- BACKUPS ----------------
 
+set_phase 0
 gauge_msg 2 "Backing up configuration files..."
 
 log "Backing up configuration files..."
@@ -529,6 +568,7 @@ info "Backups: $BACKUP_DIR"
 
 # ---------------- PACKAGES ----------------
 
+set_phase 1
 gauge_msg 5 "Installing required packages..."
 
 log "Installing required packages..."
@@ -559,6 +599,7 @@ pacman -S --needed --noconfirm --noprogressbar "${PACKAGES[@]}"
 
 # ---------------- GRUB THEME INSTALL ----------------
 
+set_phase 2
 if [[ -n "$GRUB_THEME_NAME" ]]; then
     gauge_msg 10 "Installing GRUB theme: $GRUB_THEME_NAME..."
     log "Installing GRUB theme: $GRUB_THEME_NAME..."
@@ -673,6 +714,7 @@ fi
 
 # ---------------- SNAPSHOT MOUNT CHECK ----------------
 
+set_phase 3
 gauge_msg 20 "Checking /.snapshots..."
 
 log "Checking /.snapshots..."
@@ -779,6 +821,7 @@ systemctl enable --now fstrim.timer
 
 # ---------------- MKINITCPIO ----------------
 
+set_phase 4
 gauge_msg 50 "Configuring mkinitcpio..."
 
 log "Configuring mkinitcpio..."
@@ -803,6 +846,7 @@ EOF
 
 # ---------------- GRUB CONFIG ----------------
 
+set_phase 5
 gauge_msg 58 "Configuring GRUB kernel parameters..."
 
 log "Configuring GRUB kernel parameters..."
@@ -1033,6 +1077,7 @@ fi
 
 # ---------------- GRUB CONFIG ----------------
 
+set_phase 6
 gauge_msg 88 "Generating GRUB configuration..."
 
 log "Generating GRUB configuration..."
@@ -1069,6 +1114,7 @@ fi
 
 # ---------------- INITIAL SNAPSHOT ----------------
 
+set_phase 7
 gauge_msg 95 "Creating initial protected system snapshot..."
 
 log "Creating initial protected system snapshot..."
