@@ -17,12 +17,25 @@ set -o errtrace
 # not touch partitioning, LUKS, Btrfs, Snapper, or GRUB.
 # ============================================================
 
-log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
-info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
-warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
-die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
+    curl -fsSL -o "$SCRIPT_DIR/lib.sh" "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" \
+        || { echo "ERROR: lib.sh not found next to $0 and the download failed." >&2; exit 1; }
+fi
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
+
+BACKTITLE="Arch Linux installer -- desktop environment"
+LOG_FILE="/var/log/installDE.log"
 
 trap 'die "Failed at line $LINENO."' ERR
+
+# Non-interactive mode (used by archInstall.sh, which runs this script
+# inside the new system's chroot): set ASSUME_YES=1 together with
+# DE_CHOICE (1=GNOME 2=KDE 3=XFCE), INSTALL_MODE (full|minimal) and
+# TARGET_USER, and no dialog is shown. Without them it asks via dialog.
+INTERACTIVE=1
+[[ -z "${ASSUME_YES:-}" ]] || INTERACTIVE=0
 
 # ---------------- BASIC CHECKS ----------------
 
@@ -33,6 +46,16 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 command -v pacman >/dev/null || die "pacman not found -- is this an Arch system?"
+
+if (( INTERACTIVE )); then
+    ensure_dialog
+    ui_init
+fi
+
+# True when running inside a chroot (no running systemd, no session bus).
+in_chroot() {
+    [[ "${INSTALL_IN_CHROOT:-0}" == "1" ]] || systemd-detect-virt --chroot --quiet 2>/dev/null
+}
 
 # ---------------- TARGET USER ----------------
 #
@@ -45,18 +68,19 @@ while IFS=: read -r uname _ uid _; do
     [[ "$uid" -ge 1000 && "$uid" -lt 60000 ]] && CANDIDATE_USERS+=("$uname")
 done < /etc/passwd
 
-if [[ "${#CANDIDATE_USERS[@]}" -eq 1 ]]; then
-    TARGET_USER="${CANDIDATE_USERS[0]}"
-    info "Target user: $TARGET_USER"
-else
-    echo
-    if [[ "${#CANDIDATE_USERS[@]}" -gt 1 ]]; then
-        echo "Multiple regular users found: ${CANDIDATE_USERS[*]}"
-    else
-        warn "No regular (non-system) user found on this system."
-    fi
-    read -r -p "Username to configure the desktop environment for: " TARGET_USER
+if [[ -n "${TARGET_USER:-}" ]]; then
     id -u "$TARGET_USER" >/dev/null 2>&1 || die "User '$TARGET_USER' does not exist."
+elif [[ "${#CANDIDATE_USERS[@]}" -eq 1 ]]; then
+    TARGET_USER="${CANDIDATE_USERS[0]}"
+elif [[ "${#CANDIDATE_USERS[@]}" -gt 1 ]]; then
+    (( INTERACTIVE )) || die "Several regular users exist -- set TARGET_USER."
+    USER_ITEMS=()
+    for u in "${CANDIDATE_USERS[@]}"; do USER_ITEMS+=("$u" ""); done
+    TARGET_USER="$(dlg_capture --title "Target user" \
+        --menu "Configure the desktop environment for which user?" \
+        0 "$BOX_W" 0 "${USER_ITEMS[@]}")" || abort
+else
+    die "No regular (non-system) user found. Create one first, e.g.: useradd -m -G wheel <name>"
 fi
 
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
@@ -64,25 +88,31 @@ TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 
 # ---------------- DESKTOP ENVIRONMENT ----------------
 
-echo
-echo "Desktop environment:"
-echo "  1) GNOME (Wayland)"
-echo "  2) KDE Plasma (Wayland)"
-echo "  3) XFCE (X11)"
-echo "  4) None / cancel"
-read -r -p "Choice [1]: " DE_CHOICE
-DE_CHOICE="${DE_CHOICE:-1}"
+if [[ -z "${DE_CHOICE:-}" ]]; then
+    (( INTERACTIVE )) || die "DE_CHOICE must be set in non-interactive mode."
+    DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 1 \
+        --menu "Which desktop environment do you want to install?" \
+        0 "$BOX_W" 0 \
+        1 "GNOME (Wayland)" \
+        2 "KDE Plasma (Wayland)" \
+        3 "XFCE (X11)" \
+        4 "None / cancel")" || abort
+fi
 
-[[ "$DE_CHOICE" == "4" ]] && { echo "Nothing to do."; exit 0; }
+[[ "$DE_CHOICE" == "4" ]] && abort "Nothing to do."
+[[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" ]] || die "Invalid DE_CHOICE '$DE_CHOICE' (use 1, 2 or 3)."
+
+if [[ -z "${INSTALL_MODE:-}" ]]; then
+    (( INTERACTIVE )) || die "INSTALL_MODE must be set in non-interactive mode."
+    INSTALL_MODE="$(dlg_capture --title "Package set" --default-item full \
+        --menu "Full or minimal package set?" 0 "$BOX_W" 0 \
+        full    "Full -- complete desktop with its usual applications" \
+        minimal "Minimal -- just the desktop and the essentials")" || abort
+fi
+[[ "$INSTALL_MODE" == "minimal" ]] || INSTALL_MODE="full"
 
 DE_PACKAGES=()
 DM_SERVICE=""
-INSTALL_MODE=""
-
-if [[ "$DE_CHOICE" == "1" || "$DE_CHOICE" == "2" || "$DE_CHOICE" == "3" ]]; then
-    read -r -p "Full install or minimal? [F/m]: " INSTALL_MODE
-    [[ "$INSTALL_MODE" =~ ^[Mm]$ ]] && INSTALL_MODE="minimal" || INSTALL_MODE="full"
-fi
 
 # Common Wayland packages for the Wayland DEs (portals, qt support, etc.)
 WAYLAND_COMMON=(
@@ -206,20 +236,21 @@ info "Desktop environment: $DE_NAME"
 
 # ---------------- CONFIRM ----------------
 
-echo
-echo "============================================================"
-echo "Target user:  $TARGET_USER ($TARGET_HOME)"
-echo "Desktop:      $DE_NAME"
-echo "Packages:     ${DE_PACKAGES[*]}"
-echo "============================================================"
-read -r -p "Continue? [Y/n] " CONFIRM
-[[ "$CONFIRM" =~ ^[Nn]$ ]] && { echo "Cancelled."; exit 0; }
+if (( INTERACTIVE )); then
+    ask_yes "Confirm" "Target user:  $TARGET_USER ($TARGET_HOME)\nDesktop:      $DE_NAME\n\nPackages:\n  ${DE_PACKAGES[*]}\n\nContinue with the installation?" yes || abort
+fi
 
 # ---------------- INSTALL ----------------
+#
+# Everything from here on runs inside run_de_install(): in interactive mode
+# with live output in a dialog box, in non-interactive mode directly (its
+# output then goes to the caller). The body is deliberately not indented.
+
+run_de_install() {
 
 log "Installing $DE_NAME packages..."
 
-pacman -S --needed --noconfirm "${DE_PACKAGES[@]}"
+pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}"
 
 # ---------------- ICONS & CURSORS (from GitHub) ----------------
 #
@@ -320,7 +351,38 @@ systemctl enable "$DM_SERVICE"
 if [[ "$DE_CHOICE" == "1" ]]; then
     log "Setting GNOME dark theme + slate accent for $TARGET_USER..."
 
-    if command -v dbus-run-session >/dev/null 2>&1; then
+    if in_chroot; then
+        # No running session bus in a chroot, so gsettings can't write the
+        # user's settings. Install the same values as SYSTEM-WIDE dconf
+        # defaults instead (applies to every user; users can still change
+        # them). Keys unknown to the installed GNOME (e.g. accent-color
+        # before 47) are simply ignored.
+        mkdir -p /etc/dconf/profile /etc/dconf/db/local.d
+        cat > /etc/dconf/profile/user <<'DCONF_PROFILE_EOF'
+user-db:user
+system-db:local
+DCONF_PROFILE_EOF
+        cat > /etc/dconf/db/local.d/00-arch-defaults <<'DCONF_EOF'
+[org/gnome/desktop/interface]
+color-scheme='prefer-dark'
+gtk-theme='Adwaita-dark'
+accent-color='slate'
+icon-theme='Reversal'
+cursor-theme='DeppinDark-cursors'
+
+[org/gtk/settings/file-chooser]
+sort-directories-first=true
+
+[org/gnome/shell]
+always-show-log-out=true
+DCONF_EOF
+        if command -v dconf >/dev/null 2>&1; then
+            dconf update || warn "dconf update failed -- GNOME defaults may not apply."
+            info "GNOME defaults installed system-wide (dark theme, slate accent, Reversal icons, cursor theme)."
+        else
+            warn "dconf not found -- GNOME defaults were written but not compiled."
+        fi
+    elif command -v dbus-run-session >/dev/null 2>&1; then
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' \
             || warn "Could not set GNOME color-scheme to prefer-dark."
@@ -442,3 +504,15 @@ if [[ "$DE_CHOICE" == "3" ]]; then
     echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
 fi
 echo "============================================================"
+}
+
+if (( INTERACTIVE )); then
+    run_in_box "Installing $DE_NAME" "$LOG_FILE" run_de_install
+    if [[ "$RUN_RC" -ne 0 ]]; then
+        msg_box "Installation FAILED" "The desktop environment install did not finish.\n\nSee the log for details:\n  $LOG_FILE"
+        exit 1
+    fi
+    msg_box "Desktop installed" "$DE_NAME was installed.\n\nLog out and back in (or reboot) to reach the $DM_SERVICE login screen."
+else
+    run_de_install
+fi
