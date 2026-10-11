@@ -786,7 +786,7 @@ cp -f "$LOG_FILE" /mnt/root/archInstall.log 2>/dev/null || true
 log "Base install complete."
 }
 
-run_in_box "Installing Arch Linux" "$LOG_FILE" run_install
+run_on_terminal "Installing Arch Linux" "$LOG_FILE" run_install nowait
 
 # Passwords are no longer needed in memory.
 unset LUKS_PASS USER_PASS ROOT_PASS
