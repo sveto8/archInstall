@@ -197,12 +197,24 @@ the summary instead of scrolling past.
    `hud_3`, `linux-penguin`, `metal_ball`, or none — downloads the
    matching `<name>.tar.xz` from the repo's `plymouth-themes/` folder
    (same non-fatal-if-unavailable behavior as the GRUB theme step)
+   Then a menu **"Other operating systems"** (only if `ENABLE_OS_PROBER=yes`,
+   the default):
+   - **internal** *(default)* — only Windows/Linux installs on **internal**
+     disks. Filesystems on removable (`RM=1`) or USB-attached
+     (`TRAN=usb`) disks and optical drives — USB sticks with installers,
+     external/USB HDDs — are put on GRUB's `GRUB_OS_PROBER_SKIP_LIST`
+     (`<fs UUID>@<device>` entries written to `/etc/default/grub`, so
+     later automatic `grub-mkconfig` runs honour it too), and the search
+     for the Windows ESP never looks at those disks either
+   - **all** — everything os-prober finds, as before
+   - **off** — no other OSes in the GRUB menu (`GRUB_DISABLE_OS_PROBER=true`)
 5. Shows a scrollable summary and asks for confirmation
 6. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
    `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`.
    From here on, every `/etc/default/grub` option the script touches
    (`GRUB_TIMEOUT`, `GRUB_DEFAULT`, `GRUB_SAVEDEFAULT`,
-   `GRUB_DISABLE_OS_PROBER`, `GRUB_THEME`, `GRUB_CMDLINE_LINUX_DEFAULT`)
+   `GRUB_DISABLE_OS_PROBER`, `GRUB_OS_PROBER_SKIP_LIST`, `GRUB_THEME`,
+   `GRUB_CMDLINE_LINUX_DEFAULT`)
    goes through a helper that finds the existing line — commented out or
    not — and edits it in place, rather than appending a new value to the
    bottom of the file (which would leave a stale duplicate, commented or
@@ -227,10 +239,10 @@ the summary instead of scrolling past.
     `rootflags=subvol=@`, `quiet splash`, …), reinstalls GRUB under a
     named UEFI boot entry (`GRUB_BOOTLOADER_ID="Arch Linux"` by
     default, shown in your firmware's boot menu), enables `os-prober`
-    by default (`ENABLE_OS_PROBER=yes` — set it to `no` if you don't
-    dual-boot another OS or prefer picking it from the firmware boot
-    menu instead of GRUB's), enables `grub-btrfsd`, regenerates
-    `grub.cfg`
+    in the mode you chose (`ENABLE_OS_PROBER=yes` is the default — set it
+    to `no` in the script's config block if you don't dual-boot another
+    OS or prefer picking it from the firmware boot menu instead of
+    GRUB's), enables `grub-btrfsd`, regenerates `grub.cfg`
 13. Removes stale UEFI boot entries named exactly `GRUB` or `UEFI OS`
     left behind by `archInstall.sh`'s temporary `--bootloader-id=GRUB
     --removable` install — but only entries whose device path matches
@@ -239,8 +251,8 @@ the summary instead of scrolling past.
     never touched
 14. Creates and cleans up an initial protected snapshot
 15. Prints a final status report (filesystems, subvolumes, LUKS status,
-    Snapper config/snapshots, timers, Plymouth theme, GRUB theme, GRUB
-    cmdline)
+    Snapper config/snapshots, timers, Plymouth theme, the other
+    operating systems that ended up in the GRUB menu, GRUB cmdline)
 
 ### 3. `installDE.sh` — on the installed system, as root
 
@@ -595,6 +607,18 @@ can run in either order.
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
   scripts changes when run through it.
+- **PXE / "USB HDD" entries are not os-prober results.** Those names are
+  the firmware's own boot entries (network boot, USB boot) in the UEFI boot
+  menu (e.g. F9 / Esc on HP laptops) — os-prober only reads partitions,
+  never UEFI NVRAM, so no os-prober setting can add or remove them. What the
+  "internal" mode fixes is *partition-based* noise: Windows/Linux installers
+  on USB sticks, external drives, and similar showing up as GRUB entries. If
+  junk still appears **inside the GRUB menu**, look at what was detected with
+  `grep -E "^menuentry.*osprober" /boot/grub/grub.cfg` and
+  `lsblk -o NAME,UUID,RM,TRAN`, then add the offending `UUID@/dev/part` to
+  `GRUB_OS_PROBER_SKIP_LIST` in `/etc/default/grub` and run
+  `grub-mkconfig -o /boot/grub/grub.cfg`. The skip list only covers devices
+  connected when the script ran.
 - Passwords (user, root, LUKS) are asked in password boxes and applied via
   stdin (`chpasswd`, `cryptsetup --key-file=-`) — never as command-line
   arguments, so they don't show up in the process list. They are kept in
