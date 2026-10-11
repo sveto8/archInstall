@@ -1075,7 +1075,7 @@ echo
 echo "============================================================"
 }
 
-run_in_box "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup
+run_on_terminal "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup nowait
 
 if [[ "$RUN_RC" -ne 0 ]]; then
     msg_box "Setup FAILED" "The setup did not finish.\n\nNothing was deleted -- backups of the changed files are in:\n  $BACKUP_DIR\n\nSee the log for details:\n  $LOG_FILE"
