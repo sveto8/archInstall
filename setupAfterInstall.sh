@@ -505,26 +505,48 @@ run_setup() {
 exec 3>&1
 exec 1>>"$LOG_FILE"
 
-# ---- Phase checklist shown inside the gauge prompt ----
+# ---- Phase tree shown inside the gauge prompt ----
 local -a PHASES=(
     "Backups created"
     "Packages installed"
     "Themes installed (GRUB / Plymouth)"
     "Snapper configured"
     "Initramfs rebuilt"
-    "GRUB regenerated"
+    "GRUB installed"
+    "GRUB config generated"
     "Snapshots created"
     "Done"
 )
 local CURRENT_PHASE=0
+local -a CUR_ITEMS=()
+local CUR_IDX=0
+local WIN=5
 
 _phase_prompt() {
-    local i out=""
+    local i j n start end out=""
     for ((i=0; i<${#PHASES[@]}; i++)); do
         if (( i < CURRENT_PHASE )); then
             out+="  [x] ${PHASES[i]}"$'\n'
         elif (( i == CURRENT_PHASE )); then
             out+="  [>] ${PHASES[i]}"$'\n'
+            n=${#CUR_ITEMS[@]}
+            if (( n > 0 )); then
+                start=$(( CUR_IDX - WIN/2 ))
+                (( start < 0 )) && start=0
+                end=$(( start + WIN ))
+                (( end > n )) && end=$n
+                (( start > 0 )) && out+="        ..."$'\n'
+                for ((j=start; j<end; j++)); do
+                    if (( j < CUR_IDX )); then
+                        out+="        [x] ${CUR_ITEMS[j]}"$'\n'
+                    elif (( j == CUR_IDX )); then
+                        out+="        [>] ${CUR_ITEMS[j]}"$'\n'
+                    else
+                        out+="        [ ] ${CUR_ITEMS[j]}"$'\n'
+                    fi
+                done
+                (( end < n )) && out+="        ..."$'\n'
+            fi
         else
             out+="  [ ] ${PHASES[i]}"$'\n'
         fi
@@ -543,16 +565,18 @@ gauge_msg() {
 }
 
 set_phase() { CURRENT_PHASE="$1"; }
+set_items() { CUR_ITEMS=("$@"); CUR_IDX=0; }
+advance()   { CUR_IDX=$((CUR_IDX + 1)); }
 
 # ---------------- BACKUPS ----------------
 
 set_phase 0
-gauge_msg 2 "Backing up configuration files..."
+set_items "/etc/fstab" "/etc/mkinitcpio.conf" "/etc/default/grub" "Snapper config"
 
+gauge_msg 2 "Backing up configuration files..."
 log "Backing up configuration files..."
 
 mkdir -p "$BACKUP_DIR"
-
 for f in \
     /etc/fstab \
     /etc/mkinitcpio.conf \
@@ -562,15 +586,25 @@ do
     if [[ -f "$f" ]]; then
         cp -a "$f" "$BACKUP_DIR/"
     fi
+    advance
 done
-
 info "Backups: $BACKUP_DIR"
 
 # ---------------- PACKAGES ----------------
 
 set_phase 1
-gauge_msg 5 "Installing required packages..."
+local -a _pkg_items=(
+    "Core: btrfs-progs, cryptsetup"
+    "Snapshots: snapper, snap-pac"
+    "Boot: grub, grub-btrfs, efibootmgr"
+    "Tools: git, curl, inotify-tools, btrfs-assistant"
+    "Plymouth"
+)
+[[ -n "$UCODE_PKG" ]] && _pkg_items+=("Microcode: $UCODE_PKG")
+[[ "$ENABLE_OS_PROBER" == "yes" ]] && _pkg_items+=("Other OS: os-prober, ntfs-3g, fuse3")
+set_items "${_pkg_items[@]}"
 
+gauge_msg 5 "Installing required packages..."
 log "Installing required packages..."
 
 PACKAGES=(
@@ -588,18 +622,22 @@ PACKAGES=(
     efibootmgr
 )
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
-# os-prober needs ntfs-3g and fuse3 to actually read Windows' NTFS
-# partition and the FAT32 Windows ESP. Without these, grub-mkconfig
-# can report finding Windows but fail to add a working menu entry.
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     PACKAGES+=(os-prober ntfs-3g fuse3)
 fi
 
 pacman -S --needed --noconfirm --noprogressbar "${PACKAGES[@]}"
 
+# Mark every sub-item as done (single pacman transaction).
+CUR_IDX=${#CUR_ITEMS[@]}
+
 # ---------------- GRUB THEME INSTALL ----------------
 
 set_phase 2
+set_items \
+    "GRUB theme: ${GRUB_THEME_NAME:-none}" \
+    "Plymouth theme: ${PLYMOUTH_SELECTED:-none}"
+
 if [[ -n "$GRUB_THEME_NAME" ]]; then
     gauge_msg 10 "Installing GRUB theme: $GRUB_THEME_NAME..."
     log "Installing GRUB theme: $GRUB_THEME_NAME..."
@@ -611,7 +649,6 @@ if [[ -n "$GRUB_THEME_NAME" ]]; then
 
     if curl -fsSL -o "$GRUB_THEME_ARCHIVE" "$GRUB_THEME_URL"; then
         log "Extracting theme..."
-
         rm -rf "/boot/grub/themes/${GRUB_THEME_NAME}"
         tar -xf "$GRUB_THEME_ARCHIVE" -C /boot/grub/themes/
         rm -f "$GRUB_THEME_ARCHIVE"
@@ -621,17 +658,8 @@ if [[ -n "$GRUB_THEME_NAME" ]]; then
             info "Theme files verified: /boot/grub/themes/${GRUB_THEME_NAME}/theme.txt"
 
             cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
-
-            # Remove any uncommented GRUB_BACKGROUND line so it doesn't
-            # override the theme's own background. Commented examples are
-            # left in place.
             sed -i -E '/^[[:space:]]*GRUB_BACKGROUND=/d' /etc/default/grub
-
-            # Replace (or uncomment) the GRUB_THEME line in place -- this
-            # avoids appending a duplicate at the bottom of the file when
-            # the commented example "#GRUB_THEME=..." is already present.
             set_grub_option "GRUB_THEME" "\"/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt\"" "$GRUB_DEFAULT_FILE"
-
             log "GRUB theme installed and set: $GRUB_THEME_NAME"
         else
             warn "theme.txt not found after extracting $GRUB_THEME_NAME -- archive layout unexpected. Skipping GRUB_THEME."
@@ -643,6 +671,7 @@ if [[ -n "$GRUB_THEME_NAME" ]]; then
 else
     info "No GRUB theme selected -- skipping."
 fi
+advance
 
 # ---------------- PLYMOUTH THEME INSTALL ----------------
 
@@ -656,31 +685,21 @@ if [[ -n "$PLYMOUTH_SELECTED" ]]; then
 
     if curl -fsSL -o "$THEME_ARCHIVE" "$THEME_URL"; then
         log "Extracting theme..."
-
-        # Extract to /usr/share/plymouth/themes/
         mkdir -p /usr/share/plymouth/themes
         tar -xf "$THEME_ARCHIVE" -C /usr/share/plymouth/themes/
 
-        # Check if the extracted directory exists
         if [[ -d "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}" ]]; then
-            # If the archive extracted a directory with the theme name, good.
-            # Otherwise, try to find a .plymouth file and rename directory if needed.
             if [[ -f "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}/${PLYMOUTH_SELECTED}.plymouth" ]]; then
                 info "Theme verified: /usr/share/plymouth/themes/${PLYMOUTH_SELECTED}/${PLYMOUTH_SELECTED}.plymouth"
             else
-                # Maybe the archive contains files directly, not in a subdir.
-                # We'll create the directory if needed.
                 if find "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}" -name "*.plymouth" | grep -q .; then
                     info "Found .plymouth file in theme directory."
                 else
-                    # No .plymouth found, maybe archive extracted to a different dir name.
-                    # We'll try to find any subdir containing a .plymouth and move its contents.
                     PLYMOUTH_FILE=$(find /usr/share/plymouth/themes -name "*.plymouth" -type f | head -n1)
                     if [[ -n "$PLYMOUTH_FILE" ]]; then
                         THEME_DIR=$(dirname "$PLYMOUTH_FILE")
                         THEME_DIR_NAME=$(basename "$THEME_DIR")
                         if [[ "$THEME_DIR_NAME" != "$PLYMOUTH_SELECTED" ]]; then
-                            # Move it to the expected name
                             mv "$THEME_DIR" "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}"
                             info "Renamed theme directory to ${PLYMOUTH_SELECTED}"
                         fi
@@ -690,7 +709,6 @@ if [[ -n "$PLYMOUTH_SELECTED" ]]; then
                 fi
             fi
 
-            # Set the default theme
             if command -v plymouth-set-default-theme >/dev/null 2>&1; then
                 if plymouth-set-default-theme "$PLYMOUTH_SELECTED"; then
                     PLYMOUTH_OK=1
@@ -711,12 +729,20 @@ if [[ -n "$PLYMOUTH_SELECTED" ]]; then
 else
     info "No Plymouth theme selected -- skipping."
 fi
+advance
 
-# ---------------- SNAPSHOT MOUNT CHECK ----------------
+# ---------------- SNAPPER ----------------
 
 set_phase 3
-gauge_msg 20 "Checking /.snapshots..."
+set_items \
+    "Check /.snapshots mount" \
+    "Create Snapper config" \
+    "Retention policy" \
+    "Btrfs quota" \
+    "Snapper timers" \
+    "fstrim.timer"
 
+gauge_msg 20 "Checking /.snapshots..."
 log "Checking /.snapshots..."
 
 SNAPSHOT_SOURCE="$(findmnt -n -o SOURCE /.snapshots)"
@@ -724,37 +750,23 @@ SNAPSHOT_SOURCE="$(findmnt -n -o SOURCE /.snapshots)"
     warn "/.snapshots is mounted, but its source does not look like @snapshots."
 
 chmod 750 /.snapshots || true
-
-# ---------------- SNAPPER CONFIG ----------------
+advance
 
 gauge_msg 25 "Configuring Snapper for / ..."
-
 log "Configuring Snapper for / ..."
 
 if [[ ! -f "/etc/snapper/configs/$SNAPPER_CONFIG" ]]; then
-    # snapper create-config normally creates its own .snapshots
-    # subvolume. We already have @snapshots, so temporarily remove
-    # the mount, let snapper create its config, then replace the
-    # generated .snapshots subvolume with the user's @snapshots.
     log "Creating Snapper root configuration..."
-
     umount /.snapshots
-
-    # The mountpoint itself should now be an empty directory.
     rmdir /.snapshots 2>/dev/null || true
-
     snapper --no-dbus -c "$SNAPPER_CONFIG" create-config /
 
-    # Snapper created a new .snapshots subvolume. Remove it.
     if btrfs subvolume show /.snapshots >/dev/null 2>&1; then
         btrfs subvolume delete /.snapshots
     fi
 
     mkdir -p /.snapshots
     chmod 750 /.snapshots
-
-    # Mount the already-existing @snapshots subvolume using fstab.
-    # (We verified an fstab entry exists for it near the top of the script.)
     mount /.snapshots
 
     findmnt -n /.snapshots >/dev/null || \
@@ -764,11 +776,9 @@ else
 fi
 
 snapper -c "$SNAPPER_CONFIG" get-config >/dev/null
-
-# ---------------- SNAPPER POLICY ----------------
+advance
 
 gauge_msg 30 "Configuring snapshot retention..."
-
 log "Configuring snapshot retention..."
 
 snapper -c "$SNAPPER_CONFIG" set-config \
@@ -787,8 +797,7 @@ snapper -c "$SNAPPER_CONFIG" set-config \
     "EMPTY_PRE_POST_CLEANUP=yes" \
     "SPACE_LIMIT=$SPACE_LIMIT" \
     "FREE_LIMIT=$FREE_LIMIT"
-
-# ---------------- BTRFS QUOTA ----------------
+advance
 
 if [[ "$ENABLE_BTRFS_QUOTA" == "yes" ]]; then
     gauge_msg 35 "Enabling Btrfs quotas for Snapper..."
@@ -799,11 +808,9 @@ else
     log "Skipping Btrfs quota setup (ENABLE_BTRFS_QUOTA=no)."
     info "SPACE_LIMIT/FREE_LIMIT-based cleanup will be inactive; NUMBER_LIMIT and TIMELINE_LIMIT_* still apply."
 fi
-
-# ---------------- SYSTEMD TIMERS ----------------
+advance
 
 gauge_msg 40 "Enabling Snapper timers..."
-
 log "Enabling Snapper timers..."
 
 systemctl enable --now snapper-cleanup.timer
@@ -814,25 +821,25 @@ if systemctl list-unit-files snapper-boot.timer >/dev/null 2>&1; then
 else
     warn "snapper-boot.timer is not available in this Snapper version."
 fi
+advance
 
 gauge_msg 45 "Enabling fstrim.timer (periodic TRIM)..."
 log "Enabling fstrim.timer (periodic TRIM)..."
 systemctl enable --now fstrim.timer
+advance
 
-# ---------------- MKINITCPIO ----------------
+# ---------------- INITRAMFS ----------------
 
 set_phase 4
-gauge_msg 50 "Configuring mkinitcpio..."
+set_items \
+    "Edit HOOKS in mkinitcpio.conf" \
+    "Rebuild initramfs (mkinitcpio -P)"
 
+gauge_msg 50 "Configuring mkinitcpio..."
 log "Configuring mkinitcpio..."
 
 MKINITCPIO_CONF="/etc/mkinitcpio.conf"
-
-cp -a "$MKINITCPIO_CONF" \
-    "$BACKUP_DIR/mkinitcpio.conf.before"
-
-# Keep user's MODULES/COMPRESSION/etc. intact.
-# Only replace the HOOKS line.
+cp -a "$MKINITCPIO_CONF" "$BACKUP_DIR/mkinitcpio.conf.before"
 sed -i -E '/^[[:space:]]*HOOKS=/d' "$MKINITCPIO_CONF"
 
 cat >> "$MKINITCPIO_CONF" <<'EOF'
@@ -843,35 +850,35 @@ cat >> "$MKINITCPIO_CONF" <<'EOF'
 # ============================================================
 HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block plymouth sd-encrypt filesystems fsck)
 EOF
+advance
 
-# ---------------- GRUB CONFIG ----------------
+gauge_msg 54 "Rebuilding initramfs..."
+log "Rebuilding initramfs..."
+mkinitcpio -P
+advance
+
+# ---------------- GRUB INSTALL ----------------
 
 set_phase 5
-gauge_msg 58 "Configuring GRUB kernel parameters..."
+set_items \
+    "Kernel command line" \
+    "grub-install" \
+    "Stale UEFI cleanup" \
+    "grub-btrfs daemon" \
+    "Windows ESP search"
 
+gauge_msg 58 "Configuring GRUB kernel parameters..."
 log "Configuring GRUB kernel parameters..."
 
 cp -a "$GRUB_DEFAULT_FILE" "$BACKUP_DIR/grub.before"
 
-# Ensure a visible GRUB menu.
-# Uses set_grub_option so commented examples in the stock file are
-# updated in place rather than duplicated at the bottom.
 set_grub_option "GRUB_TIMEOUT"       "5"    "$GRUB_DEFAULT_FILE"
 set_grub_option "GRUB_TIMEOUT_STYLE" "menu" "$GRUB_DEFAULT_FILE"
 
-# Remember the last booted menu entry and use it as the default on the
-# next boot. "saved" tells GRUB to read the saved entry from the
-# environment block; "GRUB_SAVEDEFAULT=true" makes GRUB write the chosen
-# entry back to that block each time.
 log "Enabling GRUB saved-entry default (boot last used OS automatically)..."
-
 set_grub_option "GRUB_DEFAULT"     "saved" "$GRUB_DEFAULT_FILE"
 set_grub_option "GRUB_SAVEDEFAULT" "true"  "$GRUB_DEFAULT_FILE"
 
-# OS prober: install + explicitly enable in /etc/default/grub. On Arch,
-# grub-mkconfig only scans for other OSes when GRUB_DISABLE_OS_PROBER is
-# explicitly set to false (the default behavior in recent GRUB versions
-# is to skip the scan for security reasons).
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     log "Enabling os-prober so GRUB detects other operating systems..."
     set_grub_option "GRUB_DISABLE_OS_PROBER" "false" "$GRUB_DEFAULT_FILE"
@@ -889,14 +896,12 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
         info " UUID plugged in later can still be detected -- re-run this step or add"
         info " its UUID@device to GRUB_OS_PROBER_SKIP_LIST in /etc/default/grub.)"
     elif grep -qE '^#?[[:space:]]*GRUB_OS_PROBER_SKIP_LIST=' "$GRUB_DEFAULT_FILE"; then
-        # "all" mode: clear any skip list left by an earlier run.
         set_grub_option "GRUB_OS_PROBER_SKIP_LIST" '""' "$GRUB_DEFAULT_FILE"
     fi
 elif [[ "$OS_PROBER_MODE" == "off" ]]; then
     set_grub_option "GRUB_DISABLE_OS_PROBER" "true" "$GRUB_DEFAULT_FILE"
 fi
 
-# Build the command line for systemd's sd-encrypt hook.
 CURRENT_CMDLINE="$(
     grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT_FILE" |
         head -n1 |
@@ -904,7 +909,6 @@ CURRENT_CMDLINE="$(
         sed 's/^"//;s/"$//' || true
 )"
 
-# Remove parameters we are going to manage.
 CURRENT_CMDLINE="$(
     printf '%s' "$CURRENT_CMDLINE" |
         sed -E \
@@ -918,23 +922,10 @@ CURRENT_CMDLINE="$(
              s/ $//'
 )"
 
-# Systemd initramfs + sd-encrypt:
-#   rd.luks.name=<LUKS UUID>=cryptroot
-#   root=/dev/mapper/cryptroot
-#   rootflags=subvol=@
-#
-# Plymouth:
-#   quiet splash loglevel=3 rd.udev.log_priority=3
-#   vt.global_cursor_default=0
-#
-# We deliberately do not add "plymouth.nolog" so useful boot logging
-# remains available if needed.
 NEW_CMDLINE="$CURRENT_CMDLINE rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0"
 
-# Replace the existing GRUB_CMDLINE_LINUX_DEFAULT line in place.
 set_grub_option "GRUB_CMDLINE_LINUX_DEFAULT" "\"$NEW_CMDLINE\"" "$GRUB_DEFAULT_FILE"
 
-# Verify GRUB theme is set
 if grep -qE '^[[:space:]]*GRUB_THEME=' /etc/default/grub; then
     THEME_PATH=$(grep -E '^[[:space:]]*GRUB_THEME=' /etc/default/grub | cut -d= -f2 | tr -d '"')
     if [[ -f "$THEME_PATH" ]]; then
@@ -943,11 +934,9 @@ if grep -qE '^[[:space:]]*GRUB_THEME=' /etc/default/grub; then
         warn "GRUB theme file not found: $THEME_PATH"
     fi
 fi
-
-# ---------------- GRUB INSTALL ----------------
+advance
 
 gauge_msg 66 "Installing GRUB for UEFI (boot entry '$GRUB_BOOTLOADER_ID')..."
-
 log "Installing/reinstalling GRUB for UEFI with boot entry '$GRUB_BOOTLOADER_ID'..."
 
 grub-install \
@@ -955,45 +944,24 @@ grub-install \
     --efi-directory=/efi \
     --bootloader-id="$GRUB_BOOTLOADER_ID" \
     --recheck
+advance
 
-# ---------------- CLEAN UP OLD UEFI ENTRIES ----------------
-#
-# archInstall.sh runs grub-install with --bootloader-id=GRUB and
-# --removable, which leaves NVRAM entries named "GRUB" and (on many
-# firmwares) "UEFI OS" behind. Since we just created a fresh
-# "$GRUB_BOOTLOADER_ID" entry, we want to remove those stale ones --
-# but ONLY the ones that belong to this same ESP, so we don't delete
-# boot entries from other Linux installations that happen to use the
-# same generic names on a different disk/partition.
-#
-# We compare the device path of each candidate UEFI entry (as shown by
-# "efibootmgr -v") against our own ESP's PARTUUID. Only exact matches
-# are removed.
+gauge_msg 70 "Cleaning up stale UEFI entries..."
 
 if command -v efibootmgr >/dev/null 2>&1; then
     log "Scanning for stale UEFI boot entries on this ESP (GRUB / UEFI OS)..."
 
-    # PARTUUID of our own ESP -- this is what efibootmgr embeds in the
-    # device path of every entry that lives on this partition.
     ESP_PARTUUID="$(findmnt -n -o PARTUUID /efi 2>/dev/null || true)"
     if [[ -z "$ESP_PARTUUID" ]]; then
         warn "Could not determine PARTUUID of /efi -- skipping stale entry cleanup."
     else
         info "Our ESP PARTUUID: $ESP_PARTUUID"
 
-        # efibootmgr -v lines look like:
-        #   Boot0001* GRUB    HD(1,GPT,<PARTUUID>,0x800,0x100000)/\EFI\GRUB\grubx64.efi
-        #   Boot0002* UEFI OS HD(1,GPT,<PARTUUID>,0x800,0x100000)/\EFI\BOOT\BOOTX64.EFI
-        # We only match entries whose name is exactly GRUB or UEFI OS AND
-        # whose device path contains our ESP's PARTUUID.
         while IFS= read -r line; do
             entry_num="$(printf '%s' "$line" | awk '{print $1}' | sed -E 's/^Boot//; s/\*$//')"
             entry_name="$(printf '%s' "$line" | sed -E 's/^Boot[0-9A-Fa-f]+\*?[[:space:]]+//; s/[[:space:]]+HD\(.*$//')"
 
-            # Only consider entries whose name is exactly "GRUB" or "UEFI OS"
             [[ "$entry_name" == "GRUB" || "$entry_name" == "UEFI OS" ]] || continue
-
-            # Only remove if the device path references our own ESP
             printf '%s' "$line" | grep -q "$ESP_PARTUUID" || continue
 
             if efibootmgr -b "$entry_num" -B >/dev/null 2>&1; then
@@ -1006,11 +974,9 @@ if command -v efibootmgr >/dev/null 2>&1; then
 else
     warn "efibootmgr not found -- stale UEFI entries (if any) were not removed."
 fi
-
-# ---------------- GRUB-BTRFS ----------------
+advance
 
 gauge_msg 74 "Enabling grub-btrfs daemon..."
-
 log "Enabling grub-btrfs daemon..."
 
 if systemctl list-unit-files grub-btrfsd.service >/dev/null 2>&1; then
@@ -1018,25 +984,9 @@ if systemctl list-unit-files grub-btrfsd.service >/dev/null 2>&1; then
 else
     warn "grub-btrfsd.service not found."
 fi
+advance
 
-# ---------------- INITRAMFS ----------------
-
-gauge_msg 78 "Rebuilding initramfs..."
-
-log "Rebuilding initramfs..."
-
-mkinitcpio -P
-
-# ---------------- WINDOWS ESP AUTO-MOUNT (for os-prober) ----------------
-#
-# os-prober can detect Windows only if it can actually read the Windows
-# ESP (the FAT32 partition containing EFI/Microsoft/Boot/bootmgfw.efi).
-# On Arch, os-prober calls grub-mount (from the grub package), which in
-# turn relies on fuse3 and ntfs-3g. Even with those installed, os-prober
-# is much more reliable when the Windows ESP is mounted somewhere at the
-# time grub-mkconfig runs. Here we scan all FAT32 partitions, find the
-# one containing Windows Boot Manager, and mount it read-only at
-# /mnt/win-esp. It gets unmounted again right after grub-mkconfig.
+# ---------------- WINDOWS ESP AUTO-MOUNT ----------------
 
 WIN_ESP=""
 WIN_ESP_MOUNT="/mnt/win-esp"
@@ -1048,18 +998,12 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
 
     while read -r dev; do
         [[ -b "$dev" ]] || continue
-
-        # Skip our own ESP (/efi) -- it has no Microsoft/ subdir anyway,
-        # but skipping avoids any chance of mounting it twice.
         if findmnt -n -o SOURCE /efi 2>/dev/null | grep -q "/$(basename "$dev")\$"; then
             continue
         fi
-
-        # In "internal" mode don't even look at USB/removable disks.
         if [[ "$OS_PROBER_MODE" == "internal" ]] && is_external_disk_part "$dev"; then
             continue
         fi
-
         if mount -o ro "$dev" "$WIN_ESP_MOUNT" 2>/dev/null; then
             if [[ -f "$WIN_ESP_MOUNT/EFI/Microsoft/Boot/bootmgfw.efi" ]]; then
                 WIN_ESP="$dev"
@@ -1074,24 +1018,17 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
         info "No Windows ESP found. (Windows may not be installed, or it's already visible to grub-mkconfig.)"
     fi
 fi
+advance
 
 # ---------------- GRUB CONFIG ----------------
 
 set_phase 6
+set_items "Generate grub.cfg" "Strip EFI BootNext entries"
+
 gauge_msg 88 "Generating GRUB configuration..."
-
 log "Generating GRUB configuration..."
-
 grub-mkconfig -o /boot/grub/grub.cfg
-
-# ---------------- STRIP 'EFI BootNext' ENTRIES FROM GRUB MENU ----------------
-#
-# Newer GRUB versions add a menuentry for every UEFI Boot#### variable in
-# NVRAM (UiApp, CD-ROM, PXE, and even our own 'Arch Linux' / 'GRUB'
-# entries). These entries just clutter the boot menu -- you boot the OS
-# from the disk, not by re-invoking the firmware's boot list. Only the
-# entries whose title ends with "(EFI BootNext)" are removed; the
-# "UEFI Firmware Settings" entry and everything else stay untouched.
+advance
 
 if [[ "$STRIP_EFI_BOOTNEXT_ENTRIES" == "yes" ]]; then
     gauge_msg 92 "Removing 'EFI BootNext' entries from the GRUB menu..."
@@ -1099,12 +1036,7 @@ if [[ "$STRIP_EFI_BOOTNEXT_ENTRIES" == "yes" ]]; then
     strip_efi_bootnext_entries
     info "EFI BootNext entries stripped from /boot/grub/grub.cfg."
 fi
-
-# ---------------- WINDOWS ESP CLEANUP ----------------
-#
-# Unmount the temporary Windows ESP mount, if we made one. Leaving it
-# mounted across reboots can cause the "Windows is hibernated" or
-# "cannot mount" errors on the Windows side, so we always clean up.
+advance
 
 if [[ -n "$WIN_ESP" ]]; then
     log "Unmounting temporary Windows ESP mount ($WIN_ESP_MOUNT)..."
@@ -1115,8 +1047,9 @@ fi
 # ---------------- INITIAL SNAPSHOT ----------------
 
 set_phase 7
-gauge_msg 95 "Creating initial protected system snapshot..."
+set_items "Create initial snapshot" "Snapper cleanup"
 
+gauge_msg 95 "Creating initial protected system snapshot..."
 log "Creating initial protected system snapshot..."
 
 INITIAL_SNAPSHOT_ID="$(
@@ -1125,18 +1058,19 @@ INITIAL_SNAPSHOT_ID="$(
         --description "Initial Arch system after Btrfs/Snapper setup" \
         --print-number
 )"
-
-# ---------------- CLEANUP OLD SNAPSHOTS ----------------
+advance
 
 gauge_msg 98 "Running initial Snapper cleanup..."
-
 log "Running initial Snapper cleanup..."
 
 snapper -c "$SNAPPER_CONFIG" cleanup number || true
 snapper -c "$SNAPPER_CONFIG" cleanup timeline || true
+advance
 
 # ---------------- FINAL REPORT ----------------
 
+set_phase 8
+gauge_msg 99 "Writing final status report..."
 log "Setup complete."
 
 printf '\n'
@@ -1253,7 +1187,6 @@ echo "============================================================"
 
 gauge_msg 100 "Setup complete."
 
-# Restore stdout so the caller (run_with_gauge) sees a clean pipe.
 exec 1>&3
 exec 3>&-
 }
