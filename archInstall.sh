@@ -43,15 +43,35 @@ MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
-    _url="https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh"
-    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "$_url" 2>/dev/null || true)"
-    if [[ "$_code" == "200" ]]; then
-        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
+    # Download to a temporary file FIRST (never write a partial file
+    # directly next to the script -- the folder may be a read-only or
+    # permission-quirky mount, e.g. a VM shared folder where root cannot
+    # write). Verify the download produced a non-empty file, then move
+    # it into place. If the script folder turns out to be unwritable,
+    # fall back to keeping lib.sh in $TMPDIR and source it from there.
+    _lib_tmp="$(mktemp "${TMPDIR:-/tmp}/lib.sh.XXXXXX")" || {
+        echo "ERROR: could not create a temporary file for lib.sh." >&2
+        exit 1
+    }
+    _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
+        "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" 2>/dev/null || true)"
+    if [[ -s "$_lib_tmp" ]]; then
+        if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
+            :
+        else
+            _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
+            mv "$_lib_tmp" "$_lib_fallback"
+            echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
+            # Make the sourced copy look like the local one for the rest of
+            # the script by symlinking it next to the script if possible,
+            # else just point SCRIPT_DIR at the fallback's directory.
+            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+        fi
     else
-        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
-        echo "       URL: $_url  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
-        echo "       Put lib.sh in the same folder as this script and run it again." >&2
+        echo "       URL: https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh (HTTP ${_code:-000})" >&2
+        echo "       Put lib.sh (and the other scripts) in the same folder as archInstall.sh and run it again." >&2
         exit 1
     fi
 fi
@@ -179,13 +199,9 @@ else
 fi
 
 # ---------------- DISK ENCRYPTION PASSPHRASE ----------------
-#
-# The warning and the passphrase prompt are one screen: the warning text
-# is passed as the (optional) intro of ask_password and shown above the
-# password field inside the same dialog.
 
-LUKS_INTRO="The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
-ask_password LUKS_PASS "LUKS passphrase" "$LUKS_INTRO" || abort
+msg_box "Disk encryption" "The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
+ask_password LUKS_PASS "LUKS passphrase" || abort
 
 # ---------------- HARDWARE CLOCK (RTC) ----------------
 #
@@ -377,11 +393,16 @@ ask_text CONFIRM "FINAL CONFIRMATION" "This is the point of no return.\n\n$DEVIC
 [[ "$CONFIRM" == "WIPE" ]] || abort "Cancelled -- nothing was changed."
 
 # ============================================================
-# INSTALL (unattended; live output in a dialog box)
+# INSTALL (unattended; live progress in a dialog --gauge)
 #
 # Everything below runs inside run_install(). NOTE: the body is
 # deliberately not indented -- the heredocs inside must keep their
 # terminators in column 0.
+#
+# run_with_gauge gives the function FD 3 pointing at the gauge; stdout
+# is redirected inside run_install to $LOG_FILE so that pacman's output
+# and our own log/info/warn lines are captured cleanly. Only
+# gauge_msg writes the percent+message frames to FD 3.
 # ============================================================
 
 DE_FAILED_FILE="$(mktemp)"
@@ -484,8 +505,14 @@ mount "$BOOTPART" /mnt/boot
 mount "$ESP" /mnt/efi
 
 # ---------------- OPTIMIZE MIRRORLIST (reflector) ----------------
+#
+# Use reflector to rank mirrors by speed and keep only the fastest
+# HTTPS mirrors. This speeds up pacstrap and all subsequent package
+# installs on the live system.
+#
+# The Arch ISO ships with reflector, but install it if missing.
 
-gauge_msg 20 "Optimizing pacman mirrorlist with reflector..."
+gauge_msg 19 "Optimizing pacman mirrorlist with reflector..."
 
 log "Optimizing pacman mirrorlist with reflector..."
 
@@ -495,8 +522,16 @@ if ! command -v reflector >/dev/null 2>&1; then
 fi
 
 if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
+    # Backup the original mirrorlist (optional but recommended)
     cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
 
+    # Rank the 20 most recently synchronized HTTPS mirrors by download rate
+    # and write the result back to /etc/pacman.d/mirrorlist. Only mirrors
+    # that have synced within the last 12 hours are considered.
+    #
+    # Non-fatal by design: the disk is already partitioned/formatted at
+    # this point, so a transient reflector/network hiccup shouldn't abort
+    # the whole install over what is just a speed optimization.
     if reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist; then
         info "Mirrorlist updated with the fastest HTTPS mirrors."
     else
@@ -509,7 +544,7 @@ fi
 
 # ---------------- PACSTRAP ----------------
 
-gauge_msg 25 "Installing base system (pacstrap) -- downloading, this may take a while..."
+gauge_msg 21 "Installing base system (pacstrap) -- downloading, this may take a while..."
 
 log "Installing base system (pacstrap)..."
 
@@ -520,21 +555,22 @@ PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
 [[ "$ENABLE_WOL" == "yes" ]] && PACKAGES+=(ethtool)
 
 # Stream pacstrap output: everything goes to the log, and the "(N/M)
-# installing pkg" lines drive the gauge. stdbuf -oL forces line-buffered
-# output so the gauge updates smoothly instead of in bursts.
+# installing pkg" lines drive the gauge between 21% and 43%. stdbuf -oL
+# forces line-buffered output so the gauge updates smoothly instead of
+# in bursts.
 stdbuf -oL pacstrap -K /mnt "${PACKAGES[@]}" 2>&1 | while IFS= read -r line; do
     printf '%s\n' "$line"
     if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
         _cur="${BASH_REMATCH[1]}"
         _tot="${BASH_REMATCH[2]}"
         printf 'XXX\n%d\nInstalling base packages (%d/%d)...\nXXX\n' \
-            "$(( 25 + 50 * _cur / _tot ))" "$_cur" "$_tot" >&3
+            "$(( 21 + 22 * _cur / _tot ))" "$_cur" "$_tot" >&3
     fi
 done
 PACSTRAP_RC="${PIPESTATUS[0]}"
 [[ "$PACSTRAP_RC" -eq 0 ]] || die "pacstrap failed (exit code $PACSTRAP_RC) -- see $LOG_FILE"
 
-gauge_msg 78 "Generating /etc/fstab..."
+gauge_msg 45 "Generating /etc/fstab..."
 
 log "/etc/fstab:"
 genfstab -U /mnt >> /mnt/etc/fstab
@@ -543,13 +579,15 @@ cat /mnt/etc/fstab
 # ---------------- WI-FI CARRY-OVER: WRITE NM PROFILES ----------------
 
 if [[ "$WIFI_CARRY" == "yes" ]]; then
-    gauge_msg 80 "Copying saved Wi-Fi network(s) to NetworkManager..."
+    gauge_msg 47 "Copying saved Wi-Fi network(s) to NetworkManager..."
     log "Copying saved Wi-Fi network(s) to NetworkManager..."
     NM_CONN_DIR="/mnt/etc/NetworkManager/system-connections"
     mkdir -p "$NM_CONN_DIR"
     wifi_idx=0
     for f in "${WIFI_PSK_FILES[@]}"; do
         ssid="$(iwd_ssid_from_file "$f")"
+        # Prefer the plain passphrase; fall back to the 64-hex PSK
+        # (NetworkManager accepts either in the psk= field).
         psk="$(sed -n 's/^Passphrase=//p' "$f" | head -n1)"
         [[ -n "$psk" ]] || psk="$(sed -n 's/^PreSharedKey=//p' "$f" | head -n1)"
         if [[ -z "$ssid" || -z "$psk" ]]; then
@@ -563,6 +601,7 @@ if [[ "$WIFI_CARRY" == "yes" ]]; then
         wifi_idx=$((wifi_idx + 1))
         safe="$(printf '%s' "$ssid" | tr -c 'A-Za-z0-9._-' '_')"
         out="${NM_CONN_DIR}/wifi-${wifi_idx}-${safe}.nmconnection"
+        # Keyfile values: backslash must be escaped.
         ssid_esc="${ssid//\\/\\\\}"
         psk_esc="${psk//\\/\\\\}"
         (
@@ -598,12 +637,13 @@ fi
 
 # ---------------- USER ACCOUNT + PASSWORDS ----------------
 
-gauge_msg 83 "Creating user account and setting passwords..."
+gauge_msg 49 "Creating user account and setting passwords..."
 
 if [[ -n "${NEW_USERNAME}" ]]; then
     log "Creating user ${NEW_USERNAME}..."
     if [[ "${MAKE_SUDO}" == "yes" ]]; then
         arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
+        # Enable the wheel group in sudoers (validated with visudo -c before activating).
         arch-chroot /mnt cp /etc/sudoers /etc/sudoers.bak
         arch-chroot /mnt sed -i -E 's/^# %wheel ALL=\(ALL:ALL\) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
         arch-chroot /mnt visudo -c -f /etc/sudoers || {
@@ -622,51 +662,66 @@ if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
     printf 'root:%s\n' "$ROOT_PASS" | arch-chroot /mnt chpasswd
     info "Root password set."
 else
+    # A fresh Arch root account has an EMPTY password, so lock it explicitly.
     arch-chroot /mnt passwd -l root
     info "Root account locked -- use sudo."
 fi
 
 # ---------------- CHROOT CONFIGURATION (unattended) ----------------
 
-gauge_msg 88 "Configuring the new system (chroot)..."
+gauge_msg 51 "Configuring the new system (chroot)..."
 
 log "Configuring the new system (chroot)..."
 
+# --- CHROOT SCRIPT ---
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
+# Set hostname and time
 echo "$HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 
+# Hardware clock: either UTC (Linux default) or LOCAL (Windows-friendly).
+# The /etc/adjtime file records the chosen mode for hwclock/systemd.
 if [[ "$RTC_MODE" == "local" ]]; then
     hwclock --systohc --localtime
 else
     hwclock --systohc --utc
 fi
 
+# --- Enable locales ---
+# Enable en_US.UTF-8
 sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
 grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
 
+# Enable hr_HR.UTF-8
 sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
 grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
 
 locale-gen
 
+# Set system locale and keymap
 echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 
+# Export LANGUAGE to avoid "NO" in GDM and other display managers
 mkdir -p /etc/profile.d
 echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
 chmod 644 /etc/profile.d/locale.sh
 
+# Hosts file
 cat >> /etc/hosts <<HOSTS_EOF
 127.0.0.1   localhost
 ::1         localhost
 127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
 
+# Enable NetworkManager
 systemctl enable NetworkManager
 
+# Wake-on-LAN: most NIC drivers reset "wol g" back to off on every boot,
+# so a one-shot systemd service (templated on the interface name) is
+# needed to re-apply it after each boot, not just once here.
 if [[ "$ENABLE_WOL" == "yes" ]]; then
     cat > /etc/systemd/system/wol@.service <<'WOL_EOF'
 [Unit]
@@ -684,6 +739,11 @@ WOL_EOF
     systemctl enable "wol@${WOL_IFACE}.service"
 fi
 
+# Configure ZRAM swap for better performance and reduced SSD wear.
+# A zram device is created in RAM, compressed, and used as swap.
+# This is especially useful on systems with limited RAM or SSDs.
+# The config below creates a zram device sized at 50% of RAM,
+# using the zstd compression algorithm.
 cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
 [zram0]
 zram-size = ram / 2
@@ -692,6 +752,7 @@ swap-priority = 100
 fs-type = swap
 ZRAM_EOF
 
+# Initramfs: systemd-based with proper hooks
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
 cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
 
@@ -699,8 +760,10 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
+# GRUB: add LUKS, locale, and keymap to kernel command line
 sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
+# Install GRUB for UEFI
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -711,9 +774,18 @@ fi
 CHROOT_EOF
 
 # ---------------- DESKTOP ENVIRONMENT (optional, non-fatal) ----------------
+#
+# installDE.sh runs inside the new system (chroot). Its pacman emits
+# "(N/M) installing <pkg>" lines; each one drives the gauge between 55%
+# and 98%, so the bar fills smoothly during the whole DE install instead
+# of sitting frozen on a single value for several minutes.
+#
+# NOTE: pipefail is off inside run_install (see run_with_gauge), so a
+# non-zero exit from installDE.sh does NOT abort us here -- the exit
+# code is captured via PIPESTATUS[0] and handled manually below.
 
 if [[ -n "$DE_CHOICE" ]]; then
-    gauge_msg 95 "Installing desktop environment: $DE_LABEL ..."
+    gauge_msg 55 "Installing desktop environment: $DE_LABEL ..."
     log "Installing the desktop environment: $DE_LABEL ..."
 
     DE_SCRIPT="$SCRIPT_DIR/installDE.sh"
@@ -733,11 +805,22 @@ if [[ -n "$DE_CHOICE" ]]; then
         mkdir -p /mnt/root/arch-setup-tmp
         install -m 755 "$DE_SCRIPT" /mnt/root/arch-setup-tmp/installDE.sh
         install -m 644 "$SCRIPT_DIR/lib.sh" /mnt/root/arch-setup-tmp/lib.sh
-        if arch-chroot /mnt env DE_CHOICE="$DE_CHOICE" INSTALL_MODE="$DE_MODE" \
+
+        arch-chroot /mnt env DE_CHOICE="$DE_CHOICE" INSTALL_MODE="$DE_MODE" \
                 TARGET_USER="$NEW_USERNAME" ASSUME_YES=1 INSTALL_IN_CHROOT=1 \
-                /root/arch-setup-tmp/installDE.sh; then
-            DE_OK=1
-        fi
+                /root/arch-setup-tmp/installDE.sh 2>&1 | \
+            while IFS= read -r line; do
+                printf '%s\n' "$line"
+                if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
+                    _cur="${BASH_REMATCH[1]}"
+                    _tot="${BASH_REMATCH[2]}"
+                    printf 'XXX\n%d\nInstalling desktop environment (%d/%d)...\nXXX\n' \
+                        "$(( 55 + 43 * _cur / _tot ))" "$_cur" "$_tot" >&3
+                fi
+            done
+        DE_RC="${PIPESTATUS[0]}"
+        [[ "$DE_RC" -eq 0 ]] && DE_OK=1
+
         rm -rf /mnt/root/arch-setup-tmp
     fi
     [[ -z "$DE_DL" ]] || rm -f "$DE_DL"
@@ -752,7 +835,7 @@ fi
 
 # ---------------- COPY INSTALLER SCRIPTS TO THE NEW SYSTEM ----------------
 
-gauge_msg 99 "Copying installer scripts to /archInstall on the new system..."
+gauge_msg 98 "Copying installer scripts to /archInstall on the new system..."
 
 log "Copying the installer scripts to /archInstall on the new system..."
 mkdir -p /mnt/archInstall/scripts
@@ -773,8 +856,9 @@ else
     warn "arch-manager.sh not found and could not be downloaded. After reboot: sudo curl -o /archInstall/arch-manager.sh ${REPO_RAW_URL}/arch-manager.sh"
 fi
 
+# Scripts already next to this one (incl. lib.sh), then anything missing from the repo.
 cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
-cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh
+cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh   # the manager sources it from its own folder
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
     if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
         fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
