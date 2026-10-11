@@ -388,7 +388,17 @@ DE_FAILED_FILE="$(mktemp)"
 
 run_install() {
 
+# Save the pipe to dialog --gauge as FD 3; redirect stdout to the log.
+# Every echo / log / info / warn / pacman line ends up in the log, and
+# only gauge_msg writes to the gauge. This keeps the bar clean and still
+# captures the full transcript in $LOG_FILE.
+exec 3>&1
+exec 1>>"$LOG_FILE"
+gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
+
 # ---------------- PARTITIONING ----------------
+
+gauge_msg 2 "Wiping and partitioning $DEVICE..."
 
 log "Wiping and partitioning $DEVICE..."
 
@@ -425,6 +435,8 @@ done
 
 # ---------------- FORMAT ESP + /boot ----------------
 
+gauge_msg 6 "Formatting ESP and /boot..."
+
 log "Formatting ESP and /boot..."
 
 mkfs.fat -F32 -n EFI "$ESP"
@@ -434,6 +446,8 @@ udevadm settle
 
 # ---------------- LUKS2 ----------------
 
+gauge_msg 10 "Creating LUKS2 container on $LUKSPART..."
+
 log "Creating LUKS2 container on $LUKSPART..."
 
 # The passphrase collected earlier is fed through stdin (--key-file=-);
@@ -441,6 +455,7 @@ log "Creating LUKS2 container on $LUKSPART..."
 # WIPE confirmation has already been given.
 printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --label cryptroot --batch-mode --key-file=- "$LUKSPART"
 
+gauge_msg 13 "Opening LUKS2 container..."
 log "Opening LUKS2 container..."
 printf '%s' "$LUKS_PASS" | cryptsetup open --key-file=- "$LUKSPART" cryptroot
 
@@ -448,6 +463,8 @@ LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
 info "LUKS UUID: $LUKS_UUID"
 
 # ---------------- BTRFS ----------------
+
+gauge_msg 16 "Creating Btrfs filesystem and subvolumes..."
 
 log "Creating Btrfs filesystem and subvolumes..."
 
@@ -467,12 +484,8 @@ mount "$BOOTPART" /mnt/boot
 mount "$ESP" /mnt/efi
 
 # ---------------- OPTIMIZE MIRRORLIST (reflector) ----------------
-#
-# Use reflector to rank mirrors by speed and keep only the fastest
-# HTTPS mirrors. This speeds up pacstrap and all subsequent package
-# installs on the live system.
-#
-# The Arch ISO ships with reflector, but install it if missing.
+
+gauge_msg 20 "Optimizing pacman mirrorlist with reflector..."
 
 log "Optimizing pacman mirrorlist with reflector..."
 
@@ -482,16 +495,8 @@ if ! command -v reflector >/dev/null 2>&1; then
 fi
 
 if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
-    # Backup the original mirrorlist (optional but recommended)
     cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
 
-    # Rank the 20 most recently synchronized HTTPS mirrors by download rate
-    # and write the result back to /etc/pacman.d/mirrorlist. Only mirrors
-    # that have synced within the last 12 hours are considered.
-    #
-    # Non-fatal by design: the disk is already partitioned/formatted at
-    # this point, so a transient reflector/network hiccup shouldn't abort
-    # the whole install over what is just a speed optimization.
     if reflector --latest 20 --protocol https --age 12 --sort rate --save /etc/pacman.d/mirrorlist; then
         info "Mirrorlist updated with the fastest HTTPS mirrors."
     else
@@ -504,6 +509,8 @@ fi
 
 # ---------------- PACSTRAP ----------------
 
+gauge_msg 25 "Installing base system (pacstrap) -- downloading, this may take a while..."
+
 log "Installing base system (pacstrap)..."
 
 PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
@@ -512,24 +519,37 @@ PACKAGES=(base base-devel linux linux-firmware btrfs-progs cryptsetup
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
 [[ "$ENABLE_WOL" == "yes" ]] && PACKAGES+=(ethtool)
 
-pacstrap -K /mnt "${PACKAGES[@]}"
+# Stream pacstrap output: everything goes to the log, and the "(N/M)
+# installing pkg" lines drive the gauge. stdbuf -oL forces line-buffered
+# output so the gauge updates smoothly instead of in bursts.
+stdbuf -oL pacstrap -K /mnt "${PACKAGES[@]}" 2>&1 | while IFS= read -r line; do
+    printf '%s\n' "$line"
+    if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
+        _cur="${BASH_REMATCH[1]}"
+        _tot="${BASH_REMATCH[2]}"
+        printf 'XXX\n%d\nInstalling base packages (%d/%d)...\nXXX\n' \
+            "$(( 25 + 50 * _cur / _tot ))" "$_cur" "$_tot" >&3
+    fi
+done
+PACSTRAP_RC="${PIPESTATUS[0]}"
+[[ "$PACSTRAP_RC" -eq 0 ]] || die "pacstrap failed (exit code $PACSTRAP_RC) -- see $LOG_FILE"
 
-genfstab -U /mnt >> /mnt/etc/fstab
+gauge_msg 78 "Generating /etc/fstab..."
 
 log "/etc/fstab:"
+genfstab -U /mnt >> /mnt/etc/fstab
 cat /mnt/etc/fstab
 
 # ---------------- WI-FI CARRY-OVER: WRITE NM PROFILES ----------------
 
 if [[ "$WIFI_CARRY" == "yes" ]]; then
+    gauge_msg 80 "Copying saved Wi-Fi network(s) to NetworkManager..."
     log "Copying saved Wi-Fi network(s) to NetworkManager..."
     NM_CONN_DIR="/mnt/etc/NetworkManager/system-connections"
     mkdir -p "$NM_CONN_DIR"
     wifi_idx=0
     for f in "${WIFI_PSK_FILES[@]}"; do
         ssid="$(iwd_ssid_from_file "$f")"
-        # Prefer the plain passphrase; fall back to the 64-hex PSK
-        # (NetworkManager accepts either in the psk= field).
         psk="$(sed -n 's/^Passphrase=//p' "$f" | head -n1)"
         [[ -n "$psk" ]] || psk="$(sed -n 's/^PreSharedKey=//p' "$f" | head -n1)"
         if [[ -z "$ssid" || -z "$psk" ]]; then
@@ -543,7 +563,6 @@ if [[ "$WIFI_CARRY" == "yes" ]]; then
         wifi_idx=$((wifi_idx + 1))
         safe="$(printf '%s' "$ssid" | tr -c 'A-Za-z0-9._-' '_')"
         out="${NM_CONN_DIR}/wifi-${wifi_idx}-${safe}.nmconnection"
-        # Keyfile values: backslash must be escaped.
         ssid_esc="${ssid//\\/\\\\}"
         psk_esc="${psk//\\/\\\\}"
         (
@@ -579,11 +598,12 @@ fi
 
 # ---------------- USER ACCOUNT + PASSWORDS ----------------
 
+gauge_msg 83 "Creating user account and setting passwords..."
+
 if [[ -n "${NEW_USERNAME}" ]]; then
     log "Creating user ${NEW_USERNAME}..."
     if [[ "${MAKE_SUDO}" == "yes" ]]; then
         arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
-        # Enable the wheel group in sudoers (validated with visudo -c before activating).
         arch-chroot /mnt cp /etc/sudoers /etc/sudoers.bak
         arch-chroot /mnt sed -i -E 's/^# %wheel ALL=\(ALL:ALL\) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
         arch-chroot /mnt visudo -c -f /etc/sudoers || {
@@ -602,64 +622,51 @@ if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
     printf 'root:%s\n' "$ROOT_PASS" | arch-chroot /mnt chpasswd
     info "Root password set."
 else
-    # A fresh Arch root account has an EMPTY password, so lock it explicitly.
     arch-chroot /mnt passwd -l root
     info "Root account locked -- use sudo."
 fi
 
 # ---------------- CHROOT CONFIGURATION (unattended) ----------------
 
+gauge_msg 88 "Configuring the new system (chroot)..."
+
 log "Configuring the new system (chroot)..."
 
-# --- CHROOT SCRIPT ---
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
-# Set hostname and time
 echo "$HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 
-# Hardware clock: either UTC (Linux default) or LOCAL (Windows-friendly).
-# The /etc/adjtime file records the chosen mode for hwclock/systemd.
 if [[ "$RTC_MODE" == "local" ]]; then
     hwclock --systohc --localtime
 else
     hwclock --systohc --utc
 fi
 
-# --- Enable locales ---
-# Enable en_US.UTF-8
 sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
 grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
 
-# Enable hr_HR.UTF-8
 sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
 grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
 
 locale-gen
 
-# Set system locale and keymap
 echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 
-# Export LANGUAGE to avoid "NO" in GDM and other display managers
 mkdir -p /etc/profile.d
 echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
 chmod 644 /etc/profile.d/locale.sh
 
-# Hosts file
 cat >> /etc/hosts <<HOSTS_EOF
 127.0.0.1   localhost
 ::1         localhost
 127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
 HOSTS_EOF
 
-# Enable NetworkManager
 systemctl enable NetworkManager
 
-# Wake-on-LAN: most NIC drivers reset "wol g" back to off on every boot,
-# so a one-shot systemd service (templated on the interface name) is
-# needed to re-apply it after each boot, not just once here.
 if [[ "$ENABLE_WOL" == "yes" ]]; then
     cat > /etc/systemd/system/wol@.service <<'WOL_EOF'
 [Unit]
@@ -677,11 +684,6 @@ WOL_EOF
     systemctl enable "wol@${WOL_IFACE}.service"
 fi
 
-# Configure ZRAM swap for better performance and reduced SSD wear.
-# A zram device is created in RAM, compressed, and used as swap.
-# This is especially useful on systems with limited RAM or SSDs.
-# The config below creates a zram device sized at 50% of RAM,
-# using the zstd compression algorithm.
 cat > /etc/systemd/zram-generator.conf <<'ZRAM_EOF'
 [zram0]
 zram-size = ram / 2
@@ -690,7 +692,6 @@ swap-priority = 100
 fs-type = swap
 ZRAM_EOF
 
-# Initramfs: systemd-based with proper hooks
 sed -i -E '/^[[:space:]]*HOOKS=/d' /etc/mkinitcpio.conf
 cat >> /etc/mkinitcpio.conf <<'HOOKS_EOF'
 
@@ -698,10 +699,8 @@ HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block 
 HOOKS_EOF
 mkinitcpio -P
 
-# GRUB: add LUKS, locale, and keymap to kernel command line
 sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
-# Install GRUB for UEFI
 grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
@@ -714,6 +713,7 @@ CHROOT_EOF
 # ---------------- DESKTOP ENVIRONMENT (optional, non-fatal) ----------------
 
 if [[ -n "$DE_CHOICE" ]]; then
+    gauge_msg 95 "Installing desktop environment: $DE_LABEL ..."
     log "Installing the desktop environment: $DE_LABEL ..."
 
     DE_SCRIPT="$SCRIPT_DIR/installDE.sh"
@@ -752,6 +752,8 @@ fi
 
 # ---------------- COPY INSTALLER SCRIPTS TO THE NEW SYSTEM ----------------
 
+gauge_msg 99 "Copying installer scripts to /archInstall on the new system..."
+
 log "Copying the installer scripts to /archInstall on the new system..."
 mkdir -p /mnt/archInstall/scripts
 
@@ -771,9 +773,8 @@ else
     warn "arch-manager.sh not found and could not be downloaded. After reboot: sudo curl -o /archInstall/arch-manager.sh ${REPO_RAW_URL}/arch-manager.sh"
 fi
 
-# Scripts already next to this one (incl. lib.sh), then anything missing from the repo.
 cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
-cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh   # the manager sources it from its own folder
+cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
     if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
         fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
@@ -784,14 +785,20 @@ chmod +x /mnt/archInstall/*.sh /mnt/archInstall/scripts/*.sh 2>/dev/null || true
 cp -f "$LOG_FILE" /mnt/root/archInstall.log 2>/dev/null || true
 
 log "Base install complete."
+
+gauge_msg 100 "Installation complete."
+
+# Restore the original stdout for the caller.
+exec 1>&3
+exec 3>&-
 }
 
-run_on_terminal "Installing Arch Linux" "$LOG_FILE" run_install nowait
+run_with_gauge "Installing Arch Linux" "$LOG_FILE" run_install
 
 # Passwords are no longer needed in memory.
 unset LUKS_PASS USER_PASS ROOT_PASS
 
-if [[ "$RUN_RC" -ne 0 ]]; then
+if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
     msg_box "Installation FAILED" "The installation did not finish.\n\nDo NOT reboot into this system. See the log for details:\n  $LOG_FILE\n\nFix the problem and run the installer again."
     exit 1
 fi
