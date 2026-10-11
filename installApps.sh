@@ -47,6 +47,11 @@ cleanup() {
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
     rm -f "$FAILED_FILE" "$SKIPPED_FILE"
+    # Remove the sudoers drop-in we created, so sudo's timestamp_timeout
+    # goes back to the system default for the user's future sessions.
+    if [[ "${SUDOERS_DROPIN_CREATED:-0}" == "1" ]]; then
+        sudo rm -f "$SUDOERS_DROPIN" 2>/dev/null || true
+    fi
 }
 
 trap 'die "Failed at line $LINENO."' ERR
@@ -61,17 +66,42 @@ command -v pacman >/dev/null || die "pacman not found -- is this an Arch system?
 log "Checking sudo access (you may be asked for your password)..."
 sudo -v || die "sudo access is required."
 
-# Background keepalive: refresh the sudo timestamp every ~30 seconds so
-# long AUR builds (which can easily exceed sudo's default 15-minute
-# timeout) don't trigger a password prompt in the middle of the install
-# -- that prompt would corrupt the dialog --gauge display and stall the
-# whole run. IMPORTANT: use `sudo -n -v` (explicitly updates the
-# timestamp) rather than `sudo -n true` (which only checks it on some
-# sudo builds and does NOT extend the timeout).
+# ---------------- SUDO: ONE PROMPT ONLY ----------------
 #
-# The loop exits when either the parent shell dies (kill -0 $$) or a
-# refresh fails -- it also writes the failure into $LOG_FILE so the
-# install summary can report it.
+# yay and makepkg call sudo internally WITHOUT -n, so even though every
+# sudo call we make ourselves uses -n, an expired timestamp would let
+# them pop a password prompt right in the middle of the --gauge dialog
+# (that is the "tosevjenajbolji:" prompt the user sees over the bar).
+#
+# Fix: raise sudo's timestamp_timeout to 2 hours via a short-lived
+# sudoers drop-in (removed in cleanup). 2 hours covers any AUR build.
+# Combined with the keepalive below, no sudo prompt can ever appear
+# during the install.
+SUDOERS_DROPIN="/etc/sudoers.d/99-installer-timestamp"
+SUDOERS_DROPIN_CREATED=0
+if [[ ! -e "$SUDOERS_DROPIN" ]]; then
+    if printf 'Defaults timestamp_timeout=120\n' | sudo tee "$SUDOERS_DROPIN" >/dev/null 2>&1; then
+        sudo chmod 440 "$SUDOERS_DROPIN" 2>/dev/null || true
+        if sudo visudo -cf "$SUDOERS_DROPIN" >/dev/null 2>&1; then
+            SUDOERS_DROPIN_CREATED=1
+            info "Extended sudo timeout to 120 minutes for this session."
+        else
+            warn "Invalid sudoers drop-in; removing."
+            sudo rm -f "$SUDOERS_DROPIN"
+        fi
+    else
+        warn "Could not create sudoers drop-in -- keeping default timeout."
+    fi
+fi
+
+# Refresh the timestamp now that the new timeout is active.
+sudo -v 2>/dev/null || true
+
+# Keepalive as a second line of defense: refresh every 30 s so the
+# timestamp never gets close to expiring, even if the drop-in was not
+# created (e.g. read-only /etc). Uses `sudo -n -v` (which explicitly
+# EXTENDS the timestamp) rather than `sudo -n true` (which on some
+# sudo builds only checks it).
 (
     while kill -0 "$$" 2>/dev/null; do
         sleep 30
@@ -245,7 +275,10 @@ install_aur() {
         echo "$pkg" >> "$SKIPPED_FILE"
         return 0
     fi
-    if ! yay -S --needed --noconfirm "$pkg"; then
+    # --sudoflags "-n" makes yay pass -n to its internal sudo call, so
+    # even if the timestamp somehow expires, yay's sudo fails cleanly
+    # instead of prompting on /dev/tty over the --gauge dialog.
+    if ! yay --sudoflags "-n" -S --needed --noconfirm "$pkg"; then
         warn "$pkg failed to install -- continuing with the rest."
         echo "$pkg" >> "$FAILED_FILE"
     fi
@@ -348,7 +381,10 @@ run_install() {
         gauge_msg $((current * 100 / total)) "Building yay from AUR (this can take a while)..."
         yay_tmp="$(mktemp -d)"
         git clone https://aur.archlinux.org/yay.git "$yay_tmp/yay" >> "$log" 2>&1
-        ( cd "$yay_tmp/yay" && makepkg -si --noconfirm ) >> "$log" 2>&1
+        # </dev/null: makepkg calls sudo internally; with no tty on stdin,
+        # sudo cannot prompt and will fail immediately instead of spraying
+        # a password prompt over the dialog.
+        ( cd "$yay_tmp/yay" && makepkg -si --noconfirm </dev/null ) >> "$log" 2>&1
         rm -rf "$yay_tmp"
     fi
     CUR_IDX=2
