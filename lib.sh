@@ -187,9 +187,9 @@ ask_text() {
 # ask_password <varname> <title> [intro]
 #
 # Asks twice, loops until they match. Returns 1 on cancel/ESC.
-# If <intro> is given, it is shown above the password field -- this
-# lets a preceding "msg_box" be folded into the password prompt so the
-# user sees the warning and types the password on a single screen.
+# If <intro> is given, it is shown above the password field -- this lets
+# a preceding msg_box be folded into the password prompt so the user sees
+# the warning and types the password on a single screen.
 ask_password() {
     local __var="$1" title="$2" intro="${3:-}" p1 p2
     local prompt1="Enter password:" prompt2="Repeat the password:"
