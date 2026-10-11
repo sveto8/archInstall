@@ -8,7 +8,13 @@ set -o errtrace
 # Run this from the Arch ISO LIVE environment (not from an
 # already-installed system). It WIPES the target device.
 #
-# Produces exactly the layout expected by setup-btrfs-snapper.sh:
+# The UI is dialog-based: ALL questions are asked up front (disk,
+# user + password, LUKS passphrase, clock, Wake-on-LAN, Wi-Fi,
+# desktop environment), followed by one summary and the typed WIPE
+# confirmation. After that the install runs unattended with live
+# output in a dialog box.
+#
+# Produces exactly the layout expected by setupAfterInstall.sh:
 #
 #   /efi         unencrypted ESP  (FAT32)
 #   /boot        unencrypted      (ext4)
@@ -19,11 +25,9 @@ set -o errtrace
 #          ├── @home        -> /home
 #          └── @snapshots   -> /.snapshots
 #
-# After this script finishes, reboot into the new system and run
-# setup-btrfs-snapper.sh as root to finish Snapper/GRUB/Plymouth/quota,
-# then installDE.sh to install a desktop environment (GNOME, KDE Plasma,
-# COSMIC, or none). This script only produces a bootable, CLI-only
-# base system -- no desktop environment is installed here.
+# Optionally installs GNOME, KDE Plasma or XFCE right away by running
+# installDE.sh inside the new system (non-interactive). After reboot run
+# setupAfterInstall.sh (Snapper/GRUB/Plymouth) and installApps.sh.
 # ============================================================
 
 # ---------------- CONFIGURATION (edit before running) ----------------
@@ -37,22 +41,16 @@ LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the
 KEYMAP="us"
 MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
 
-# ---------------- COLORS ----------------
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
+    curl -fsSL -o "$SCRIPT_DIR/lib.sh" "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" \
+        || { echo "ERROR: lib.sh not found next to $0 and the download failed." >&2; exit 1; }
+fi
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
 
-# -----------------------------------------------------------------------
-# -----------------------------------------------------------------------
-
-log()  { printf '\n\033[1;32m[+] %s\033[0m\n' "$*"; }
-info() { printf '\033[1;36m    %s\033[0m\n' "$*"; }
-warn() { printf '\n\033[1;33m[!] %s\033[0m\n' "$*"; }
-die()  { printf '\n\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; exit 1; }
-error() { printf '\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2; }
+BACKTITLE="Arch Linux installer -- base system"
+LOG_FILE="/root/archInstall.log"
 
 trap 'die "Failed at line $LINENO."' ERR
 
@@ -66,32 +64,48 @@ command -v cryptsetup >/dev/null || die "cryptsetup not found."
 command -v mkfs.btrfs >/dev/null || die "mkfs.btrfs not found (package: btrfs-progs)."
 command -v pacstrap >/dev/null || die "pacstrap not found (are you on the Arch ISO?)."
 
+ensure_dialog
+ui_init
+
+# This script wipes a whole disk and is meant for the live ISO only.
+if ! is_live_iso; then
+    ask_yes "Not the live ISO" "This does not look like the Arch live ISO.\n\nThis installer WIPES a whole disk and is meant to be run from the live ISO.\n\nContinue anyway?" no || abort
+fi
+
+# ============================================================
+# QUESTIONS (nothing is changed on disk until the WIPE confirmation)
+# ============================================================
+
 # ---------------- SELECT DISK ----------------
 
-echo
-echo "============================================================"
-echo " Available disks"
-echo "============================================================"
-lsblk -o NAME,SIZE,TYPE,MODEL,MOUNTPOINTS
-echo
+DISK_ITEMS=()
+while read -r name size type; do
+    [[ "$type" == "disk" ]] || continue
+    model="$(lsblk -dno MODEL "$name" 2>/dev/null | sed 's/[[:space:]]*$//' || true)"
+    mounted=""
+    if [[ -n "$(lsblk -no MOUNTPOINTS "$name" 2>/dev/null | tr -d '[:space:]')" ]]; then
+        mounted="  [has mounted partitions]"
+    fi
+    DISK_ITEMS+=("$name" "${size}  ${model:-unknown model}${mounted}")
+done < <(lsblk -dpno NAME,SIZE,TYPE)
 
-read -r -p "Disk to install onto (e.g. /dev/sda, /dev/nvme0n1): " DEVICE
-[[ -n "$DEVICE" ]] || die "No disk entered."
+[[ "${#DISK_ITEMS[@]}" -gt 0 ]] || die "No disks found."
+
+DEVICE="$(dlg_capture --title "Target disk" \
+    --menu "Select the disk to install Arch onto.\n\nEVERYTHING ON THE SELECTED DISK WILL BE ERASED." \
+    0 "$BOX_W" 0 "${DISK_ITEMS[@]}")" || abort
 [[ -b "$DEVICE" ]] || die "$DEVICE is not a block device."
 
 # Refuse to run against something that is currently mounted (e.g. the live USB itself),
 # but offer to clean up leftover mounts from a previous, interrupted run of this script.
-if lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -q .; then
-    warn "$DEVICE (or a partition on it) has active mounts, possibly left over from a previous run:"
-    lsblk "$DEVICE"
-    echo
-    read -r -p "Unmount everything under $DEVICE and continue? [Y/n] " UNMOUNT_ANSWER
-    [[ "$UNMOUNT_ANSWER" =~ ^[Nn]$ ]] && die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
+if [[ -n "$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | tr -d '[:space:]')" ]]; then
+    ask_yes "Active mounts" "$DEVICE (or a partition on it) has active mounts, possibly left over from a previous run:\n\n$(lsblk -l -o NAME,SIZE,FSTYPE,MOUNTPOINTS "$DEVICE")\n\nUnmount everything under $DEVICE and continue?" yes \
+        || die "$DEVICE (or a partition on it) is currently mounted. Refusing to touch it."
     log "Unmounting leftover mounts..."
     umount -R /mnt 2>/dev/null || true
     cryptsetup close cryptroot 2>/dev/null || true
     sleep 1
-    STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | grep -v '^$' || true)"
+    STILL_MOUNTED="$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | tr -d '[:space:]')"
     if [[ -n "$STILL_MOUNTED" ]]; then
         die "Could not fully unmount $DEVICE. Unmount manually (umount -R /mnt; cryptsetup close cryptroot) and re-run."
     fi
@@ -115,163 +129,126 @@ elif grep -qi 'GenuineIntel' /proc/cpuinfo; then
     UCODE_PKG="intel-ucode"
 fi
 
-# ---------------- CONFIRM ----------------
-
-printf '\n'
-echo "============================================================"
-echo " THIS WILL DESTROY ALL DATA ON: $DEVICE"
-echo "============================================================"
-lsblk "$DEVICE"
-echo
-echo "Planned layout:"
-echo "  ${ESP}      -> ESP (FAT32, $ESP_SIZE)          -> /efi"
-echo "  ${BOOTPART} -> ext4 ($BOOT_SIZE)                -> /boot"
-echo "  ${LUKSPART} -> LUKS2 -> Btrfs (@ @home @snapshots)"
-echo "  Hostname:   $HOSTNAME"
-echo "  Timezone:   $TIMEZONE"
-echo "  Locale:     $LOCALE"
-echo "  Microcode:  ${UCODE_PKG:-none detected}"
-echo "============================================================"
-echo
-read -r -p "Type WIPE (all caps) to continue: " CONFIRM
-[[ "$CONFIRM" == "WIPE" ]] || { echo "Cancelled."; exit 0; }
-
-# ---------------- REGULAR USER ----------------
-
-echo
-read -r -p "Username for the new regular user (leave empty to skip): " NEW_USERNAME
-if [[ -n "$NEW_USERNAME" ]]; then
-    if [[ "$NEW_USERNAME" == "root" ]]; then
-        die "Refusing to create a regular user named 'root'."
-    fi
-    read -r -p "Should $NEW_USERNAME be a superuser (added to wheel + sudo)? [Y/n] " MAKE_SUDO
-    [[ "$MAKE_SUDO" =~ ^[Nn]$ ]] && MAKE_SUDO="no" || MAKE_SUDO="yes"
-    info "User: $NEW_USERNAME (sudo: $MAKE_SUDO). You'll set the password interactively at the end."
-else
-    warn "No regular user will be created; only root will exist on the new system."
-    MAKE_SUDO="no"
-fi
-
-# ---------------- ROOT PASSWORD ----------------
+# ---------------- USER ACCOUNT + PASSWORD (asked together) ----------------
 #
-# No separate question here: if a sudo-enabled user was just created,
-# root stays locked automatically (use sudo instead). A root password
-# is only requested if there's no sudo user, since otherwise nothing
-# could log into the system at all.
+# Username, superuser question and password come one after another.
+# Passwords are applied later with chpasswd (no interactive passwd).
+# If no sudo-enabled user is created, a root password is required --
+# otherwise nothing could log in with admin rights.
+
+NEW_USERNAME=""
+MAKE_SUDO="no"
+USER_PASS=""
+ROOT_PASS=""
+SET_ROOT_PASSWORD="no"
+
+while true; do
+    ask_text NEW_USERNAME "New user" "Username for the new regular user.\n\nLeave empty to skip (then only root will exist)." "" || abort
+    if [[ -z "$NEW_USERNAME" ]]; then
+        break
+    fi
+    if [[ "$NEW_USERNAME" == "root" || ! "$NEW_USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        msg_box "Invalid username" "'$NEW_USERNAME' is not allowed.\n\nUse lowercase letters, digits, '_' or '-', starting with a letter or '_' (and not 'root')."
+        continue
+    fi
+    break
+done
+
+if [[ -n "$NEW_USERNAME" ]]; then
+    if ask_yes "Superuser" "Should $NEW_USERNAME be a superuser?\n\n(added to the 'wheel' group, can use sudo)" yes; then
+        MAKE_SUDO="yes"
+    fi
+    ask_password USER_PASS "Password for $NEW_USERNAME" || abort
+fi
 
 if [[ -n "$NEW_USERNAME" && "$MAKE_SUDO" == "yes" ]]; then
-    SET_ROOT_PASSWORD="no"
-    info "Sudo-enabled user created -- root account stays locked (no root password)."
+    SET_ROOT_PASSWORD="no"        # root stays locked; use sudo
 else
     SET_ROOT_PASSWORD="yes"
-    info "No sudo-enabled user configured -- you'll be asked to set a root password so you can still log in."
+    msg_box "Root password" "No sudo-enabled user will exist, so the root account needs a password to be able to log in."
+    ask_password ROOT_PASS "Root password" || abort
 fi
+
+# ---------------- DISK ENCRYPTION PASSPHRASE ----------------
+
+msg_box "Disk encryption" "The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
+ask_password LUKS_PASS "LUKS passphrase" || abort
 
 # ---------------- HARDWARE CLOCK (RTC) ----------------
 #
-# Linux keeps the hardware clock in UTC by default. Windows, on the
-# other hand, assumes the hardware clock is in LOCAL time. On a dual-
-# boot machine, if both OSes assume their own convention, Windows will
-# show the wrong time (offset by your timezone).
-#
-# Options:
-#   UTC   -> Linux default. Recommended for Linux-only machines.
-#   LOCAL -> Windows-compatible. Recommended if you dual-boot Windows
-#            and don't want to change the registry on the Windows side.
+# Linux keeps the hardware clock in UTC by default. Windows assumes LOCAL
+# time. On a dual-boot machine the two disagree and one OS shows the
+# wrong time, unless you pick local time here.
 
-echo
-echo "Hardware clock (RTC) mode:"
-echo "  1) UTC (Linux default, recommended unless dual-booting Windows)"
-echo "  2) Local time (use this if you dual-boot Windows)"
-read -r -p "Choice [1]: " RTC_CHOICE
-RTC_CHOICE="${RTC_CHOICE:-1}"
-
-if [[ "$RTC_CHOICE" == "2" ]]; then
-    RTC_MODE="local"
-    info "RTC will be set to LOCAL time (Windows-compatible)."
-else
-    RTC_MODE="utc"
-    info "RTC will be set to UTC (Linux default)."
-fi
+RTC_MODE="$(dlg_capture --title "Hardware clock (RTC)" \
+    --menu "How should the hardware clock be stored?\n\nChoose 'local' if you dual-boot Windows (avoids touching the Windows registry)." \
+    0 "$BOX_W" 0 \
+    utc   "UTC (Linux default, recommended for Linux-only machines)" \
+    local "Local time (Windows-compatible, for dual-boot)")" || abort
 
 # ---------------- WAKE-ON-LAN (WOL) ----------------
 #
-# Wake-on-LAN needs two things: the NIC's driver/firmware told to keep
-# listening for a magic packet (`ethtool -s <iface> wol g`), and that
-# setting re-applied on every boot, since most drivers reset it to "off"
-# each time the interface comes up. We detect the wired interface name
-# here (from the live environment -- predictable names like enp39s0 are
-# derived from the PCI topology, so they carry over to the installed
-# system on the same hardware) rather than hardcoding one, and install a
-# templated systemd service that re-applies the setting at every boot.
+# WOL needs the NIC told to listen for a magic packet (ethtool -s <iface>
+# wol g) and that setting re-applied on every boot, since most drivers
+# reset it. The wired interface name is detected here (names like
+# enp39s0 follow the PCI topology, so they carry over to the installed
+# system on the same hardware) and a templated systemd service
+# re-applies the setting at every boot.
 
 ENABLE_WOL="no"
 WOL_IFACE=""
+WOL_NOTE=""
 
-echo
-read -r -p "Enable Wake-on-LAN (WOL)? [y/N] " WOL_ANSWER
-if [[ "$WOL_ANSWER" =~ ^[Yy]$ ]]; then
-    # Wired interfaces only: anything under /sys/class/net without a
-    # "wireless" subdirectory and that isn't loopback. WOL only applies
-    # to Ethernet NICs, so Wi-Fi adapters are excluded here.
+if ask_yes "Wake-on-LAN" "Enable Wake-on-LAN (WOL)?\n\nThe wired network interface is detected automatically; 'ethtool' and a small systemd service are set up so the machine can be woken by a magic packet." no; then
     WOL_CANDIDATES=()
     for ifc in /sys/class/net/*; do
         name="$(basename "$ifc")"
         [[ "$name" == "lo" ]] && continue
-        [[ -d "$ifc/wireless" ]] && continue
+        [[ -d "$ifc/wireless" ]] && continue      # Wi-Fi has no WOL
         WOL_CANDIDATES+=("$name")
     done
 
-    if [[ "${#WOL_CANDIDATES[@]}" -eq 0 ]]; then
-        warn "No wired network interface detected -- skipping Wake-on-LAN."
-    elif [[ "${#WOL_CANDIDATES[@]}" -eq 1 ]]; then
-        WOL_IFACE="${WOL_CANDIDATES[0]}"
-        info "Detected network interface: $WOL_IFACE"
-    else
-        echo "Multiple wired interfaces detected:"
-        select_i=1
-        for c in "${WOL_CANDIDATES[@]}"; do
-            echo "  $select_i) $c"
-            ((select_i++))
-        done
-        read -r -p "Which interface should have WOL enabled? [1]: " WOL_PICK
-        WOL_PICK="${WOL_PICK:-1}"
-        if [[ "$WOL_PICK" =~ ^[0-9]+$ ]] && [[ "$WOL_PICK" -ge 1 && "$WOL_PICK" -le "${#WOL_CANDIDATES[@]}" ]]; then
-            WOL_IFACE="${WOL_CANDIDATES[$((WOL_PICK-1))]}"
-        else
-            warn "Invalid choice -- skipping Wake-on-LAN."
-        fi
-    fi
-
-    # Best-effort capability check -- purely informational, never blocks
-    # the install. ethtool may not be present on the live ISO itself.
-    if [[ -n "$WOL_IFACE" ]] && command -v ethtool >/dev/null 2>&1; then
-        if ethtool "$WOL_IFACE" 2>/dev/null | grep -qi 'Supports Wake-on:.*g'; then
-            info "$WOL_IFACE reports support for 'g' (magic packet) Wake-on-LAN."
-        else
-            warn "$WOL_IFACE does not appear to report 'g' Wake-on-LAN support (continuing anyway -- some drivers misreport this)."
-        fi
-    fi
+    case "${#WOL_CANDIDATES[@]}" in
+        0)
+            msg_box "Wake-on-LAN" "No wired network interface detected -- Wake-on-LAN will be skipped."
+            ;;
+        1)
+            WOL_IFACE="${WOL_CANDIDATES[0]}"
+            ;;
+        *)
+            WOL_ITEMS=()
+            for c in "${WOL_CANDIDATES[@]}"; do
+                WOL_ITEMS+=("$c" "$(cat "/sys/class/net/$c/address" 2>/dev/null || true)")
+            done
+            WOL_IFACE="$(dlg_capture --title "Wake-on-LAN" \
+                --menu "Several wired interfaces found. Enable WOL on which one?" \
+                0 "$BOX_W" 0 "${WOL_ITEMS[@]}")" || WOL_IFACE=""
+            ;;
+    esac
 
     if [[ -n "$WOL_IFACE" ]]; then
         ENABLE_WOL="yes"
-        info "Wake-on-LAN will be enabled on $WOL_IFACE (installs 'ethtool', enables wol@${WOL_IFACE}.service)."
-    else
-        ENABLE_WOL="no"
+        # Best-effort capability check -- informational only (ethtool may
+        # not exist on the live ISO; some drivers misreport support).
+        if command -v ethtool >/dev/null 2>&1; then
+            wol_caps="$(ethtool "$WOL_IFACE" 2>/dev/null | sed -n 's/.*Supports Wake-on:[[:space:]]*//p' || true)"
+            if [[ "$wol_caps" == *g* ]]; then
+                WOL_NOTE=" (reports magic-packet support)"
+            else
+                WOL_NOTE=" (does not report 'g' support -- may still work)"
+            fi
+        fi
     fi
-else
-    info "Wake-on-LAN will not be configured."
 fi
 
 # ---------------- WI-FI CARRY-OVER (iwd -> NetworkManager) ----------------
 #
 # A connection made with iwctl on the live ISO lives only in the live
 # system's RAM, so the installed system would boot with NetworkManager
-# but no saved network -- and no internet for the next scripts. If the
-# live ISO has saved WPA-PSK networks (/var/lib/iwd/*.psk), offer to
-# write them as NetworkManager connection profiles on the new system
-# (done after pacstrap). Open and 802.1X/enterprise networks are not
-# carried over; for those use 'nmtui' after the first boot.
+# but no saved network -- and no internet for the next scripts. Saved
+# WPA-PSK networks (/var/lib/iwd/*.psk) are written as NetworkManager
+# profiles on the new system. Open and 802.1X networks are not carried
+# over; use 'nmtui' after the first boot for those.
 
 IWD_DIR="/var/lib/iwd"
 WIFI_CARRY="no"
@@ -304,14 +281,99 @@ if [[ "${#WIFI_PSK_FILES[@]}" -gt 0 ]]; then
     for f in "${WIFI_PSK_FILES[@]}"; do
         WIFI_NAMES+=("$(iwd_ssid_from_file "$f")")
     done
-    echo
-    echo "Saved Wi-Fi network(s) on this live system: ${WIFI_NAMES[*]}"
-    read -r -p "Copy them to the installed system so it is online after reboot? [Y/n] " WIFI_ANSWER
-    if [[ ! "$WIFI_ANSWER" =~ ^[Nn]$ ]]; then
+    if ask_yes "Wi-Fi" "Saved Wi-Fi network(s) on this live system:\n  ${WIFI_NAMES[*]}\n\nCopy them to the installed system so it is online after the first reboot?" yes; then
         WIFI_CARRY="yes"
-        info "Wi-Fi network(s) will be carried over to NetworkManager."
     fi
 fi
+
+# ---------------- DESKTOP ENVIRONMENT ----------------
+#
+# Optional: runs installDE.sh inside the new system (non-interactive) as
+# the very last step. It is non-fatal -- if it fails, the base system is
+# still complete and installDE.sh can be run after reboot. Needs a
+# regular user (the desktop is configured for that user).
+
+DE_CHOICE=""      # "", 1 = GNOME, 2 = KDE Plasma, 3 = XFCE
+DE_MODE=""        # full | minimal
+DE_LABEL="none (CLI only)"
+
+if [[ -n "$NEW_USERNAME" ]]; then
+    DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 0 \
+        --menu "Install a desktop environment now?\n\nIt is installed as the last step; if it fails the base system stays intact and you can run installDE.sh after reboot." \
+        0 "$BOX_W" 0 \
+        0 "None -- CLI only (install later with installDE.sh)" \
+        1 "GNOME (Wayland)" \
+        2 "KDE Plasma (Wayland)" \
+        3 "XFCE (X11)")" || abort
+    if [[ "$DE_CHOICE" == "0" ]]; then
+        DE_CHOICE=""
+    else
+        DE_MODE="$(dlg_capture --title "Package set" \
+            --menu "Full or minimal package set?" 0 "$BOX_W" 0 \
+            full    "Full -- complete desktop with its usual applications" \
+            minimal "Minimal -- just the desktop and the essentials")" || abort
+        case "$DE_CHOICE" in
+            1) DE_LABEL="GNOME ($DE_MODE)" ;;
+            2) DE_LABEL="KDE Plasma ($DE_MODE)" ;;
+            3) DE_LABEL="XFCE ($DE_MODE)" ;;
+        esac
+    fi
+fi
+
+# ---------------- SUMMARY + WIPE CONFIRMATION ----------------
+
+if [[ -n "$NEW_USERNAME" ]]; then
+    USER_LINE="$NEW_USERNAME ($([[ "$MAKE_SUDO" == "yes" ]] && echo "superuser/sudo" || echo "no sudo"))"
+else
+    USER_LINE="(none -- only root)"
+fi
+ROOT_LINE="$([[ "$SET_ROOT_PASSWORD" == "yes" ]] && echo "password set" || echo "locked (use sudo)")"
+WOL_LINE="$([[ "$ENABLE_WOL" == "yes" ]] && echo "enabled on ${WOL_IFACE}${WOL_NOTE}" || echo "no")"
+WIFI_LINE="$([[ "$WIFI_CARRY" == "yes" ]] && echo "carry over ${WIFI_NAMES[*]}" || echo "no")"
+
+SUMMARY_FILE="$(mktemp)"
+cat > "$SUMMARY_FILE" <<SUMMARY_EOF
+  THIS WILL DESTROY ALL DATA ON: $DEVICE
+
+$(lsblk -l -o NAME,SIZE,FSTYPE,LABEL "$DEVICE")
+
+  Planned layout:
+    ${ESP}       ESP (FAT32, $ESP_SIZE)      -> /efi
+    ${BOOTPART}  ext4 ($BOOT_SIZE)           -> /boot
+    ${LUKSPART}  LUKS2 -> Btrfs (@  @home  @snapshots)
+
+  Hostname:       $HOSTNAME
+  Timezone:       $TIMEZONE
+  Locale:         $LOCALE
+  Microcode:      ${UCODE_PKG:-none detected}
+  Hardware clock: $RTC_MODE
+  User:           $USER_LINE
+  Root account:   $ROOT_LINE
+  Wake-on-LAN:    $WOL_LINE
+  Wi-Fi:          $WIFI_LINE
+  Desktop:        $DE_LABEL
+
+  (scroll with the arrow keys / PgUp / PgDn)
+SUMMARY_EOF
+
+dlg --title "Summary -- review before the disk is wiped" \
+    --exit-label "Continue" --textbox "$SUMMARY_FILE" "$LOG_H" "$LOG_W"
+rm -f "$SUMMARY_FILE"
+
+ask_text CONFIRM "FINAL CONFIRMATION" "This is the point of no return.\n\n$DEVICE will be completely erased.\n\nType WIPE (all caps) to continue:" "" || abort
+[[ "$CONFIRM" == "WIPE" ]] || abort "Cancelled -- nothing was changed."
+
+# ============================================================
+# INSTALL (unattended; live output in a dialog box)
+#
+# Everything below runs inside run_install(). NOTE: the body is
+# deliberately not indented -- the heredocs inside must keep their
+# terminators in column 0.
+# ============================================================
+
+DE_FAILED_FILE="$(mktemp)"
+
+run_install() {
 
 # ---------------- PARTITIONING ----------------
 
@@ -360,27 +422,14 @@ udevadm settle
 # ---------------- LUKS2 ----------------
 
 log "Creating LUKS2 container on $LUKSPART..."
-info "You will be prompted for a passphrase."
 
-for attempt in 1 2 3; do
-    if cryptsetup luksFormat --type luks2 --label cryptroot "$LUKSPART"; then
-        break
-    fi
-
-    if [[ "$attempt" -eq 3 ]]; then
-        error "LUKS2 formatting failed after 3 attempts. Aborting."
-        exit 1
-    fi
-
-    warn "LUKS2 formatting was cancelled or confirmation was incorrect."
-    warn "Please try again. Attempt $((attempt + 1)) of 3."
-done
+# The passphrase collected earlier is fed through stdin (--key-file=-);
+# --batch-mode skips cryptsetup's own "type YES" prompt, since the typed
+# WIPE confirmation has already been given.
+printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --label cryptroot --batch-mode --key-file=- "$LUKSPART"
 
 log "Opening LUKS2 container..."
-cryptsetup open "$LUKSPART" cryptroot || {
-    error "Failed to open LUKS2 container."
-    exit 1
-}
+printf '%s' "$LUKS_PASS" | cryptsetup open --key-file=- "$LUKSPART" cryptroot
 
 LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
 info "LUKS UUID: $LUKS_UUID"
@@ -515,11 +564,7 @@ NM_EOF
     [[ "$wifi_idx" -gt 0 ]] || WIFI_CARRY="no"
 fi
 
-# ---------------- USER ACCOUNT + PASSWORDS (interactive) ----------------
-#
-# Done right after pacstrap, before the longer unattended steps below
-# (mkinitcpio -P, grub-install, grub-mkconfig), so you answer all the
-# prompts up front and can then walk away while the rest runs.
+# ---------------- USER ACCOUNT + PASSWORDS ----------------
 
 if [[ -n "${NEW_USERNAME}" ]]; then
     log "Creating user ${NEW_USERNAME}..."
@@ -536,23 +581,18 @@ if [[ -n "${NEW_USERNAME}" ]]; then
     else
         arch-chroot /mnt useradd -m -s /bin/bash "${NEW_USERNAME}"
     fi
-
-    log "Set the password for ${NEW_USERNAME} now:"
-    until arch-chroot /mnt passwd "${NEW_USERNAME}"; do
-        echo "Passwords did not match or were rejected -- try again."
-    done
+    printf '%s:%s\n' "$NEW_USERNAME" "$USER_PASS" | arch-chroot /mnt chpasswd
+    info "Password set for ${NEW_USERNAME}."
 fi
 
 if [[ "$SET_ROOT_PASSWORD" == "yes" ]]; then
-    log "Set the root password now:"
-    until arch-chroot /mnt passwd; do
-        echo "Passwords did not match or were rejected -- try again."
-    done
+    printf 'root:%s\n' "$ROOT_PASS" | arch-chroot /mnt chpasswd
+    info "Root password set."
 else
-    info "Skipping root password as requested -- root account stays locked."
+    # A fresh Arch root account has an EMPTY password, so lock it explicitly.
+    arch-chroot /mnt passwd -l root
+    info "Root account locked -- use sudo."
 fi
-
-info "All passwords set. The rest of the install runs unattended from here."
 
 # ---------------- CHROOT CONFIGURATION (unattended) ----------------
 
@@ -658,81 +698,115 @@ fi
 
 CHROOT_EOF
 
+# ---------------- DESKTOP ENVIRONMENT (optional, non-fatal) ----------------
+
+if [[ -n "$DE_CHOICE" ]]; then
+    log "Installing the desktop environment: $DE_LABEL ..."
+
+    DE_SCRIPT="$SCRIPT_DIR/installDE.sh"
+    DE_DL=""
+    if [[ ! -f "$DE_SCRIPT" ]]; then
+        DE_DL="$(mktemp)"
+        if fetch_repo_file installDE.sh "$DE_DL"; then
+            DE_SCRIPT="$DE_DL"
+        else
+            DE_SCRIPT=""
+            warn "Could not download installDE.sh."
+        fi
+    fi
+
+    DE_OK=0
+    if [[ -n "$DE_SCRIPT" ]]; then
+        mkdir -p /mnt/root/arch-setup-tmp
+        install -m 755 "$DE_SCRIPT" /mnt/root/arch-setup-tmp/installDE.sh
+        install -m 644 "$SCRIPT_DIR/lib.sh" /mnt/root/arch-setup-tmp/lib.sh
+        if arch-chroot /mnt env DE_CHOICE="$DE_CHOICE" INSTALL_MODE="$DE_MODE" \
+                TARGET_USER="$NEW_USERNAME" ASSUME_YES=1 INSTALL_IN_CHROOT=1 \
+                /root/arch-setup-tmp/installDE.sh; then
+            DE_OK=1
+        fi
+        rm -rf /mnt/root/arch-setup-tmp
+    fi
+    [[ -z "$DE_DL" ]] || rm -f "$DE_DL"
+
+    if [[ "$DE_OK" -eq 1 ]]; then
+        info "Desktop environment installed."
+    else
+        echo "failed" > "$DE_FAILED_FILE"
+        warn "Desktop environment install failed -- the base system is fine. After reboot run installDE.sh again."
+    fi
+fi
+
+# ---------------- COPY INSTALLER SCRIPTS TO THE NEW SYSTEM ----------------
+
+log "Copying the installer scripts to /archInstall on the new system..."
+mkdir -p /mnt/archInstall/scripts
+
+MANAGER_SCRIPT=""
+for candidate in "${ARCH_MANAGER_PATH:-}" "$SCRIPT_DIR/../arch-manager.sh" "$SCRIPT_DIR/arch-manager.sh" "./arch-manager.sh"; do
+    if [[ -n "$candidate" && -f "$candidate" ]]; then
+        MANAGER_SCRIPT="$candidate"
+        break
+    fi
+done
+
+if [[ -n "$MANAGER_SCRIPT" ]]; then
+    cp "$MANAGER_SCRIPT" /mnt/archInstall/arch-manager.sh
+elif fetch_repo_file arch-manager.sh /mnt/archInstall/arch-manager.sh; then
+    info "arch-manager.sh downloaded from the repository."
+else
+    warn "arch-manager.sh not found and could not be downloaded. After reboot: sudo curl -o /archInstall/arch-manager.sh ${REPO_RAW_URL}/arch-manager.sh"
+fi
+
+# Scripts already next to this one (incl. lib.sh), then anything missing from the repo.
+cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
+cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh   # the manager sources it from its own folder
+for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
+    if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
+        fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
+    fi
+done
+chmod +x /mnt/archInstall/*.sh /mnt/archInstall/scripts/*.sh 2>/dev/null || true
+
+cp -f "$LOG_FILE" /mnt/root/archInstall.log 2>/dev/null || true
+
+log "Base install complete."
+}
+
+run_in_box "Installing Arch Linux" "$LOG_FILE" run_install
+
+# Passwords are no longer needed in memory.
+unset LUKS_PASS USER_PASS ROOT_PASS
+
+if [[ "$RUN_RC" -ne 0 ]]; then
+    msg_box "Installation FAILED" "The installation did not finish.\n\nDo NOT reboot into this system. See the log for details:\n  $LOG_FILE\n\nFix the problem and run the installer again."
+    exit 1
+fi
+
 # ---------------- DONE ----------------
 
-# ========================================================
-# Installation complete – copy manager script to installed system
-# ========================================================
-log "Base install complete."
-
-# Create /archInstall directory on the new system
-log "Creating /archInstall directory on the new system..."
-mkdir -p /mnt/archInstall
-
-# Find the manager script
-MANAGER_SCRIPT=""
-if [[ -f "/arch-setup/arch-manager.sh" ]]; then
-    MANAGER_SCRIPT="/arch-setup/arch-manager.sh"
-elif [[ -f "$(dirname "$0")/arch-manager.sh" ]]; then
-    MANAGER_SCRIPT="$(dirname "$0")/arch-manager.sh"
-elif [[ -f "./arch-manager.sh" ]]; then
-    MANAGER_SCRIPT="./arch-manager.sh"
+DONE_TEXT="Arch Linux was installed successfully."
+if [[ -s "$DE_FAILED_FILE" ]]; then
+    DONE_TEXT+="\n\nNOTE: the desktop environment install FAILED. The base system is fine -- after reboot run installDE.sh again."
+elif [[ -n "$DE_CHOICE" ]]; then
+    DONE_TEXT+="\n\nDesktop: $DE_LABEL (login screen appears after reboot)."
 fi
-
-if [[ -n "$MANAGER_SCRIPT" && -f "$MANAGER_SCRIPT" ]]; then
-    log "Copying arch-manager.sh to /archInstall on the new system..."
-    cp "$MANAGER_SCRIPT" /mnt/archInstall/arch-manager.sh
-    chmod +x /mnt/archInstall/arch-manager.sh
-    
-    # Also copy all other scripts if they exist
-    if [[ -d "/arch-setup/downloads" ]]; then
-        log "Copying all installation scripts to /archInstall..."
-        mkdir -p /mnt/archInstall/scripts
-        cp -r /arch-setup/downloads/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
-        chmod +x /mnt/archInstall/scripts/*.sh 2>/dev/null || true
-    fi
-    
-    printf '\n'
-    printf '%s\n' "${YELLOW}=======================================${NC}"
-    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
-    printf '%s\n' "${YELLOW}=======================================${NC}"
-    printf '%s\n' "${GREEN}After reboot, run:${NC}"
-    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
-    printf '%s\n' "${YELLOW}  (or as root: ${CYAN}/archInstall/arch-manager.sh${YELLOW})${NC}"
-    printf '\n'
-    printf '%s\n' "${GREEN}All scripts are available in:${NC}"
-    printf '%s\n' "${CYAN}  /archInstall/scripts/${NC}"
-else
-    printf '\n'
-    printf '%s\n' "${YELLOW}=======================================${NC}"
-    printf '%s\n' "${GREEN}✓ Arch has been installed successfully!${NC}"
-    printf '%s\n' "${YELLOW}=======================================${NC}"
-    printf '%s\n' "${RED}WARNING: arch-manager.sh not found!${NC}"
-    printf '%s\n' "${YELLOW}After reboot, download it again:${NC}"
-    printf '%s\n' "${CYAN}  sudo mkdir -p /archInstall${NC}"
-    printf '%s\n' "${CYAN}  sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh${NC}"
-    printf '%s\n' "${CYAN}  sudo chmod +x /archInstall/arch-manager.sh${NC}"
-    printf '%s\n' "${CYAN}  sudo /archInstall/arch-manager.sh${NC}"
-fi
-
-echo
-echo "============================================================"
-echo " NEXT STEPS"
-echo "============================================================"
-echo "1. umount -R /mnt"
-echo "2. cryptsetup close cryptroot"
-echo "3. reboot, remove the install media"
 if [[ "$WIFI_CARRY" != "yes" ]]; then
-    echo "   (No Wi-Fi network was carried over. If you have no Ethernet, run"
-    echo "    'nmtui' after reboot to connect, or: nmcli device wifi connect \"SSID\" password \"...\")"
+    DONE_TEXT+="\n\nNo Wi-Fi network was carried over. If you have no Ethernet, run 'nmtui' after reboot to connect."
 fi
-echo "4. After reboot, log in and run:"
-if [[ -f /mnt/archInstall/arch-manager.sh ]]; then
-    echo "   sudo /archInstall/arch-manager.sh"
+DONE_TEXT+="\n\nAfter reboot, log in and run:\n  sudo /archInstall/arch-manager.sh\nto continue with Snapper/GRUB setup (option 2) and applications."
+rm -f "$DE_FAILED_FILE"
+
+msg_box "Done" "$DONE_TEXT"
+
+if ask_yes "Reboot" "Unmount everything and reboot now?\n\n(Remove the install media when the screen goes black.)" yes; then
+    clear
+    if umount -R /mnt && cryptsetup close cryptroot; then
+        reboot
+    else
+        echo "Could not unmount cleanly. Run: umount -R /mnt; cryptsetup close cryptroot; reboot"
+    fi
 else
-    echo "   sudo mkdir -p /archInstall"
-    echo "   sudo curl -o /archInstall/arch-manager.sh https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh"
-    echo "   sudo chmod +x /archInstall/arch-manager.sh"
-    echo "   sudo /archInstall/arch-manager.sh"
+    clear
+    echo "Not rebooting. When ready: umount -R /mnt && cryptsetup close cryptroot && reboot"
 fi
-echo "============================================================"
