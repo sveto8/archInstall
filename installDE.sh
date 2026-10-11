@@ -257,9 +257,24 @@ fi
 
 run_de_install() {
 
+exec 3>&1
+exec 1>>"$LOG_FILE"
+gauge_msg() { printf 'XXX\n%d\n%s\nXXX\n' "$1" "$2" >&3; }
+
 log "Installing $DE_NAME packages..."
 
-pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}"
+gauge_msg 5 "Installing ${DE_NAME} packages -- downloading..."
+
+stdbuf -oL pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}" 2>&1 | \
+    while IFS= read -r line; do
+        printf '%s\n' "$line"
+        if [[ "$line" =~ ^\(([0-9]+)/([0-9]+)\)[[:space:]]+installing ]]; then
+            _cur="${BASH_REMATCH[1]}"
+            _tot="${BASH_REMATCH[2]}"
+            gauge_msg "$(( 5 + 60 * _cur / _tot ))" "Installing ${DE_NAME} (${_cur}/${_tot})..."
+        fi
+    done
+[[ "${PIPESTATUS[0]}" -eq 0 ]] || die "pacman failed installing ${DE_NAME}."
 
 # ---------------- ICONS & CURSORS (from GitHub) ----------------
 #
@@ -513,11 +528,14 @@ if [[ "$DE_CHOICE" == "3" ]]; then
     echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
 fi
 echo "============================================================"
+gauge_msg 100 "Desktop environment installed."
+exec 1>&3
+exec 3>&-
 }
 
 if (( INTERACTIVE )); then
-    run_on_terminal "Installing $DE_NAME" "$LOG_FILE" run_de_install nowait
-    if [[ "$RUN_RC" -ne 0 ]]; then
+    run_with_gauge "Installing $DE_NAME" "$LOG_FILE" run_de_install
+    if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
         msg_box "Installation FAILED" "The desktop environment install did not finish.\n\nSee the log for details:\n  $LOG_FILE"
         exit 1
     fi
