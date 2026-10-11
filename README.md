@@ -10,19 +10,31 @@ NOTE - This is a hobby project created primarily for my personal needs.
 Four scripts that together take a machine from an Arch ISO boot to a
 fully configured, encrypted, snapshotted Arch install with GRUB (+
 theme), grub-btrfs, Snapper, a Plymouth boot theme, a desktop
-environment, and a personal application set — plus an optional
-menu-driven wrapper that downloads and runs them for you.
+environment, and a personal application set — plus a menu-driven
+manager that downloads and runs them for you, and a small shared
+library (`lib.sh`).
+
+**Every script uses a `dialog` (ncurses) UI**: menus, checklists,
+password boxes and yes/no questions instead of typed prompts, with live
+output of the long-running steps shown in a dialog box (and saved to a
+log file). Keys: arrows to move, `SPACE` toggles a checkbox, `ENTER`
+confirms, `ESC`/Cancel aborts (nothing is changed on cancel).
 
 ```
 archInstall.sh        Phase 0   — run from the Arch ISO live environment
+                                  (optionally installs the desktop right away)
 setupAfterInstall.sh  Phase 1   — run on the new system, after first boot
-installDE.sh           Phase 1.5 — run as root, installs a desktop environment
+installDE.sh           Phase 1.5 — installs a desktop environment (also called
+                                  by archInstall.sh, non-interactively)
 installApps.sh         Phase 2   — run as your regular user, once at the desktop
-arch-manager.sh        optional  — menu that downloads + runs the four above
+arch-manager.sh        optional  — dialog menu that downloads + runs the four above
+lib.sh                 shared    — dialog/log helpers sourced by all of the above
 ```
 
 `setupAfterInstall.sh` and `installDE.sh` can be run in either order —
-neither depends on the other.
+neither depends on the other. `lib.sh` is **sourced**, never run
+directly; every script downloads it automatically if it isn't next to
+it.
 
 ## Resulting layout
 
@@ -52,6 +64,11 @@ chmod +x arch-manager.sh
 ./arch-manager.sh
 ```
 
+The manager fetches `lib.sh` and the four phase scripts by itself (the
+first run of any script downloads a missing `lib.sh`; `dialog` is
+installed automatically if it's missing — on the live ISO that needs the
+network, which you need anyway).
+
 Rule of thumb: `github.com` → `raw.githubusercontent.com`, drop `/blob/`,
 keep `branch/path` as-is.
 
@@ -73,79 +90,85 @@ scripts is sensitive), no auth header is needed.
 ### 1. `archInstall.sh` — from the Arch ISO
 
 Wipes and partitions the target disk, sets up LUKS2 + Btrfs, and
-installs a minimal, bootable, CLI-only base system. No desktop
-environment is installed here — that's `installDE.sh`, run later.
+installs a bootable base system, optionally with a desktop environment.
 
-1. Basic sanity checks (root, UEFI, required tools present)
-2. Lists disks (`lsblk`) and asks which one to install onto
-3. Confirms with a typed `WIPE` before touching anything
-4. Asks for a regular username (optional) and whether it should have
-   sudo — if a sudo user is created, root stays locked (no root
-   password question); otherwise you're asked to set one, since
-   there'd be no other way to log in
-5. Asks whether the hardware clock (RTC) should be UTC (Linux default)
-   or local time — pick local time if you dual-boot Windows and don't
-   want to touch the Windows registry, since Windows otherwise assumes
-   the RTC is local time while Linux defaults to UTC, showing the wrong
-   time on whichever OS you didn't just boot
-6. Asks `[y/N]` whether to enable Wake-on-LAN. If yes, it auto-detects
-   the wired network interface(s) present (from `/sys/class/net`,
-   skipping loopback and anything with a `wireless` subdirectory —
-   Wi-Fi doesn't support WOL) rather than requiring you to know/type a
-   name like `enp39s0` yourself; with more than one wired interface it
-   asks which one. If `ethtool` happens to be available on the live ISO
-   it also prints a best-effort check of whether the NIC reports
-   supporting `g` (magic packet) WOL — informational only, it never
-   blocks the choice, since some drivers misreport this
-7. If the live ISO has saved Wi-Fi networks (`/var/lib/iwd/*.psk`, i.e.
-   you connected with `iwctl`), lists them and asks `[Y/n]` whether to
-   carry them over. A connection made on the live ISO lives only in its
-   RAM, so without this the installed system would boot with
-   NetworkManager but no saved network — and no internet for the next
-   scripts. After `pacstrap` the script writes each network as a
-   NetworkManager profile
+**All questions come first, then one summary and the typed `WIPE`
+confirmation — after that it runs unattended** (live output in a dialog
+box, log saved to `/root/archInstall.log` and copied to the new system's
+`/root/`). Nothing on disk changes before the `WIPE` confirmation.
+
+Questions, in this order:
+
+1. **Disk** — a menu of the disks found (size, model, a note if it has
+   mounted partitions). If leftover mounts from an interrupted run exist,
+   it offers to unmount them and close `cryptroot`
+2. **User, superuser, password — one after another:** username (empty =
+   skip; validated: lowercase, digits, `_`/`-`, not `root`), *"should this
+   user be a superuser (wheel + sudo)?"* (default Yes), then the password
+   (asked twice in a password box)
+   - with a sudo user, the **root account is locked** (`passwd -l`) —
+     a fresh Arch root account otherwise has an *empty* password
+   - without one, you set a root password instead, so something can
+     still log in with admin rights
+3. **LUKS passphrase** — asked twice; it is passed to `cryptsetup` via
+   stdin (`--key-file=-`, `--batch-mode`), so there are no interactive
+   cryptsetup prompts in the middle of the install
+4. **Hardware clock** — `UTC` (Linux default) or `local` (pick this if you
+   dual-boot Windows, which assumes the RTC is local time)
+5. **Wake-on-LAN** (default No) — if yes, the wired interface is
+   auto-detected from `/sys/class/net` (Wi-Fi excluded; a menu if there
+   are several) and, when `ethtool` is available on the ISO, whether it
+   reports magic-packet (`g`) support is noted (informational only)
+6. **Wi-Fi carry-over** — if the live ISO has saved networks
+   (`/var/lib/iwd/*.psk`, i.e. you connected with `iwctl`), asks (default
+   Yes) whether to copy them to the new system. A connection made on the
+   live ISO lives only in its RAM, so without this the installed system
+   boots with NetworkManager but no saved network and no internet for
+   the next scripts. They are written as NetworkManager profiles
    (`/etc/NetworkManager/system-connections/wifi-N-<ssid>.nmconnection`,
-   mode 600, WPA/WPA2-PSK, autoconnect), so the first boot comes up
-   online by itself. Limits: open networks, 802.1X/enterprise and SSIDs
-   containing `;` are not carried over, and WPA3-only (SAE) networks
-   are written as WPA-PSK so they won't connect; in those cases (or if
-   you answer `n`) the final "NEXT STEPS" screen tells you to run
-   `nmtui` after reboot
-8. Partitions the disk: ESP → `/efi`, ext4 → `/boot`, LUKS2 → Btrfs
-9. Creates the `@`, `@home`, `@snapshots` subvolumes and mounts them
-10. Ranks pacman mirrors by speed with `reflector` (installing it first
-   if missing) and writes the fastest HTTPS mirrors to
-   `/etc/pacman.d/mirrorlist` — speeds up `pacstrap` and everything
-   after it; non-fatal if it fails (the disk is already
-   partitioned/formatted by this point, so a mirror-ranking hiccup
-   shouldn't abort the whole install — it just falls back to the
-   original mirrorlist)
-11. `pacstrap`s the base system (+ microcode package auto-detected from
-    CPU vendor, + `ethtool` if WOL was enabled in step 6, + `wpa_supplicant`
-    (NetworkManager's Wi-Fi backend) and `dialog` (used by the
-    dialog-based scripts from first boot))
-12. Creates the regular user and sets its password, then sets the root
-    password if needed — all *before* the long unattended steps, so you
-    can walk away once passwords are set
-13. Unattended: hostname, timezone, locale (`en_US.UTF-8` +
-    `hr_HR.UTF-8` generated by default), keymap, hardware clock mode
-    (per step 5), `/etc/hosts`, minimal `mkinitcpio.conf` (systemd +
-    `sd-encrypt`, no Plymouth yet), GRUB install + config. If WOL was
-    enabled, also writes a templated `wol@.service` systemd unit
-    (`ExecStart=/usr/bin/ethtool -s %i wol g`) and enables it for the
-    detected interface (e.g. `wol@enp39s0.service`) — this re-applies
-    the WOL setting on every boot, since most NIC drivers reset it to
-    off each time the interface comes up
-14. If `arch-manager.sh` can be found nearby (checked in a few likely
-    spots, including the current directory), copies it to
-    `/mnt/archInstall/arch-manager.sh`, and — if any scripts were
-    already downloaded to `~/arch-setup/downloads/` — copies those into
-    `/mnt/archInstall/scripts/` too, so everything is ready to use
-    immediately after reboot without re-downloading; if `arch-manager.sh`
-    can't be found, prints the manual `curl` command to fetch it after
-    reboot instead
+   mode 600, WPA/WPA2-PSK, autoconnect). Not carried over: open
+   networks, 802.1X/enterprise and SSIDs containing `;`; WPA3-only
+   networks are written as WPA-PSK and won't connect — use `nmtui` after
+   reboot for those
+7. **Desktop environment** — *None (default)*, GNOME, KDE Plasma or XFCE,
+   then full or minimal. Only offered when a regular user is being
+   created (the desktop is configured for that user)
+8. **Summary** (scrollable) → type **`WIPE`** (all caps) to continue
 
-At the end: `umount -R /mnt`, `cryptsetup close cryptroot`, reboot.
+Then, unattended:
+
+1. Partitions the disk: ESP → `/efi`, ext4 → `/boot`, LUKS2 → Btrfs
+2. Creates the `@`, `@home`, `@snapshots` subvolumes and mounts them
+3. Ranks pacman mirrors with `reflector` (non-fatal if it fails — the
+   disk is already formatted, so it just falls back to the default
+   mirrorlist)
+4. `pacstrap`s the base system: `base base-devel linux linux-firmware
+   btrfs-progs cryptsetup grub efibootmgr sudo networkmanager
+   wpa_supplicant vim git zram-generator dialog`, plus the microcode
+   package for your CPU and `ethtool` if WOL was chosen
+5. Writes the Wi-Fi profiles (if chosen), creates the user, sets the
+   passwords with `chpasswd` (stdin — nothing interactive, nothing on a
+   command line), locks root if applicable
+6. Chroot configuration: hostname, timezone, locales (`en_US.UTF-8` +
+   `hr_HR.UTF-8`), keymap, hardware-clock mode, `/etc/hosts`, enables
+   NetworkManager, zram swap, a templated `wol@.service`
+   (`ethtool -s %i wol g`, re-applied on **every** boot because most NIC
+   drivers reset it) enabled for the detected interface, a minimal
+   systemd + `sd-encrypt` `mkinitcpio.conf`, GRUB install + config
+7. **Optional desktop:** runs `installDE.sh` *inside the new system*
+   (`arch-chroot`) non-interactively. This step is **non-fatal** — if it
+   fails (mirror/AUR hiccup), the base system is already complete and the
+   closing dialog tells you to run `installDE.sh` after reboot. In a
+   chroot there is no session bus, so the GNOME defaults are installed as
+   system-wide dconf defaults (see `installDE.sh`)
+8. Copies `arch-manager.sh`, `lib.sh` and all scripts to `/archInstall/`
+   on the new system (`/archInstall/scripts/` for the phase scripts;
+   missing ones are fetched from the repo)
+9. Closing dialog with the next steps and *"Unmount everything and reboot
+   now?"* (default Yes)
+
+On a system that is not the live ISO it asks (default No) before doing
+anything, since it wipes a whole disk.
 
 ### 2. `setupAfterInstall.sh` — after first boot, as root
 
@@ -153,26 +176,45 @@ Run this on the newly installed system. It does **not** touch
 partitioning, formatting, or LUKS — it assumes `archInstall.sh` (or an
 equivalent manual install) already produced the layout above.
 
+Questions (GRUB theme, Plymouth theme, one scrollable summary +
+confirmation) come first as dialogs; everything after the confirmation
+runs unattended with live output in a dialog box (log:
+`/root/setupAfterInstall.log`), and a final dialog offers a reboot
+(default No). Warnings from the layout checks are collected and shown in
+the summary instead of scrolling past.
+
 1. Verifies the expected layout (Btrfs root, `/efi`, `/boot`,
    `/.snapshots` mounted, fstab entry for `/.snapshots` present)
 2. Detects the LUKS2 backing device (via `cryptsetup status`, with an
    `lsblk` fallback) and CPU vendor for microcode
-3. Asks which GRUB boot menu theme to install: `Xenlism-Arch`,
+3. Menu: which GRUB boot menu theme to install (default none): `Xenlism-Arch`,
    `arch-linux`, `poly-dark`, or none — downloads the matching
    `<name>.tar.xz` from the repo's `grub-themes/` folder, extracts it to
    `/boot/grub/themes/<name>/`, and points `GRUB_THEME` at it in
    `/etc/default/grub` (skipped entirely, without failing the script, if
    the archive can't be downloaded)
-4. Asks which Plymouth boot splash theme to install: `cuts_alt`,
+4. Menu: which Plymouth boot splash theme to install (default none): `cuts_alt`,
    `hud_3`, `linux-penguin`, `metal_ball`, or none — downloads the
    matching `<name>.tar.xz` from the repo's `plymouth-themes/` folder
    (same non-fatal-if-unavailable behavior as the GRUB theme step)
-5. Shows a summary and asks for confirmation
+   Then a menu **"Other operating systems"** (only if `ENABLE_OS_PROBER=yes`,
+   the default):
+   - **internal** *(default)* — only Windows/Linux installs on **internal**
+     disks. Filesystems on removable (`RM=1`) or USB-attached
+     (`TRAN=usb`) disks and optical drives — USB sticks with installers,
+     external/USB HDDs — are put on GRUB's `GRUB_OS_PROBER_SKIP_LIST`
+     (`<fs UUID>@<device>` entries written to `/etc/default/grub`, so
+     later automatic `grub-mkconfig` runs honour it too), and the search
+     for the Windows ESP never looks at those disks either
+   - **all** — everything os-prober finds, as before
+   - **off** — no other OSes in the GRUB menu (`GRUB_DISABLE_OS_PROBER=true`)
+5. Shows a scrollable summary and asks for confirmation
 6. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
    `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`.
    From here on, every `/etc/default/grub` option the script touches
    (`GRUB_TIMEOUT`, `GRUB_DEFAULT`, `GRUB_SAVEDEFAULT`,
-   `GRUB_DISABLE_OS_PROBER`, `GRUB_THEME`, `GRUB_CMDLINE_LINUX_DEFAULT`)
+   `GRUB_DISABLE_OS_PROBER`, `GRUB_OS_PROBER_SKIP_LIST`, `GRUB_THEME`,
+   `GRUB_CMDLINE_LINUX_DEFAULT`)
    goes through a helper that finds the existing line — commented out or
    not — and edits it in place, rather than appending a new value to the
    bottom of the file (which would leave a stale duplicate, commented or
@@ -197,10 +239,10 @@ equivalent manual install) already produced the layout above.
     `rootflags=subvol=@`, `quiet splash`, …), reinstalls GRUB under a
     named UEFI boot entry (`GRUB_BOOTLOADER_ID="Arch Linux"` by
     default, shown in your firmware's boot menu), enables `os-prober`
-    by default (`ENABLE_OS_PROBER=yes` — set it to `no` if you don't
-    dual-boot another OS or prefer picking it from the firmware boot
-    menu instead of GRUB's), enables `grub-btrfsd`, regenerates
-    `grub.cfg`
+    in the mode you chose (`ENABLE_OS_PROBER=yes` is the default — set it
+    to `no` in the script's config block if you don't dual-boot another
+    OS or prefer picking it from the firmware boot menu instead of
+    GRUB's), enables `grub-btrfsd`, regenerates `grub.cfg`
 13. Removes stale UEFI boot entries named exactly `GRUB` or `UEFI OS`
     left behind by `archInstall.sh`'s temporary `--bootloader-id=GRUB
     --removable` install — but only entries whose device path matches
@@ -209,8 +251,8 @@ equivalent manual install) already produced the layout above.
     never touched
 14. Creates and cleans up an initial protected snapshot
 15. Prints a final status report (filesystems, subvolumes, LUKS status,
-    Snapper config/snapshots, timers, Plymouth theme, GRUB theme, GRUB
-    cmdline)
+    Snapper config/snapshots, timers, Plymouth theme, the other
+    operating systems that ended up in the GRUB menu, GRUB cmdline)
 
 ### 3. `installDE.sh` — on the installed system, as root
 
@@ -221,7 +263,8 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
 1. Not running as root? Re-launches itself with `sudo` (asks for your
    password) instead of just refusing
 2. Picks the target user automatically if there's exactly one regular
-   (UID ≥ 1000) account on the system; otherwise asks which one
+   (UID ≥ 1000) account on the system; otherwise a menu asks which one
+   (none at all → it stops and tells you to create one first)
 3. Asks for a desktop environment: **GNOME** or **KDE Plasma** (both
    Wayland), **XFCE** (X11 — its Wayland session is still
    experimental/unstable upstream, so X11 is the stable choice here),
@@ -276,6 +319,27 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
 11. **XFCE only:** explicitly sets `lightdm-gtk-greeter` as the greeter
     in `/etc/lightdm/lightdm.conf`'s `[Seat:*]` section (LightDM
     otherwise often comes up with no greeter session configured at all)
+
+Interactive mode uses dialog menus for the desktop, full/minimal and the
+user, a confirmation box, and live install output in a dialog box (log:
+`/var/log/installDE.log`).
+
+**Non-interactive mode** (this is how `archInstall.sh` calls it inside the
+new system's chroot): set `ASSUME_YES=1` together with `DE_CHOICE`
+(`1` GNOME, `2` KDE Plasma, `3` XFCE), `INSTALL_MODE` (`full`|`minimal`)
+and `TARGET_USER`, and no dialog is shown — e.g.
+`ASSUME_YES=1 DE_CHOICE=2 INSTALL_MODE=minimal TARGET_USER=alice ./installDE.sh`.
+
+**Chroot behaviour (GNOME):** package install, `systemctl enable`, theme
+downloads, Bluetooth and LightDM config all work in a chroot. Setting the
+GNOME defaults with `gsettings` does not (no running session bus), so when
+`INSTALL_IN_CHROOT=1` is set — or `systemd-detect-virt --chroot` says so —
+the same values (dark scheme, Adwaita-dark, slate accent, Reversal icons,
+cursor theme, directories-first, always-show-log-out) are written as
+**system-wide dconf defaults** (`/etc/dconf/db/local.d/00-arch-defaults` +
+`dconf update`; applies to every user, who can still change them). Run
+normally on an installed system, it keeps using per-user `gsettings`.
+That chroot path is the part to check first when you test in a VM.
 
 You can re-run this later to install a different desktop environment or
 change from full to minimal (or vice versa) — it doesn't remove
@@ -347,45 +411,46 @@ You can re-run `installApps.sh` any time later to add more software —
 it's idempotent (`--needed` skips already-installed packages) and shows
 the dialogs every time.
 
-### `arch-manager.sh` — optional menu-driven wrapper
+### `arch-manager.sh` — optional dialog menu
 
-Not part of the numbered phases — a convenience front-end that
-downloads the four scripts above from the repo and lets you run them
-from a menu instead of typing filenames yourself. Scripts are
-downloaded **on demand** (only the one you're about to run, if it isn't
-already on disk) rather than all four up front — menu option 6 exists
-if you want to fetch everything at once.
+Not part of the numbered phases — a convenience front-end that downloads
+`lib.sh` and the four scripts from the repo and lets you run them from a
+menu instead of typing filenames. A status line (Arch? Live ISO? root?
+Btrfs? Snapper?) is shown above the menu every time.
 
-- Downloads go to `~/arch-setup/downloads/` — resolved via `$SUDO_USER`
-  if the manager itself is run with `sudo`, so files land in *your*
-  home even then, not `/root`
-- Shows a status line (Arch? Live ISO? root?) before the menu every time
-- Menu:
-  1. Run `archInstall.sh`, then — if it succeeded — copy
-     `arch-manager.sh` and every downloaded script into the new user's
-     `~/arch-setup/` on the just-installed system (found by scanning
-     `/mnt/etc/passwd` for the first regular user), then exit so you can
-     reboot
-  2. Run `setupAfterInstall.sh` only
-  3. Run `installDE.sh` only
-  4. Run `installApps.sh` only
-  5. Run `setupAfterInstall.sh` → `installDE.sh` → `installApps.sh` in
-     sequence (everything *except* `archInstall.sh`, meant for after
-     you've already rebooted into the new system)
-  6. Download all four scripts now
+Menu:
+
+1. **Install Arch** — runs `archInstall.sh`. If you're *not* on the live
+   ISO it asks first (default No), since that script wipes a disk. On
+   success the manager exits so you can reboot; `archInstall.sh` itself
+   already put the manager and all scripts into `/archInstall/` on the new
+   system
+2. Run `setupAfterInstall.sh` only
+3. Run `installDE.sh` only
+4. Run `installApps.sh` only
+5. **Install all after reboot:** `setupAfterInstall.sh` → `installDE.sh` →
+   `installApps.sh`. `installDE.sh` is skipped (with a question, default
+   No) if a desktop is already installed — e.g. you chose one in
+   `archInstall.sh`. If a step fails it asks whether to continue
+6. Download / update all scripts now
+
+Details:
+
+- Scripts are fetched **on demand** (and `lib.sh` with them). On the
+  installed system the manager first seeds its download folder from
+  `/archInstall/scripts/`, so nothing needs re-downloading
+- Downloads go to `~/arch-setup/downloads/` of the *real* user (resolved
+  via `$SUDO_USER` when run with `sudo`), not `/root`
 - Runs `archInstall.sh` / `setupAfterInstall.sh` / `installDE.sh` with
-  `sudo` automatically if not already root; runs `installApps.sh` as
-  the real non-root user even if the manager itself is currently root
-  (drops privileges via `runuser`), since `installApps.sh` must not run
-  as root
-- CLI shortcuts: `./arch-manager.sh --download` (fetch all four),
-  `--install` (fetch + run **only** `archInstall.sh`, i.e. Phase 0 —
-  intentionally does *not* chain into the other three scripts, since
-  those expect to run on the already-rebooted target system, not
-  immediately after `archInstall.sh` inside the live ISO), or
+  `sudo` automatically if not already root; runs `installApps.sh` as the
+  real non-root user even if the manager itself is root (drops privileges
+  via `runuser`)
+- CLI shortcuts: `./arch-manager.sh --download` (fetch everything),
+  `--install` (fetch + run **only** `archInstall.sh`), or
   `./arch-manager.sh <script-name.sh>` to run one script directly
-- Edit `SCRIPT_URL` near the top of the file to point at your own fork
-  if you're not using `sveto8/archInstall`
+- Edit `SCRIPT_URL` near the top of the manager (and `REPO_RAW_URL` in
+  `lib.sh`, plus the download snippet at the top of each script) to point
+  at your own fork if you're not using `sveto8/archInstall`
 
 ## GRUB themes
 
@@ -448,6 +513,29 @@ changes needed unless you rename the archive or add more color
 variants (which would require editing the `for color in orange black
 grey` loop in `installDE.sh`).
 
+## `lib.sh` — shared helpers
+
+Sourced by all five scripts so the dialog code lives in one place:
+
+- `log` / `info` / `warn` / `die` — coloured only when stdout is a real
+  terminal, plain text inside a dialog box (dialog can't render ANSI
+  colours), so the same functions work in both
+- `ensure_dialog` — installs `dialog` if missing (`pacman -Sy` on the live
+  ISO, plain `pacman -S` on an installed system so it never does a partial
+  upgrade)
+- `ui_init`, `dlg`, `dlg_capture`, `abort`, `ask_yes`, `msg_box`,
+  `ask_text`, `ask_password` (asks twice, loops until they match)
+- `run_in_box <title> <logfile> <function>` — runs a function with live
+  output in a dialog box, appended to a log file; the result is left in
+  `$RUN_RC`. **Call it as a plain statement and then test `$RUN_RC`** —
+  never inside `if`/`&&`/`||`, because bash disables `set -e` for
+  everything inside such a call, so a failing command would no longer
+  abort the function
+
+Each script finds `lib.sh` next to itself and downloads it from the repo
+if it's missing, so a single script can still be fetched and run on its
+own.
+
 ## Requirements between the scripts
 
 `setupAfterInstall.sh` and `installDE.sh` both assume the exact layout
@@ -463,11 +551,11 @@ can run in either order.
 ## Notes
 
 - `archInstall.sh` asks for confirmation before any destructive action
-  (`WIPE` typed confirmation). `setupAfterInstall.sh` and `installDE.sh`
-  ask `[y/N]` before installing/changing anything. `installApps.sh`
-  doesn't touch disks/boot config at all, so it only shows a
-  confirmation dialog with the package list, not a destructive-action
-  warning.
+  (a typed `WIPE`, deliberately kept — a typed word is a better failsafe
+  than a default-Enter Yes/No). `setupAfterInstall.sh` and `installDE.sh`
+  show a summary and ask before installing/changing anything.
+  `installApps.sh` doesn't touch disks/boot config at all, so it only
+  shows a confirmation dialog with the package list.
 - All four scripts back up what they change (where relevant) and are
   safe to re-read before running (`bash -n script.sh` for a
   syntax-only check).
@@ -481,8 +569,8 @@ can run in either order.
   `/proc/cpuinfo` in `archInstall.sh` and `setupAfterInstall.sh` —
   useful if you run these on more than one machine with different CPU
   vendors.
-- Disk selection in `archInstall.sh` is interactive (`lsblk` listing +
-  prompt) — nothing is hardcoded, so the same script works whether the
+- Disk selection in `archInstall.sh` is a dialog menu built from `lsblk`
+  — nothing is hardcoded, so the same script works whether the
   disk is `/dev/sda`, `/dev/nvme0n1`, `/dev/vda`, etc.
 - `archInstall.sh` asks whether the hardware clock should be UTC or
   local time. This only matters if you dual-boot another OS: Windows
@@ -496,7 +584,7 @@ can run in either order.
   little while depending on your connection; a `reflector` failure
   doesn't abort the install; it just falls back to the ISO's default
   mirrorlist.
-- Wake-on-LAN in `archInstall.sh` is opt-in (`[y/N]`) and the interface
+- Wake-on-LAN in `archInstall.sh` is opt-in (default No) and the interface
   name is always auto-detected, never hardcoded — useful since NIC names
   like `enp39s0` depend on PCI topology and differ between machines. The
   actual `ethtool -s <iface> wol g` call happens on every boot via a
@@ -519,3 +607,19 @@ can run in either order.
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
   scripts changes when run through it.
+- **PXE / "USB HDD" entries are not os-prober results.** Those names are
+  the firmware's own boot entries (network boot, USB boot) in the UEFI boot
+  menu (e.g. F9 / Esc on HP laptops) — os-prober only reads partitions,
+  never UEFI NVRAM, so no os-prober setting can add or remove them. What the
+  "internal" mode fixes is *partition-based* noise: Windows/Linux installers
+  on USB sticks, external drives, and similar showing up as GRUB entries. If
+  junk still appears **inside the GRUB menu**, look at what was detected with
+  `grep -E "^menuentry.*osprober" /boot/grub/grub.cfg` and
+  `lsblk -o NAME,UUID,RM,TRAN`, then add the offending `UUID@/dev/part` to
+  `GRUB_OS_PROBER_SKIP_LIST` in `/etc/default/grub` and run
+  `grub-mkconfig -o /boot/grub/grub.cfg`. The skip list only covers devices
+  connected when the script ran.
+- Passwords (user, root, LUKS) are asked in password boxes and applied via
+  stdin (`chpasswd`, `cryptsetup --key-file=-`) — never as command-line
+  arguments, so they don't show up in the process list. They are kept in
+  shell variables only until the install ends.
