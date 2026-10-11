@@ -2,21 +2,47 @@
 set -Eeuo pipefail
 
 # ============================================================
-# Arch Linux Installation Manager
+# Arch Linux Installation Manager  (dialog menu)
+#
+# Downloads the installer scripts (+ lib.sh) from the repository and runs
+# them. On the live ISO start with option 1; after the first reboot start
+# it again (it is copied to /archInstall/) and use options 2-4 or 5.
 # ============================================================
 
 # URL for the scripts repository (change according to your repo)
 SCRIPT_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
 
-# List of scripts
+# Everything the manager downloads (lib.sh is sourced by the others).
 SCRIPTS=(
+    "lib.sh"
     "archInstall.sh"
     "setupAfterInstall.sh"
     "installDE.sh"
     "installApps.sh"
 )
 
-REAL_USER="${SUDO_USER:-$USER}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB="$SCRIPT_DIR/lib.sh"
+if [[ ! -f "$LIB" && -f "$SCRIPT_DIR/scripts/lib.sh" ]]; then
+    LIB="$SCRIPT_DIR/scripts/lib.sh"
+fi
+if [[ ! -f "$LIB" ]]; then
+    curl -fsSL -o "$SCRIPT_DIR/lib.sh" "${SCRIPT_URL}/lib.sh" \
+        || { echo "ERROR: lib.sh not found next to $0 and the download failed." >&2; exit 1; }
+    LIB="$SCRIPT_DIR/lib.sh"
+fi
+# shellcheck source=lib.sh
+source "$LIB"
+
+BACKTITLE="Arch Linux Installation Manager"
+LOG_FILE="${TMPDIR:-/tmp}/arch-manager.log"
+
+# archInstall.sh uses this to find the manager when it copies it to the
+# new system.
+ARCH_MANAGER_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+export ARCH_MANAGER_PATH
+
+REAL_USER="${SUDO_USER:-${USER:-$(id -un)}}"
 REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
 [[ -n "$REAL_HOME" ]] || REAL_HOME="$HOME"
 
@@ -24,385 +50,240 @@ WORK_DIR="${REAL_HOME}/arch-setup"
 DOWNLOAD_DIR="${WORK_DIR}/downloads"
 mkdir -p "$DOWNLOAD_DIR"
 
-# If we ended up running as root (e.g. someone still does `sudo ./arch-manager.sh`),
-# make sure the downloaded files are owned by the real user, not root, so
-# installApps.sh (which must NOT run as root) can actually read/execute them.
-if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
-    chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
-fi
-
-# ---------------- COLORS ----------------
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-# ---------------- FUNCTIONS ----------------
-log() { echo -e "${GREEN}[+]${NC} $*"; }
-info() { echo -e "${CYAN}   $*${NC}"; }
-warn() { echo -e "${YELLOW}[!]${NC} $*"; }
-error() { echo -e "${RED}[ERROR]${NC} $*" >&2; }
-
-# Check system status
-check_status() {
-    local arch="✗"
-    local live="✗"
-    local root="✗"
-    local btrfs="✗"
-    local snapper="✗"
-
-    [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="✓"
-    # Check for Live CD: either ARCHISO in os-release OR the presence of /run/archiso
-    if [[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release; then
-        live="✓"
-    elif [[ -d /run/archiso ]]; then
-        live="✓"
-    fi
-    [[ $EUID -eq 0 ]] && root="✓"
-    command -v findmnt >/dev/null && findmnt -n -o FSTYPE / 2>/dev/null | grep -q "btrfs" && btrfs="✓"
-    [[ -f /etc/snapper/configs/root ]] && snapper="✓"
-
-    echo -e "${BLUE}System Status:${NC}"
-    echo -e "  Arch: $arch   Live CD: $live   Root: $root"
-    echo -e "  Btrfs: $btrfs   Snapper: $snapper"
-    echo
-}
-
-# Download a single script
-download_single_script() {
-    local script="$1"
-    local url="${SCRIPT_URL}/${script}"
-    local dest="${DOWNLOAD_DIR}/${script}"
-
-    echo -n "  Downloading $script ... "
-    if curl -fsSL -o "$dest" "$url"; then
-        chmod +x "$dest"
-        if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
-            chown "$REAL_USER:$REAL_USER" "$dest" 2>/dev/null || true
-        fi
-        echo -e "${GREEN}OK${NC}"
-        return 0
-    else
-        echo -e "${RED}FAIL${NC}"
-        return 1
-    fi
-}
-
-# Download all scripts
-download_scripts() {
-    log "Downloading all scripts..."
-    local failed=0
-    for script in "${SCRIPTS[@]}"; do
-        download_single_script "$script" || failed=$((failed+1))
-    done
-    if [[ $failed -eq 0 ]]; then
-        log "All scripts downloaded successfully."
-    else
-        warn "$failed script(s) failed to download."
-    fi
+# If we ended up running as root (e.g. `sudo ./arch-manager.sh`), make sure
+# the downloaded files are owned by the real user, not root, so
+# installApps.sh (which must NOT run as root) can read/execute them.
+fix_ownership() {
     if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
         chown -R "$REAL_USER:$REAL_USER" "$WORK_DIR" 2>/dev/null || true
     fi
 }
+fix_ownership
 
-# Copy the entire WORK_DIR to the installed system's home directory of the first regular user.
-# Called after a successful archInstall.sh run.
-copy_to_installed_system() {
-    local dest_root="/mnt"
-    local passwd_file="${dest_root}/etc/passwd"
+# ---------------- STATUS ----------------
 
-    # Check if we are on a Live CD environment
-    local is_live=false
-    if [[ -d /run/archiso ]] || ([[ -f /etc/os-release ]] && grep -q "ARCHISO" /etc/os-release); then
-        is_live=true
+status_text() {
+    local arch="no" live="no" root="no" btrfs="no" snapper="no"
+    [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="yes"
+    is_live_iso && live="yes"
+    [[ $EUID -eq 0 ]] && root="yes"
+    if command -v findmnt >/dev/null && [[ "$(findmnt -n -o FSTYPE / 2>/dev/null || true)" == "btrfs" ]]; then
+        btrfs="yes"
     fi
-
-    if [[ "$is_live" == false ]]; then
-        warn "Not on Arch Live CD. Skipping copy to installed system (this should only run from Live CD)."
-        return 0
-    fi
-
-    # Check if the installed system is mounted at /mnt
-    if [[ ! -f "$passwd_file" ]]; then
-        warn "Installed system's passwd file not found at $passwd_file. Skipping copy."
-        return 0
-    fi
-
-    # Find the first regular user (UID >= 1000) and get UID, GID, and home directory
-    local target_user=""
-    local target_uid=""
-    local target_gid=""
-    local target_home=""
-    # Correctly parse /etc/passwd fields: username:password:uid:gid:gecos:homedir:shell
-    while IFS=: read -r username password uid gid gecos homedir shell; do
-        if [[ "$uid" -ge 1000 && "$username" != "nobody" && "$homedir" != "/" && -d "${dest_root}${homedir}" ]]; then
-            target_user="$username"
-            target_uid="$uid"
-            target_gid="$gid"
-            target_home="${dest_root}${homedir}"
-            break
-        fi
-    done < "$passwd_file"
-
-    if [[ -z "$target_user" ]]; then
-        warn "No regular user found in the installed system. Skipping copy."
-        return 0
-    fi
-
-    log "Copying Arch Manager scripts to $target_home/arch-setup for user $target_user (UID: $target_uid, GID: $target_gid)"
-
-    # Ensure target home directory exists (should already)
-    if [[ ! -d "$target_home" ]]; then
-        warn "Target home $target_home does not exist. Creating it..."
-        mkdir -p "$target_home"
-        chown "${target_uid}:${target_gid}" "$target_home" 2>/dev/null || true
-    fi
-
-    # Copy the entire WORK_DIR (downloaded scripts) to ~/arch-setup
-    local target_dir="${target_home}/arch-setup"
-    mkdir -p "$target_dir"
-    if cp -r "$WORK_DIR"/* "$target_dir/" 2>/dev/null; then
-        log "Copied scripts to $target_dir"
-    else
-        warn "Failed to copy scripts from $WORK_DIR to $target_dir"
-    fi
-
-    # Fix ownership of the copied scripts
-    chown -R "${target_uid}:${target_gid}" "$target_dir" 2>/dev/null || true
-
-    # Also copy the main manager script (this script) to ~/arch-manager.sh
-    local manager_source="$(readlink -f "$0")"
-    local manager_dest="${target_home}/arch-manager.sh"
-    if cp "$manager_source" "$manager_dest" 2>/dev/null; then
-        chown "${target_uid}:${target_gid}" "$manager_dest" 2>/dev/null || true
-        log "Copied manager script to $manager_dest"
-    else
-        warn "Failed to copy manager script ($manager_source) to $manager_dest"
-        # Fallback: try to copy from the current working directory if the source is not accessible
-        if [[ -f "./arch-manager.sh" ]]; then
-            if cp "./arch-manager.sh" "$manager_dest" 2>/dev/null; then
-                chown "${target_uid}:${target_gid}" "$manager_dest" 2>/dev/null || true
-                log "Copied manager script from current directory to $manager_dest"
-            else
-                warn "Fallback copy also failed."
-            fi
-        fi
-    fi
-
-    log "Scripts copied successfully. After reboot, you can run:"
-    echo -e "${CYAN}  cd ~/arch-setup && ./arch-manager.sh${NC}"
-    echo -e "${CYAN}  or directly: ~/arch-manager.sh${NC}"
-    echo -e "${GREEN}All files are owned by UID $target_uid (user $target_user).${NC}"
+    [[ -f /etc/snapper/configs/root ]] && snapper="yes"
+    printf 'System status:\n  Arch: %s   Live ISO: %s   Root: %s\n  Btrfs: %s   Snapper: %s\n\nChoose an action:' \
+        "$arch" "$live" "$root" "$btrfs" "$snapper"
 }
 
-# Run a script with auto-sudo if needed
-run_script() {
+de_installed() {
+    local p
+    for p in gnome-shell plasma-desktop xfce4-session; do
+        if pacman -Qq "$p" >/dev/null 2>&1; then return 0; fi
+    done
+    return 1
+}
+
+# ---------------- DOWNLOADING ----------------
+
+download_single_script() {
     local script="$1"
-    local path="${DOWNLOAD_DIR}/${script}"
+    local dest="${DOWNLOAD_DIR}/${script}"
 
-    # If script doesn't exist, download it now (on-demand download)
-    if [[ ! -f "$path" ]]; then
-        warn "Script $script not found locally. Downloading..."
-        if ! download_single_script "$script"; then
-            error "Failed to download $script. Aborting."
-            return 1
+    printf '  Downloading %s ... ' "$script"
+    if curl -fsSL -o "$dest" "${SCRIPT_URL}/${script}"; then
+        chmod +x "$dest"
+        if [[ $EUID -eq 0 && -n "$REAL_USER" && "$REAL_USER" != "root" ]]; then
+            chown "$REAL_USER:$REAL_USER" "$dest" 2>/dev/null || true
         fi
-    fi
-
-    # Check if script needs root
-    local needs_root=false
-    case "$script" in
-        "archInstall.sh"|"setupAfterInstall.sh"|"installDE.sh")
-            needs_root=true
-            ;;
-    esac
-
-    echo -e "\n${BLUE}═══════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}Running: ${YELLOW}$script${NC}"
-    echo -e "${BLUE}═══════════════════════════════════════════════════${NC}\n"
-
-    # If root is needed, run with sudo (or directly if already root)
-    if [[ "$needs_root" == true ]]; then
-        if [[ $EUID -eq 0 ]]; then
-            "$path"
-        else
-            if command -v sudo >/dev/null 2>&1; then
-                echo -e "${YELLOW}This script requires root privileges.${NC}"
-                echo -e "${CYAN}Running with sudo (enter your password)...${NC}"
-                echo
-                sudo "$path"
-            else
-                error "sudo is not installed!"
-                return 1
-            fi
-        fi
+        echo "OK"
+        return 0
     else
-        # installApps.sh must NOT run as root (makepkg/yay refuse). If the
-        # manager itself is currently root (e.g. it was invoked with sudo,
-        # or as a sub-step from a root script), drop to the real user.
-        if [[ $EUID -eq 0 ]]; then
-            if [[ -z "$REAL_USER" || "$REAL_USER" == "root" ]]; then
-                error "Running as root with no real user to drop to -- re-run this menu without sudo."
-                return 1
-            fi
-            echo -e "${CYAN}Running as $REAL_USER (installApps.sh must not run as root)...${NC}"
-            runuser -u "$REAL_USER" -- "$path"
-        else
-            "$path"
-        fi
-    fi
-
-    local code=$?
-
-    if [[ $code -eq 0 ]]; then
-        log "$script completed successfully"
-    else
-        error "$script failed with error ($code)"
-    fi
-    return $code
-}
-
-# Main menu
-MENU_WIDTH=65
-
-menu_border() {
-    local char="$1" left="$2" right="$3"
-    local n=$((MENU_WIDTH - 2))
-    local line=""
-    for ((i = 0; i < n; i++)); do line+="$char"; done
-    printf '%b%s%s%s%b\n' "$BLUE" "$left" "$line" "$right" "$NC"
-}
-
-menu_line() {
-    local text="$1" color="${2:-}"
-    local pad=$(( MENU_WIDTH - 2 - ${#text} ))
-    [[ $pad -lt 0 ]] && pad=0
-    printf '%b%s%b' "$BLUE" "║" "$NC"
-    if [[ -n "$color" ]]; then
-        printf '%b%s%b' "$color" "$text" "$NC"
-    else
-        printf '%s' "$text"
-    fi
-    printf '%*s' "$pad" ''
-    printf '%b%s%b\n' "$BLUE" "║" "$NC"
-}
-
-show_menu() {
-    menu_border "═" "╔" "╗"
-    menu_line "  Arch Linux Installation Manager" "$YELLOW"
-    menu_border "═" "╠" "╣"
-    menu_line "  1) Install Arch (archInstall.sh)"
-    menu_line "  2) Setup Snapper/GRUB (setupAfterInstall)"
-    menu_line "  3) Install DE (installDE.sh)"
-    menu_line "  4) Install applications (installApps.sh)"
-    menu_line "  5) INSTALL ALL (2->3->4)"
-    menu_line "  6) Download scripts"
-    menu_line "  0) Exit"
-    menu_border "═" "╚" "╝"
-}
-
-# Install all (Live CD only)
-install_live_phase() {
-    # For --install: only archInstall.sh makes sense before a reboot.
-    # setupAfterInstall.sh / installDE.sh / installApps.sh all expect to
-    # run ON the already-booted target system (they check findmnt/LUKS
-    # status of the CURRENT root), so chaining them here without a reboot
-    # in between would run them against the live ISO's own filesystem,
-    # not the freshly installed one.
-    log "Starting archInstall.sh (Phase 0)..."
-    if run_script "archInstall.sh"; then
-        copy_to_installed_system
-        log "Phase 0 complete. Reboot, then use arch-manager.sh's menu option 5"
-        log "(or run setupAfterInstall.sh / installDE.sh / installApps.sh directly)."
-    else
-        error "archInstall.sh did not finish successfully."
+        echo "FAIL"
         return 1
     fi
 }
 
-# Install remaining scripts (after reboot)
-install_remaining() {
-    log "Arch is already installed – running remaining scripts..."
-    local failed=0
-    local scripts_to_run=(
-        "setupAfterInstall.sh"
-        "installDE.sh"
-        "installApps.sh"
-    )
-    for script in "${scripts_to_run[@]}"; do
-        echo -e "\n${BLUE}>>> $script${NC}"
-        run_script "$script" || failed=$((failed+1))
+download_all() {
+    log "Downloading all scripts..."
+    local failed=0 script
+    for script in "${SCRIPTS[@]}"; do
+        download_single_script "$script" || failed=$((failed + 1))
     done
-    if [[ $failed -eq 0 ]]; then
-        log "All remaining scripts completed successfully! 🎉"
+    fix_ownership
+    [[ "$failed" -eq 0 ]] || die "$failed script(s) failed to download."
+    log "All scripts downloaded successfully."
+}
+
+# Copies scripts that archInstall.sh placed on the installed system
+# (/archInstall/scripts, or a scripts/ folder next to the manager) into the
+# download folder, so they don't have to be fetched again.
+seed_from_local() {
+    local d s
+    for d in "$SCRIPT_DIR/scripts" /archInstall/scripts; do
+        [[ -d "$d" ]] || continue
+        for s in "${SCRIPTS[@]}"; do
+            if [[ ! -f "$DOWNLOAD_DIR/$s" && -f "$d/$s" ]]; then
+                cp "$d/$s" "$DOWNLOAD_DIR/$s"
+                chmod +x "$DOWNLOAD_DIR/$s"
+            fi
+        done
+    done
+    fix_ownership
+}
+
+# ---------------- RUNNING A SCRIPT ----------------
+#
+# Always returns 0; the script's exit code is left in RUN_SCRIPT_RC (so
+# callers never trip over "set -e").
+RUN_SCRIPT_RC=0
+
+run_script() {
+    local script="$1"
+    local path="${DOWNLOAD_DIR}/${script}"
+    local needs_root=false
+    RUN_SCRIPT_RC=1
+
+    seed_from_local
+
+    # Download on demand (the script and lib.sh, which it sources).
+    local need
+    for need in "$script" "lib.sh"; do
+        if [[ ! -f "${DOWNLOAD_DIR}/${need}" ]]; then
+            echo "Downloading missing ${need} ..."
+            if ! download_single_script "$need"; then
+                fix_ownership
+                msg_box "Download failed" "Could not download $need.\n\nCheck your internet connection and try again."
+                return 0
+            fi
+        fi
+    done
+    fix_ownership
+
+    case "$script" in
+        archInstall.sh|setupAfterInstall.sh|installDE.sh) needs_root=true ;;
+    esac
+
+    clear
+    local code=0
+    if [[ "$needs_root" == true ]]; then
+        if [[ $EUID -eq 0 ]]; then
+            "$path" || code=$?
+        elif command -v sudo >/dev/null 2>&1; then
+            echo "$script needs root privileges -- running with sudo (enter your password)..."
+            sudo "$path" || code=$?
+        else
+            msg_box "No sudo" "sudo is not installed -- run the manager as root."
+            return 0
+        fi
     else
-        warn "$failed scripts failed"
+        # installApps.sh must NOT run as root (makepkg/yay refuse). If the
+        # manager itself is root (e.g. started with sudo), drop to the real user.
+        if [[ $EUID -eq 0 ]]; then
+            if [[ -z "$REAL_USER" || "$REAL_USER" == "root" ]]; then
+                msg_box "Can't run as root" "installApps.sh must not run as root and there is no regular user to switch to.\n\nStart the manager as your normal user (not with sudo)."
+                return 0
+            fi
+            runuser -u "$REAL_USER" -- "$path" || code=$?
+        else
+            "$path" || code=$?
+        fi
+    fi
+    RUN_SCRIPT_RC=$code
+    return 0
+}
+
+report_result() {
+    local script="$1"
+    if [[ "$RUN_SCRIPT_RC" -eq 0 ]]; then
+        msg_box "$script" "$script completed successfully."
+    else
+        msg_box "$script" "$script FAILED (exit code $RUN_SCRIPT_RC).\n\nCheck the messages and log files, fix the problem and run it again."
     fi
 }
 
-# ---------------- MAIN ----------------
+# Runs setupAfterInstall -> installDE -> installApps (after reboot).
+install_remaining() {
+    local scripts_to_run=(setupAfterInstall.sh installDE.sh installApps.sh) script
+    for script in "${scripts_to_run[@]}"; do
+        if [[ "$script" == "installDE.sh" ]] && de_installed; then
+            if ! ask_yes "Desktop environment" "A desktop environment is already installed (probably from archInstall.sh).\n\nInstall another one anyway?" no; then
+                continue
+            fi
+        fi
+        run_script "$script"
+        report_result "$script"
+        if [[ "$RUN_SCRIPT_RC" -ne 0 ]]; then
+            ask_yes "Continue?" "$script failed.\n\nContinue with the remaining steps anyway?" no || return 0
+        fi
+    done
+    msg_box "All done" "The remaining steps have finished."
+}
+
+# ---------------- MAIN MENU ----------------
+
 main() {
+    ensure_dialog
+    ui_init
+
+    local choice
     while true; do
-        check_status
-        show_menu
-        read -r -p "Choice [0-6]: " choice
+        choice="$(dlg_capture --title "Arch Linux Installation Manager" \
+            --cancel-label "Exit" --no-collapse --cr-wrap \
+            --menu "$(status_text)" 0 "$BOX_W" 0 \
+            1 "Install Arch (archInstall.sh)" \
+            2 "Setup Snapper/GRUB (setupAfterInstall.sh)" \
+            3 "Install desktop environment (installDE.sh)" \
+            4 "Install applications (installApps.sh)" \
+            5 "INSTALL ALL after reboot (2 -> 3 -> 4)" \
+            6 "Download / update scripts")" || { clear; echo "Goodbye!"; exit 0; }
+
         case "$choice" in
             1)
-                script="${SCRIPTS[0]}"
-                echo
-                if run_script "$script"; then
-                    copy_to_installed_system
-                    echo -e "\n${GREEN}Installation phase completed. You can now reboot into your new system.${NC}"
-                else
-                    warn "Installation script failed. Skipping copy to installed system."
-                    echo -e "\n${RED}archInstall.sh did not finish successfully -- do not reboot yet.${NC}"
-                    echo -e "${YELLOW}Check the errors above, fix them, and run this again.${NC}"
+                if ! is_live_iso; then
+                    ask_yes "Not the live ISO" "This does not look like the Arch live ISO.\n\narchInstall.sh WIPES a whole disk and is meant to be run from the live ISO only.\n\nRun it anyway?" no || continue
                 fi
-                echo -e "${YELLOW}Exiting Arch Manager.${NC}"
+                run_script "archInstall.sh"
+                if [[ "$RUN_SCRIPT_RC" -eq 0 ]]; then
+                    clear
+                    echo "Installation phase completed. Reboot into your new system when ready,"
+                    echo "then run: sudo /archInstall/arch-manager.sh"
+                else
+                    msg_box "archInstall.sh" "archInstall.sh did not finish successfully (exit code $RUN_SCRIPT_RC).\n\nDo NOT reboot yet. Check the errors, fix them and run it again."
+                fi
                 exit 0
                 ;;
-            2|3|4)
-                script="${SCRIPTS[$((choice-1))]}"
-                echo
-                run_script "$script" || true
-                echo
-                read -r -p "Press Enter..."
-                ;;
-            5)
-                install_remaining
-                echo
-                read -r -p "Press Enter..."
-                ;;
+            2) run_script "setupAfterInstall.sh"; report_result "setupAfterInstall.sh" ;;
+            3) run_script "installDE.sh";         report_result "installDE.sh" ;;
+            4) run_script "installApps.sh";       report_result "installApps.sh" ;;
+            5) install_remaining ;;
             6)
-                download_scripts
-                echo
-                read -r -p "Press Enter..."
-                ;;
-            0)
-                echo -e "${GREEN}Goodbye!${NC}"
-                exit 0
-                ;;
-            *)
-                error "Unknown option"
-                echo
-                read -r -p "Press Enter..."
+                run_in_box "Downloading scripts" "$LOG_FILE" download_all
+                if [[ "$RUN_RC" -eq 0 ]]; then
+                    msg_box "Download" "All scripts downloaded to:\n  $DOWNLOAD_DIR"
+                else
+                    msg_box "Download" "Some scripts failed to download -- check your internet connection."
+                fi
                 ;;
         esac
     done
 }
 
-# Handle command line arguments
+# ---------------- COMMAND LINE ----------------
+
 if [[ $# -gt 0 ]]; then
     case "$1" in
-        --download) download_scripts; exit 0 ;;
-        --install) download_scripts; install_live_phase; exit $? ;;
-        --help) echo "Usage: $0 [--download|--install|--help]"; exit 0 ;;
+        --download) download_all; exit 0 ;;
+        --install)
+            # Live ISO: download everything and run archInstall.sh.
+            download_all
+            run_script "archInstall.sh"
+            exit "$RUN_SCRIPT_RC"
+            ;;
+        --help) echo "Usage: $0 [--download|--install|--help|<script.sh>]"; exit 0 ;;
         *)
             if [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
-                run_script "$1" "${@:2}"
-                exit $?
+                run_script "$1"
+                exit "$RUN_SCRIPT_RC"
             else
                 error "Unknown option: $1"
                 exit 1
