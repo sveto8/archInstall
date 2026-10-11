@@ -429,7 +429,7 @@ local -a PHASES=(
     "User info collected"
     "Disk partitioned"
     "Encryption & filesystems"
-    "Base system installed (pacstrap)"
+    "Base system install (pacstrap)"
     "System configured (chroot)"
     "Desktop environment"
     "Finalizing"
