@@ -34,14 +34,18 @@ set -o errtrace
 
 ESP_SIZE="1GiB"
 BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
-HOSTNAME="monarch"
+# Defaults only -- hostname, timezone and keymap are confirmed/changed in
+# dialogs below (a different hostname per machine, e.g. laptop vs desktop).
+NEW_HOSTNAME="monarch"
 TIMEZONE="Europe/Zagreb"
 LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
-LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated/available on the system
+LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated (the primary one is always included)
 KEYMAP="us"
-MOUNT_OPTS="rw,noatime,compress=zstd:3,ssd,space_cache=v2"
+# 'ssd' is appended automatically when the target disk is non-rotational.
+MOUNT_OPTS="rw,noatime,compress=zstd:3,space_cache=v2"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     # Download to a temporary file FIRST (never write a partial file
     # directly next to the script -- the folder may be a read-only or
@@ -54,7 +58,7 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
         exit 1
     }
     _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
-        "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" 2>/dev/null || true)"
+        "${_repo_url}/lib.sh" 2>/dev/null || true)"
     if [[ -s "$_lib_tmp" ]]; then
         if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
             :
@@ -70,13 +74,18 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     else
         rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
-        echo "       URL: https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh (HTTP ${_code:-000})" >&2
+        echo "       URL: ${_repo_url}/lib.sh (HTTP ${_code:-000})" >&2
         echo "       Put lib.sh (and the other scripts) in the same folder as archInstall.sh and run it again." >&2
         exit 1
     fi
 fi
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
+
+# The primary locale must always be generated.
+in_array "$LOCALE" "${LOCALES[@]}" || LOCALES+=("$LOCALE")
+LOCALES_STR="${LOCALES[*]}"
+GRUB_TARGET="$(efi_grub_target)"
 
 BACKTITLE="Arch Linux installer -- base system"
 LOG_FILE="/root/archInstall.log"
@@ -107,9 +116,19 @@ fi
 
 # ---------------- SELECT DISK ----------------
 
+# The disk the live medium itself booted from must never be offered.
+LIVE_DISK=""
+_live_src="$(findmnt -no SOURCE /run/archiso/bootmnt 2>/dev/null || true)"
+if [[ -n "$_live_src" && -b "$_live_src" ]]; then
+    _live_pk="$(lsblk -no PKNAME "$_live_src" 2>/dev/null | head -n1 || true)"
+    [[ -z "$_live_pk" ]] || LIVE_DISK="/dev/${_live_pk}"
+fi
+
 DISK_ITEMS=()
 while read -r name size type; do
     [[ "$type" == "disk" ]] || continue
+    [[ "$name" == /dev/zram* ]] && continue          # compressed-RAM swap shows up as a "disk" on the ISO
+    [[ -n "$LIVE_DISK" && "$name" == "$LIVE_DISK" ]] && continue
     model="$(lsblk -dno MODEL "$name" 2>/dev/null | sed 's/[[:space:]]*$//' || true)"
     mounted=""
     if [[ -n "$(lsblk -no MOUNTPOINTS "$name" 2>/dev/null | tr -d '[:space:]')" ]]; then
@@ -141,8 +160,10 @@ if [[ -n "$(lsblk -no MOUNTPOINTS "$DEVICE" 2>/dev/null | tr -d '[:space:]')" ]]
     info "Unmounted and closed cryptroot successfully."
 fi
 
-# partition suffix: /dev/nvme0n1 -> nvme0n1p1, /dev/sda -> sda1
-if [[ "$DEVICE" == *nvme* || "$DEVICE" == *mmcblk* ]]; then
+# partition suffix: a device name that ends in a digit gets a "p"
+# (/dev/nvme0n1 -> nvme0n1p1, /dev/mmcblk0 -> mmcblk0p1, /dev/loop0 -> loop0p1),
+# otherwise none (/dev/sda -> sda1, /dev/vda -> vda1).
+if [[ "$DEVICE" =~ [0-9]$ ]]; then
     SUF="p"
 else
     SUF=""
@@ -151,12 +172,41 @@ ESP="${DEVICE}${SUF}1"
 BOOTPART="${DEVICE}${SUF}2"
 LUKSPART="${DEVICE}${SUF}3"
 
+# Btrfs 'ssd' mount option only for non-rotational disks.
+if [[ "$(cat "/sys/block/$(basename "$DEVICE")/queue/rotational" 2>/dev/null || echo 0)" == "0" ]]; then
+    MOUNT_OPTS+=",ssd"
+fi
+
 UCODE_PKG=""
 if grep -qi 'AuthenticAMD' /proc/cpuinfo; then
     UCODE_PKG="amd-ucode"
 elif grep -qi 'GenuineIntel' /proc/cpuinfo; then
     UCODE_PKG="intel-ucode"
 fi
+
+# ---------------- HOSTNAME / TIMEZONE / KEYMAP ----------------
+
+while true; do
+    ask_text NEW_HOSTNAME "Hostname" "Hostname of this machine (letters, digits and '-', max 63 characters).\n\nTip: use a different name on every machine (e.g. laptop / desktop)." "$NEW_HOSTNAME" || abort
+    [[ "$NEW_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] && break
+    msg_box "Invalid hostname" "'$NEW_HOSTNAME' is not a valid hostname."
+done
+
+while true; do
+    ask_text TIMEZONE "Timezone" "Timezone as Region/City (for example Europe/Zagreb):" "$TIMEZONE" || abort
+    [[ -n "$TIMEZONE" && "$TIMEZONE" != *..* && -f "/usr/share/zoneinfo/$TIMEZONE" ]] && break
+    msg_box "Invalid timezone" "'$TIMEZONE' was not found in /usr/share/zoneinfo.\n\nExample: Europe/Zagreb (list: timedatectl list-timezones)."
+done
+
+_keymaps="$(localectl list-keymaps 2>/dev/null || true)"
+while true; do
+    ask_text KEYMAP "Console keymap" "Console keymap (for example us, croat, de-latin1):" "$KEYMAP" || abort
+    [[ -n "$KEYMAP" ]] || { msg_box "Keymap" "The keymap can't be empty."; continue; }
+    # If the list can't be read here, accept the value as typed.
+    [[ -z "$_keymaps" ]] && break
+    grep -qxF -- "$KEYMAP" <<< "$_keymaps" && break
+    msg_box "Unknown keymap" "'$KEYMAP' is not a known keymap (list: localectl list-keymaps)."
+done
 
 # ---------------- USER ACCOUNT + PASSWORD (asked together) ----------------
 #
@@ -375,9 +425,11 @@ $(lsblk -l -o NAME,SIZE,FSTYPE,LABEL "$DEVICE")
     ${BOOTPART}  ext4 ($BOOT_SIZE)           -> /boot
     ${LUKSPART}  LUKS2 -> Btrfs (@  @home  @snapshots)
 
-  Hostname:       $HOSTNAME
+  Hostname:       $NEW_HOSTNAME
   Timezone:       $TIMEZONE
-  Locale:         $LOCALE
+  Locale:         $LOCALE  (generated: $LOCALES_STR)
+  Keymap:         $KEYMAP
+  Btrfs options:  $MOUNT_OPTS
   Microcode:      ${UCODE_PKG:-none detected}
   Hardware clock: $RTC_MODE
   User:           $USER_LINE
@@ -693,13 +745,17 @@ if [[ -n "${NEW_USERNAME}" ]]; then
     log "Creating user ${NEW_USERNAME}..."
     if [[ "${MAKE_SUDO}" == "yes" ]]; then
         arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
-        arch-chroot /mnt cp /etc/sudoers /etc/sudoers.bak
-        arch-chroot /mnt sed -i -E 's/^# %wheel ALL=\(ALL:ALL\) ALL/%wheel ALL=(ALL:ALL) ALL/' /etc/sudoers
-        arch-chroot /mnt visudo -c -f /etc/sudoers || {
-            arch-chroot /mnt cp /etc/sudoers.bak /etc/sudoers
-            warn "sudoers edit failed validation, reverted."
-        }
-        arch-chroot /mnt rm -f /etc/sudoers.bak
+        # A sudoers.d drop-in instead of sed-ing the commented line in
+        # /etc/sudoers: it can't silently fail to match, and it survives
+        # sudo package updates. Root is locked in this case, so a broken
+        # sudo setup would leave an unusable system -- abort instead.
+        install -d -m 750 /mnt/etc/sudoers.d
+        printf '%%wheel ALL=(ALL:ALL) ALL\n' > /mnt/etc/sudoers.d/10-wheel
+        chmod 440 /mnt/etc/sudoers.d/10-wheel
+        if ! arch-chroot /mnt visudo -c >/dev/null; then
+            rm -f /mnt/etc/sudoers.d/10-wheel
+            die "sudoers validation failed -- root is locked, so the system would be unusable. Aborting."
+        fi
     else
         arch-chroot /mnt useradd -m -s /bin/bash "${NEW_USERNAME}"
     fi
@@ -730,20 +786,23 @@ log "Configuring the new system (chroot)..."
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
-echo "$HOSTNAME" > /etc/hostname
+echo "$NEW_HOSTNAME" > /etc/hostname
 ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
 
+# Some VMs have no RTC -- not worth aborting a finished install for.
 if [[ "$RTC_MODE" == "local" ]]; then
-    hwclock --systohc --localtime
+    hwclock --systohc --localtime || echo "WARNING: could not write the hardware clock" >&2
 else
-    hwclock --systohc --utc
+    hwclock --systohc --utc || echo "WARNING: could not write the hardware clock" >&2
 fi
 
-sed -i 's/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
-grep -q '^en_US.UTF-8 UTF-8' /etc/locale.gen || echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen
-
-sed -i 's/^#hr_HR.UTF-8 UTF-8/hr_HR.UTF-8 UTF-8/' /etc/locale.gen 2>/dev/null || true
-grep -q '^hr_HR.UTF-8 UTF-8' /etc/locale.gen || echo 'hr_HR.UTF-8 UTF-8' >> /etc/locale.gen
+# Enable every locale from LOCALES (\$-escaped variables are expanded
+# inside the chroot, the unescaped list is expanded by the installer).
+for _l in $LOCALES_STR; do
+    _cs="\${_l##*.}"
+    sed -i "s/^#\${_l} \${_cs}/\${_l} \${_cs}/" /etc/locale.gen
+    grep -q "^\${_l} \${_cs}" /etc/locale.gen || echo "\${_l} \${_cs}" >> /etc/locale.gen
+done
 
 locale-gen
 
@@ -751,13 +810,13 @@ echo "LANG=${LOCALE}" > /etc/locale.conf
 echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
 
 mkdir -p /etc/profile.d
-echo 'export LANGUAGE=en_US:en' > /etc/profile.d/locale.sh
+echo "export LANGUAGE=${LOCALE%%.*}:${LOCALE%%_*}" > /etc/profile.d/locale.sh
 chmod 644 /etc/profile.d/locale.sh
 
 cat >> /etc/hosts <<HOSTS_EOF
 127.0.0.1   localhost
 ::1         localhost
-127.0.0.1   ${HOSTNAME}.localdomain ${HOSTNAME}
+127.0.0.1   ${NEW_HOSTNAME}.localdomain ${NEW_HOSTNAME}
 HOSTS_EOF
 
 CHROOT_EOF
@@ -817,7 +876,7 @@ set -Eeuo pipefail
 
 sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
-grub-install --target=x86_64-efi --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
+grub-install --target=${GRUB_TARGET} --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
 
 if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
