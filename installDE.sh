@@ -18,15 +18,32 @@ set -o errtrace
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
-    _url="https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh"
-    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "$_url" 2>/dev/null || true)"
-    if [[ "$_code" == "200" ]]; then
-        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
+    # Download to a temporary file FIRST (never write a partial file
+    # directly next to the script -- the folder may be a read-only or
+    # permission-quirky mount). Verify the download produced a non-empty
+    # file, then move it into place. If the script folder turns out to be
+    # unwritable, fall back to keeping lib.sh in $TMPDIR.
+    _lib_tmp="$(mktemp "${TMPDIR:-/tmp}/lib.sh.XXXXXX")" || {
+        echo "ERROR: could not create a temporary file for lib.sh." >&2
+        exit 1
+    }
+    _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
+        "${_repo_url}/lib.sh" 2>/dev/null || true)"
+    if [[ -s "$_lib_tmp" ]]; then
+        if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
+            :
+        else
+            _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
+            mv "$_lib_tmp" "$_lib_fallback"
+            echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
+            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+        fi
     else
-        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
-        echo "       URL: $_url  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
+        echo "       URL: ${_repo_url}/lib.sh (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
         echo "       Put lib.sh in the same folder as this script and run it again." >&2
         exit 1
     fi
@@ -147,35 +164,35 @@ case "$DE_CHOICE" in
     1)
         DE_NAME="GNOME ($INSTALL_MODE) [Wayland]"
         if [[ "$INSTALL_MODE" == "full" ]]; then
-            # Full GNOME = the two official Arch package groups plus gnome-tweaks.
-            # DE_PACKAGES=(
-            #     gnome                   # official package group -- full core desktop + stock GNOME apps
-            #     gnome-extra             # official package group -- additional GNOME applications
-            #     gnome-tweaks            # not part of either group but essential for tweaking GNOME
-            #     "${WAYLAND_COMMON[@]}"
-            # )
+            # Full GNOME = the official `gnome` group + the CURRENT contents of
+            # the `gnome-extra` group minus the games, read from the package
+            # database -- so packages that are added/renamed upstream are picked
+            # up automatically instead of going stale in a hardcoded list.
+            GNOME_GAMES=(
+                aisleriot atomix five-or-more four-in-a-row gnome-2048 gnome-chess
+                gnome-klotski gnome-mahjongg gnome-mines gnome-nibbles gnome-robots
+                gnome-sudoku gnome-taquin gnome-tetravex hitori iagno lightsoff
+                quadrapassel swell-foop tali
+            )
+            GNOME_EXTRA=()
+            mapfile -t GNOME_EXTRA < <(pacman -Sgq gnome-extra 2>/dev/null \
+                | grep -vxFf <(printf '%s\n' "${GNOME_GAMES[@]}") || true)
+            if [[ "${#GNOME_EXTRA[@]}" -eq 0 ]]; then
+                warn "Could not read the gnome-extra group -- using the built-in list."
+                GNOME_EXTRA=(
+                    chatty d-spy dconf-editor endeavour ghex gnome-boxes gnome-builder
+                    gnome-calls gnome-sound-recorder manuals sysprof gnome-browser-connector
+                )
+            fi
             DE_PACKAGES=(
                 gnome                   # official package group -- full core desktop + stock GNOME apps
-                # --- replacement for gnome-extra (excluding games) ---
-                chatty                  # SMS and Matrix client
-                d-spy                   # D-Bus debugger
-                dconf-editor            # GSettings editor
-                endeavour               # personal task manager (formerly GNOME Todo)
-                ghex                    # hex editor
-                gnome-boxes             # virtual machine manager
-                gnome-builder           # IDE for GNOME apps
-                gnome-calls             # phone and call manager
-                gnome-sound-recorder    # simple sound recorder
-                manuals                 # developer documentation browser
-                sysprof                 # performance profiler
+                "${GNOME_EXTRA[@]}"     # gnome-extra without the games
                 power-profiles-daemon   # power profile settings in gnome-settings
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
-                gnome-browser-connector  # GNOME integration for web browsers
-
-                gnome-tweaks            # not part of either group but essential for tweaking GNOME
+                gnome-tweaks            # essential for tweaking GNOME
                 "${WAYLAND_COMMON[@]}"
-            )     
+            )
         else
             DE_PACKAGES=(
                 gnome-shell
@@ -193,24 +210,42 @@ case "$DE_CHOICE" in
         ;;
     2)
         DE_NAME="KDE Plasma ($INSTALL_MODE) [Wayland]"
+        # NOTE: the Wayland session ships inside plasma-workspace itself.
+        # The old 'plasma-workspace-wayland' / 'plasma-wayland-session'
+        # packages no longer exist -- naming them made the whole pacman
+        # transaction fail with "target not found".
         if [[ "$INSTALL_MODE" == "full" ]]; then
             DE_PACKAGES=(
                 plasma-desktop
-                plasma-workspace-wayland
-                dolphin
-                konsole
                 sddm
                 plasma-nm               # Wi-Fi/network applet + settings (not part of plasma-desktop)
+                plasma-pa               # audio volume applet
+                powerdevil              # power management
+                bluedevil               # Bluetooth (needs bluez, below)
+                bluez
+                bluez-utils
+                kscreen                 # display configuration
+                kinfocenter
+                kdeplasma-addons
+                kde-gtk-config          # GTK apps follow the Plasma theme
+                breeze-gtk
+                xdg-desktop-portal-kde
+                dolphin
+                konsole
+                kate
+                ark
+                gwenview
+                okular
+                spectacle
                 "${WAYLAND_COMMON[@]}"
             )
         else
             DE_PACKAGES=(
                 plasma-desktop
-                plasma-workspace-wayland
-                dolphin
-                konsole
                 sddm
                 plasma-nm               # Wi-Fi/network applet + settings (not part of plasma-desktop)
+                dolphin
+                konsole
                 "${WAYLAND_COMMON[@]}"
             )
         fi
@@ -243,10 +278,48 @@ case "$DE_CHOICE" in
 esac
 info "Desktop environment: $DE_NAME"
 
+# ---------------- GPU DRIVERS (detected, not assumed) ----------------
+#
+# Userspace graphics stack for the GPU(s) actually present. The kernel
+# drivers (amdgpu / i915 / xe) are part of the kernel already; what is
+# missing on a fresh install is Vulkan (games, Proton) and video decode.
+# NVIDIA is deliberately not automated (open vs proprietary module,
+# kernel/DKMS choice) -- a warning is shown instead.
+
+GPU_VENDORS="$(detect_gpu_vendors)"
+GPU_PACKAGES=(mesa)
+for _v in $GPU_VENDORS; do
+    case "$_v" in
+        amd)    GPU_PACKAGES+=(vulkan-radeon) ;;
+        intel)  GPU_PACKAGES+=(vulkan-intel intel-media-driver) ;;
+        nvidia) warn "NVIDIA GPU detected -- install the driver yourself (nvidia-open + nvidia-utils); not automated." ;;
+    esac
+done
+DE_PACKAGES+=("${GPU_PACKAGES[@]}")
+info "GPU vendor(s): ${GPU_VENDORS:-none detected}  ->  ${GPU_PACKAGES[*]}"
+
+# A single renamed/removed package would make `pacman -S` abort the whole
+# transaction ("target not found"). Drop what the repositories don't have
+# (with a warning) and install the rest.
+_selected_pkgs=("${DE_PACKAGES[@]}")
+mapfile -t DE_PACKAGES < <(existing_repo_packages "${_selected_pkgs[@]}" 2>/dev/null)
+DE_SKIPPED=()
+for _p in "${_selected_pkgs[@]}"; do
+    in_array "$_p" "${DE_PACKAGES[@]}" || DE_SKIPPED+=("$_p")
+done
+for _p in "${DE_SKIPPED[@]}"; do
+    warn "Package '$_p' is not in the repositories -- skipped."
+done
+[[ "${#DE_PACKAGES[@]}" -gt 0 ]] || die "None of the selected packages exist in the repositories -- is the pacman database synced (pacman -Sy)?"
+
 # ---------------- CONFIRM ----------------
 
 if (( INTERACTIVE )); then
-    ask_yes "Confirm" "Target user:  $TARGET_USER ($TARGET_HOME)\nDesktop:      $DE_NAME\n\nPackages:\n  ${DE_PACKAGES[*]}\n\nContinue with the installation?" yes || abort
+    _skip_note=""
+    if [[ "${#DE_SKIPPED[@]}" -gt 0 ]]; then
+        _skip_note="\n\nNot in the repositories (skipped):\n  ${DE_SKIPPED[*]}"
+    fi
+    ask_yes "Confirm" "Target user:  $TARGET_USER ($TARGET_HOME)\nDesktop:      $DE_NAME\nGPU:          ${GPU_VENDORS:-none detected}\n\nPackages:\n  ${DE_PACKAGES[*]}${_skip_note}\n\nContinue with the installation?" yes || abort
 fi
 
 # ---------------- INSTALL ----------------
@@ -338,7 +411,7 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     gauge_msg 55 "Downloading icon and cursor themes..."
     log "Downloading icon and cursor themes..."
 
-    ICONS_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
+    ICONS_BASE_URL="$REPO_RAW_URL"
 
     # Download and install the Reversal icon theme.
     #
@@ -396,13 +469,14 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     # directory of cursor files, so we just extract it straight into
     # /usr/share/icons/ -- no install.sh needed.
     log "Downloading Deepin dark cursor theme..."
-    CURSOR_ARCHIVE="/tmp/DeppinDark-cursors.tar.xz"
+    CURSOR_ARCHIVE="$(mktemp --suffix=.tar.xz)"
     if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
         log "Extracting Deepin dark cursor theme to /usr/share/icons/..."
         tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
         rm -f "$CURSOR_ARCHIVE"
         info "Deepin dark cursor theme installed."
     else
+        rm -f "$CURSOR_ARCHIVE"
         warn "Could not download Deepin dark cursor theme from ${ICONS_BASE_URL}/cursor/"
     fi
 
@@ -482,12 +556,12 @@ DCONF_EOF
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gtk.Settings.FileChooser sort-directories-first true \
             || warn "Could not set sort-directories-first for GTK file dialogs."
-       # Always show "Log Out" in the GNOME system menu. By default it is
+        # Always show "Log Out" in the GNOME system menu. By default it is
         # hidden behind the power-off dialog, which is inconvenient on
         # multi-user or session-switching setups.
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gnome.shell always-show-log-out true \
-            || warn "Could not enable always-show-log-out in GNOME shell."            
+            || warn "Could not enable always-show-log-out in GNOME shell."
         # Apply the Reversal icon theme and Deepin dark cursor theme
         # installed earlier by this script.
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
@@ -503,9 +577,9 @@ DCONF_EOF
     fi
 fi
 
-# ---------------- GNOME: BLUETOOTH ----------------
+# ---------------- BLUETOOTH (GNOME, full KDE) ----------------
 
-if [[ "$DE_CHOICE" == "1" ]]; then
+if [[ "$DE_CHOICE" == "1" || ( "$DE_CHOICE" == "2" && "$INSTALL_MODE" == "full" ) ]]; then
     log "Enabling Bluetooth service and auto-enable policy..."
 
     # Enable and start the bluetooth systemd service.
