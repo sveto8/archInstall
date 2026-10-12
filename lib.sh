@@ -8,10 +8,14 @@
 # scripts download it automatically if it is missing).
 # ============================================================
 
+# shellcheck disable=SC2034  # RUN_*_RC / WARN_LIST etc. are read by the sourcing scripts
 [[ -n "${ARCH_LIB_LOADED:-}" ]] && return 0
 ARCH_LIB_LOADED=1
 
-REPO_RAW_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
+# Single source of truth for the repository URL. Point every script at a
+# fork / another branch without editing anything:
+#     ARCH_REPO_URL=https://raw.githubusercontent.com/<user>/<repo>/<branch> ./arch-manager.sh
+REPO_RAW_URL="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 
 # ---------------- CONSOLE MESSAGES ----------------
 #
@@ -60,6 +64,80 @@ is_live_iso() {
 # Download a file from the scripts repository: fetch_repo_file <name> <dest>
 fetch_repo_file() {
     curl -fsSL -o "$2" "${REPO_RAW_URL}/$1"
+}
+
+# ---------------- HARDWARE / REPOSITORY HELPERS ----------------
+
+# Prints the GPU vendors found (space separated, subset of: amd intel nvidia).
+# Read from sysfs, so it needs no extra package (lspci is not in `base`).
+detect_gpu_vendors() {
+    local d vendor out=()
+    for d in /sys/class/drm/card[0-9]*/device/vendor; do
+        [[ -r "$d" ]] || continue
+        vendor="$(<"$d")"
+        case "$vendor" in
+            0x1002) in_array amd    "${out[@]:-}" || out+=(amd) ;;
+            0x8086) in_array intel  "${out[@]:-}" || out+=(intel) ;;
+            0x10de) in_array nvidia "${out[@]:-}" || out+=(nvidia) ;;
+        esac
+    done
+    echo "${out[*]:-}"
+}
+
+# True on a laptop/notebook (battery present or a portable DMI chassis type).
+is_laptop() {
+    local bat ct
+    for bat in /sys/class/power_supply/BAT*; do
+        [[ -e "$bat" ]] && return 0
+    done
+    ct="$(cat /sys/class/dmi/id/chassis_type 2>/dev/null || true)"
+    case "$ct" in 8|9|10|11|14|30|31|32) return 0 ;; esac
+    return 1
+}
+
+# GRUB --target for the firmware bitness (64-bit UEFI almost everywhere,
+# but a few tablets / old Macs boot 32-bit UEFI on a 64-bit CPU).
+efi_grub_target() {
+    if [[ "$(cat /sys/firmware/efi/fw_platform_size 2>/dev/null || echo 64)" == "32" ]]; then
+        echo "i386-efi"
+    else
+        echo "x86_64-efi"
+    fi
+}
+
+# repo_list_archives <folder>
+# Prints the names (without .tar.xz) of the theme archives found in <folder>
+# of the GitHub repository behind REPO_RAW_URL, one per line. Returns 1 when
+# the listing is not available (offline, API rate limit, non-GitHub URL) so
+# callers can fall back to a built-in list.
+repo_list_archives() {
+    local dir="$1" owner repo branch json
+    if [[ "$REPO_RAW_URL" =~ ^https://raw\.githubusercontent\.com/([^/]+)/([^/]+)/([^/]+)$ ]]; then
+        owner="${BASH_REMATCH[1]}"; repo="${BASH_REMATCH[2]}"; branch="${BASH_REMATCH[3]}"
+    else
+        return 1
+    fi
+    json="$(curl -fsSL --max-time 10 \
+        "https://api.github.com/repos/${owner}/${repo}/contents/${dir}?ref=${branch}" 2>/dev/null)" || return 1
+    printf '%s\n' "$json" \
+        | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]+\.tar\.xz"' \
+        | sed -E 's/.*"([^"]+)\.tar\.xz"$/\1/' \
+        | sort
+}
+
+# existing_repo_packages <pkg>...
+# Prints only the packages that exist in the sync databases. A single
+# renamed/removed package makes `pacman -S` abort the WHOLE transaction;
+# filtering first turns that into a warning and keeps the rest installable.
+existing_repo_packages() {
+    local p
+    for p in "$@"; do
+        if pacman -Si "$p" >/dev/null 2>&1; then
+            printf '%s\n' "$p"
+        else
+            warn "Package '$p' was not found in the repositories -- skipping it." >&2
+        fi
+    done
 }
 
 # ---------------- DIALOG SETUP ----------------
@@ -173,7 +251,7 @@ ask_yes() {
 # msg_box <title> <text>
 msg_box() {
     dlg --clear --title "$1" --no-collapse --cr-wrap \
-        --msgbox "$2" "$(_text_height "$2")" "$BOX_W"
+        --msgbox "$2" "$(_text_height "$2")" "$BOX_W" || true
 }
 
 # ask_text <varname> <title> <text> [initial]  -> returns 1 on cancel/ESC
