@@ -829,6 +829,17 @@ set_items \
 gauge_msg 52 "Configuring hostname, timezone, locales..."
 log "Configuring the new system (chroot)..."
 
+# Split the (already validated) KEYMAP list. /etc/vconsole.conf at RUNTIME
+# accepts only ONE keymap in KEYMAP=, with an optional second in
+# KEYMAP_TOGGLE=; the initramfs sd-vconsole hook, on the other hand,
+# accepts a comma-separated list -- which is why rd.vconsole.keymap=${KEYMAP}
+# below keeps the full string. Both variables are expanded by THIS (outer)
+# shell inside the unquoted chroot heredoc, so no \$ escaping is needed.
+IFS=, read -r -a _km_arr <<< "$KEYMAP"
+KEYMAP_PRIMARY="${_km_arr[0]}"
+KEYMAP_TOGGLE="${_km_arr[1]:-}"
+
+# --- CHROOT SCRIPT ---
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
@@ -853,22 +864,10 @@ done
 locale-gen
 
 echo "LANG=${LOCALE}" > /etc/locale.conf
-
-# /etc/vconsole.conf at RUNTIME accepts only ONE keymap in KEYMAP=;
-# the optional second one goes into KEYMAP_TOGGLE=. This is exactly the
-# form `localectl set-keymap <map> [<toggle>]` writes, and what the
-# runtime systemd-vconsole-setup.service expects (passing a comma-
-# separated list there makes it try to loadkeys "us,croat" and fail).
-# The initramfs sd-vconsole hook, on the other hand, DOES accept a
-# comma-separated list -- see rd.vconsole.keymap= in the GRUB cmdline
-# below, which keeps the full string on purpose.
-IFS=, read -r -a _km_conf <<< "${KEYMAP}"
-{
-    printf 'KEYMAP=%s\n' "${_km_conf[0]}"
-    if [[ "${#_km_conf[@]}" -ge 2 ]]; then
-        printf 'KEYMAP_TOGGLE=%s\n' "${_km_conf[-1]}"
-    fi
-} > /etc/vconsole.conf
+echo "KEYMAP=${KEYMAP_PRIMARY}" > /etc/vconsole.conf
+if [[ -n "${KEYMAP_TOGGLE}" ]]; then
+    echo "KEYMAP_TOGGLE=${KEYMAP_TOGGLE}" >> /etc/vconsole.conf
+fi
 
 mkdir -p /etc/profile.d
 echo "export LANGUAGE=${LOCALE%%.*}:${LOCALE%%_*}" > /etc/profile.d/locale.sh
