@@ -126,14 +126,12 @@ repo_list_archives() {
 }
 
 # existing_repo_packages <pkg>...
-# Prints only the names that exist in the sync databases -- EITHER as a
-# package (pacman -Si) OR as a group (pacman -Sg). This is important
-# because the "full" GNOME package set is just the group name "gnome",
-# and a group is not a package: `pacman -Si gnome` fails with "not
-# found" even though `pacman -S gnome` works fine. Without the group
-# check the filter silently dropped "gnome" from the DE package list,
-# and with it gdm -- so GNOME ended up installed without a display
-# manager and the system booted to a TTY login prompt.
+# Prints the names that exist in the sync databases -- EITHER as a package
+# (pacman -Si) OR as a group (pacman -Sg). The "full" GNOME package set is
+# just the group name "gnome", and a group is NOT a package: `pacman -Si
+# gnome` fails even though `pacman -S gnome` works. Without the group
+# check the filter silently dropped "gnome" from the DE list and, with it,
+# gdm -- so the system booted to a TTY login prompt instead of GDM.
 existing_repo_packages() {
     local p
     for p in "$@"; do
