@@ -497,6 +497,14 @@ gauge_msg 65 "Enabling $DM_SERVICE..."
 log "Enabling $DM_SERVICE..."
 systemctl enable "$DM_SERVICE"
 
+# Enabling a display manager only creates the symlink
+# /etc/systemd/system/display-manager.service + graphical.target.wants/…;
+# the DEFAULT target, however, is still multi-user.target, so
+# graphical.target (and thus the DM) is never reached and the machine
+# boots straight to a text console. Idempotent -- harmless if already set.
+log "Setting graphical.target as the default boot target..."
+systemctl set-default graphical.target
+
 # ---------------- GNOME: DARK THEME + SLATE ACCENT ----------------
 
 set_phase 3
