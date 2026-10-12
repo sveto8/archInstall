@@ -578,7 +578,7 @@ _phase_prompt() {
                 (( start > 0 )) && out+="        ..."$'\n'
                 for ((j=start; j<end; j++)); do
                     if (( j < CUR_IDX )); then
-                        out+="        [✓] ${CUR_ITEMS[j]}"$'\n'
+                        out+="        [x] ${CUR_ITEMS[j]}"$'\n'
                     elif (( j == CUR_IDX )); then
                         out+="        [>] ${CUR_ITEMS[j]}"$'\n'
                     else
