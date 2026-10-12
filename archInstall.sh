@@ -200,13 +200,59 @@ done
 
 _keymaps="$(localectl list-keymaps 2>/dev/null || true)"
 while true; do
-    ask_text KEYMAP "Console keymap" "Console keymap (for example us, croat, de-latin1):" "$KEYMAP" || abort
-    [[ -n "$KEYMAP" ]] || { msg_box "Keymap" "The keymap can't be empty."; continue; }
-    # If the list can't be read here, accept the value as typed.
-    [[ -z "$_keymaps" ]] && break
-    grep -qxF -- "$KEYMAP" <<< "$_keymaps" && break
-    msg_box "Unknown keymap" "'$KEYMAP' is not a known keymap (list: localectl list-keymaps)."
+    ask_text KEYMAP "Console keymap" \
+        "Console keymap(s). Use one name, or several separated by commas (or spaces).\n\nExamples:\n  us          -- US only\n  croat       -- Croatian only\n  us,croat    -- US + Croatian (stacked; the last one wins)\n\nList: localectl list-keymaps" \
+        "$KEYMAP" || abort
+
+    # Split the input on commas and/or whitespace, validate each name
+    # against the keymap list, and store the result back as a normalized
+    # comma-separated string -- the exact form vconsole.conf and
+    # rd.vconsole.keymap= both expect.
+    read -r -a _km_arr <<< "${KEYMAP//,/ }"
+    _km_ok=(); _km_bad=()
+    for _km in "${_km_arr[@]}"; do
+        [[ -n "$_km" ]] || continue
+        # If the keymap list can't be read (e.g. offline localectl), accept
+        # the names as typed.
+        if [[ -z "$_keymaps" ]] || grep -qxF -- "$_km" <<< "$_keymaps"; then
+            _km_ok+=("$_km")
+        else
+            _km_bad+=("$_km")
+        fi
+    done
+
+    if [[ "${#_km_ok[@]}" -eq 0 ]]; then
+        msg_box "Keymap" "No valid keymap given.\n\nList: localectl list-keymaps"
+        continue
+    fi
+    if [[ "${#_km_bad[@]}" -gt 0 ]]; then
+        msg_box "Unknown keymap" "Unknown keymap(s): ${_km_bad[*]}\n\nList: localectl list-keymaps"
+        continue
+    fi
+
+    # Join with commas: "us,croat" (no spaces -- that is what vconsole.conf
+    # and sd-vconsole in the initramfs parse).
+    KEYMAP="$(IFS=,; printf '%s' "${_km_ok[*]}")"
+    break
 done
+
+# ---------------- SYSTEM LANGUAGE (primary locale) ----------------
+#
+# The primary locale sets LANG in /etc/locale.conf. Both en_US.UTF-8 and
+# hr_HR.UTF-8 are always generated in /etc/locale.gen (see the LOCALES
+# array at the top of this script), so the user can switch later with
+# `localectl set-locale LANG=...` without regenerating anything.
+
+LOCALE="$(dlg_capture --title "System language" --default-item "$LOCALE" \
+    --menu "Which language should the system use by default (LANG in /etc/locale.conf)?" \
+    0 "$BOX_W" 0 \
+    en_US.UTF-8 "English (United States)" \
+    hr_HR.UTF-8 "Croatian (Hrvatska)")" || abort
+
+# Make sure the chosen locale is in the generated list (it already is by
+# default, but this keeps the invariant if the defaults are edited later).
+in_array "$LOCALE" "${LOCALES[@]}" || LOCALES+=("$LOCALE")
+LOCALES_STR="${LOCALES[*]}"
 
 # ---------------- USER ACCOUNT + PASSWORD (asked together) ----------------
 #
