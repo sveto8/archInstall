@@ -822,18 +822,12 @@ set_items \
 gauge_msg 52 "Configuring hostname, timezone, locales..."
 log "Configuring the new system (chroot)..."
 
-# Split the (already validated) KEYMAP list. Both /etc/vconsole.conf at
-# runtime (KEYMAP= / KEYMAP_TOGGLE=) and sd-vconsole in the initramfs
-# (rd.vconsole.keymap= / rd.vconsole.keymap_toggle=) accept ONE keymap per
-# parameter -- a comma-separated list makes them try to "loadkeys us,croat"
-# and fail with "Failed to start Virtual Console Setup". The two values
-# are expanded by THIS (outer) shell inside the unquoted chroot heredoc,
-# so no \$ escaping is needed.
-IFS=, read -r -a _km_arr <<< "$KEYMAP"
-
-# The GRUB kernel cmdline receives the two keymaps as SEPARATE parameters,
-# exactly like /etc/vconsole.conf does. Comma-separated would break
-# sd-vconsole in the initramfs.
+# The GRUB kernel cmdline receives the two keymaps as SEPARATE parameters
+# (rd.vconsole.keymap= / rd.vconsole.keymap_toggle=), exactly like
+# /etc/vconsole.conf does. A comma-separated list would make sd-vconsole
+# try "loadkeys us,croat" and fail with "Failed to start Virtual Console
+# Setup". Both values are expanded by THIS (outer) shell inside the
+# unquoted chroot heredoc, so no \$ escaping is needed.
 VCONSOLE_CMDLINE="rd.vconsole.keymap=${KEYMAP_PRIMARY}"
 [[ -z "$KEYMAP_TOGGLE" ]] || VCONSOLE_CMDLINE+=" rd.vconsole.keymap_toggle=${KEYMAP_TOGGLE}"
 
@@ -1108,8 +1102,11 @@ exec 1>&3
 exec 3>&-
 }
 
-# Taller gauge so the phase tree + sub-steps fit comfortably.
-GAUGE_HEIGHT=22
+# Taller gauge so the phase tree + sub-steps fit comfortably. Capped to
+# what the terminal can actually show; ui_init guarantees TERM_LINES >= 20.
+GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
+(( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
+(( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
 
 run_with_gauge "Installing Arch Linux" "$LOG_FILE" run_install
 
@@ -1123,11 +1120,20 @@ fi
 
 # ---------------- DONE ----------------
 
-DONE_TEXT="Arch Linux was installed successfully."
+# Summarize what was configured -- useful as a last check before reboot,
+# because the closing dialog is the only thing the user sees at this point
+# and the summary file from earlier is long gone.
+DONE_TEXT="Arch Linux was installed successfully.\n\n"
+DONE_TEXT+="  Language:  ${LOCALE}\n"
+DONE_TEXT+="  Formats:   ${FORMAT_LOCALE}\n"
+DONE_TEXT+="  Keymap:    ${KEYMAP_PRIMARY}"
+[[ -n "$KEYMAP_TOGGLE" ]] && DONE_TEXT+=" (toggle: ${KEYMAP_TOGGLE})"
+DONE_TEXT+="\n"
+
 if [[ -s "$DE_FAILED_FILE" ]]; then
     DONE_TEXT+="\n\nNOTE: the desktop environment install FAILED. The base system is fine -- after reboot run installDE.sh again."
 elif [[ -n "$DE_CHOICE" ]]; then
-    DONE_TEXT+="\n\nDesktop: $DE_LABEL (login screen appears after reboot)."
+    DONE_TEXT+="\nDesktop: $DE_LABEL (login screen appears after reboot)."
 fi
 if [[ "$WIFI_CARRY" != "yes" ]]; then
     DONE_TEXT+="\n\nNo Wi-Fi network was carried over. If you have no Ethernet, run 'nmtui' after reboot to connect."
