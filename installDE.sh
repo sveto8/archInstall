@@ -62,7 +62,12 @@ trap 'die "Failed at line $LINENO."' ERR
 # TARGET_USER, and no dialog is shown. Without them it asks via dialog.
 INTERACTIVE=1
 [[ -z "${ASSUME_YES:-}" ]] || INTERACTIVE=0
-
+# Optional, only used when installing GNOME. Empty means "don't touch
+# the current Formats setting". Set by archInstall.sh to the LC_TIME etc.
+# locale chosen in the "Regional formats" dialog; can also be set by hand
+# when running this script standalone:
+#   FORMAT_LOCALE=hr_HR.UTF-8 ./installDE.sh
+FORMAT_LOCALE="${FORMAT_LOCALE:-}"
 # ---------------- BASIC CHECKS ----------------
 
 if [[ $EUID -ne 0 ]]; then
