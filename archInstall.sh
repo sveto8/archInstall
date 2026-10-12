@@ -206,8 +206,8 @@ while true; do
 
     # Split the input on commas and/or whitespace, validate each name
     # against the keymap list, and store the result back as a normalized
-    # comma-separated string -- the exact form vconsole.conf and
-    # rd.vconsole.keymap= both expect.
+    # comma-separated string -- the canonical internal form (the split
+    # into primary + toggle happens further down, before the chroot).
     read -r -a _km_arr <<< "${KEYMAP//,/ }"
     _km_ok=(); _km_bad=()
     for _km in "${_km_arr[@]}"; do
@@ -230,8 +230,7 @@ while true; do
         continue
     fi
 
-    # Join with commas: "us,croat" (no spaces -- that is what vconsole.conf
-    # and sd-vconsole in the initramfs parse).
+    # Join with commas: "us,croat" (no spaces -- the canonical internal form).
     KEYMAP="$(IFS=,; printf '%s' "${_km_ok[*]}")"
     break
 done
@@ -829,15 +828,22 @@ set_items \
 gauge_msg 52 "Configuring hostname, timezone, locales..."
 log "Configuring the new system (chroot)..."
 
-# Split the (already validated) KEYMAP list. /etc/vconsole.conf at RUNTIME
-# accepts only ONE keymap in KEYMAP=, with an optional second in
-# KEYMAP_TOGGLE=; the initramfs sd-vconsole hook, on the other hand,
-# accepts a comma-separated list -- which is why rd.vconsole.keymap=${KEYMAP}
-# below keeps the full string. Both variables are expanded by THIS (outer)
-# shell inside the unquoted chroot heredoc, so no \$ escaping is needed.
+# Split the (already validated) KEYMAP list. Both /etc/vconsole.conf at
+# runtime (KEYMAP= / KEYMAP_TOGGLE=) and sd-vconsole in the initramfs
+# (rd.vconsole.keymap= / rd.vconsole.keymap_toggle=) accept ONE keymap per
+# parameter -- a comma-separated list makes them try to "loadkeys us,croat"
+# and fail with "Failed to start Virtual Console Setup". The two values
+# are expanded by THIS (outer) shell inside the unquoted chroot heredoc,
+# so no \$ escaping is needed.
 IFS=, read -r -a _km_arr <<< "$KEYMAP"
 KEYMAP_PRIMARY="${_km_arr[0]}"
 KEYMAP_TOGGLE="${_km_arr[1]:-}"
+
+# The GRUB kernel cmdline receives the two keymaps as SEPARATE parameters,
+# exactly like /etc/vconsole.conf does. Comma-separated would break
+# sd-vconsole in the initramfs.
+VCONSOLE_CMDLINE="rd.vconsole.keymap=${KEYMAP_PRIMARY}"
+[[ -z "$KEYMAP_TOGGLE" ]] || VCONSOLE_CMDLINE+=" rd.vconsole.keymap_toggle=${KEYMAP_TOGGLE}"
 
 # --- CHROOT SCRIPT ---
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
@@ -934,7 +940,7 @@ gauge_msg 74 "Installing GRUB for UEFI..."
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
-sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet rd.vconsole.keymap=${KEYMAP} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet ${VCONSOLE_CMDLINE} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
 grub-install --target=${GRUB_TARGET} --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
