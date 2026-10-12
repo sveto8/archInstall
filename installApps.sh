@@ -358,6 +358,10 @@ run_install() {
     _phase_prompt() {
         local i j n start end out=""
         for ((i=0; i<${#PHASE_NAMES[@]}; i++)); do
+            # Progress marker line -- see archInstall.sh for the rationale.
+            if (( i == CUR_PHASE && CUR_PHASE > 0 )); then
+                out+="$(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
+            fi
             if (( i < CUR_PHASE )); then
                 out+="  [x] ${PHASE_NAMES[i]}"$'\n'
             elif (( i == CUR_PHASE )); then
