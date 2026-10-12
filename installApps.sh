@@ -509,8 +509,11 @@ if ! sudo -n -v 2>/dev/null; then
     sudo -v || die "sudo access is required."
 fi
 
-# Taller gauge so the phase tree + sub-steps fit comfortably.
-GAUGE_HEIGHT=22
+# Taller gauge so the phase tree + sub-steps fit comfortably. Capped to
+# what the terminal can actually show; ui_init guarantees TERM_LINES >= 20.
+GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
+(( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
+(( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
 
 run_with_gauge "Installing applications" "$LOG_FILE" run_install
 
