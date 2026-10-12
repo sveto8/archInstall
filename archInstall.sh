@@ -853,7 +853,22 @@ done
 locale-gen
 
 echo "LANG=${LOCALE}" > /etc/locale.conf
-echo "KEYMAP=${KEYMAP}" > /etc/vconsole.conf
+
+# /etc/vconsole.conf at RUNTIME accepts only ONE keymap in KEYMAP=;
+# the optional second one goes into KEYMAP_TOGGLE=. This is exactly the
+# form `localectl set-keymap <map> [<toggle>]` writes, and what the
+# runtime systemd-vconsole-setup.service expects (passing a comma-
+# separated list there makes it try to loadkeys "us,croat" and fail).
+# The initramfs sd-vconsole hook, on the other hand, DOES accept a
+# comma-separated list -- see rd.vconsole.keymap= in the GRUB cmdline
+# below, which keeps the full string on purpose.
+IFS=, read -r -a _km_conf <<< "${KEYMAP}"
+{
+    printf 'KEYMAP=%s\n' "${_km_conf[0]}"
+    if [[ "${#_km_conf[@]}" -ge 2 ]]; then
+        printf 'KEYMAP_TOGGLE=%s\n' "${_km_conf[-1]}"
+    fi
+} > /etc/vconsole.conf
 
 mkdir -p /etc/profile.d
 echo "export LANGUAGE=${LOCALE%%.*}:${LOCALE%%_*}" > /etc/profile.d/locale.sh
