@@ -351,7 +351,7 @@ _phase_prompt() {
         fi
 
         if (( i < CURRENT_PHASE )); then
-            out+="  [✓] ${PHASES[i]}"$'\n'
+            out+="  [x] ${PHASES[i]}"$'\n'
         elif (( i == CURRENT_PHASE )); then
             out+="  [>] ${PHASES[i]}"$'\n'
         else
