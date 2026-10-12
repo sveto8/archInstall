@@ -589,6 +589,14 @@ sort-directories-first=true
 [org/gnome/shell]
 always-show-log-out=true
 DCONF_EOF
+        # Regional formats: separate from the UI language. Setting this
+        # makes GNOME show dates/numbers/currency in the chosen locale
+        # while the interface stays in the language set for LANG.
+        if [[ -n "$FORMAT_LOCALE" ]]; then
+            printf '\n[org/gnome/system/locale]\nregion=%s\n' "'${FORMAT_LOCALE}'" \
+                >> /etc/dconf/db/local.d/00-arch-defaults
+        fi
+        
         if command -v dconf >/dev/null 2>&1; then
             dconf update || warn "dconf update failed -- GNOME defaults may not apply."
             info "GNOME defaults installed system-wide (dark theme, slate accent, Reversal icons, cursor theme)."
@@ -630,6 +638,13 @@ DCONF_EOF
         runuser -u "$TARGET_USER" -- dbus-run-session -- \
             gsettings set org.gnome.desktop.interface cursor-theme 'DeppinDark-cursors' \
             || warn "Could not set GNOME cursor-theme to DeppinDark-cursors."
+        # Regional formats (independent of the UI language). Same setting
+        # GNOME exposes as Settings -> Region & Language -> Formats.
+        if [[ -n "$FORMAT_LOCALE" ]]; then
+            runuser -u "$TARGET_USER" -- dbus-run-session -- \
+                gsettings set org.gnome.system.locale region "$FORMAT_LOCALE" \
+                || warn "Could not set GNOME regional formats to $FORMAT_LOCALE."
+        fi
         info "GNOME dark theme + slate accent set (applies on first login)."
     else
         warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
