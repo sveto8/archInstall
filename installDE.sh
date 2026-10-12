@@ -85,11 +85,6 @@ if (( INTERACTIVE )); then
     ui_init
 fi
 
-# True when running inside a chroot (no running systemd, no session bus).
-in_chroot() {
-    [[ "${INSTALL_IN_CHROOT:-0}" == "1" ]] || systemd-detect-virt --chroot --quiet 2>/dev/null
-}
-
 # ---------------- TARGET USER ----------------
 #
 # Desktop-specific defaults (GNOME dark theme, etc.) get applied to a
@@ -657,6 +652,81 @@ DCONF_EOF
     fi
 fi
 
+# ---------------- KDE: BREEZE DARK + REGIONAL FORMATS ----------------
+#
+# Written as the target user's own config so KDE reads them on first
+# login. Two files:
+#
+#   ~/.config/kdeglobals         -- Breeze Dark as the default look & feel
+#   ~/.config/plasma-localerc    -- regional formats (dates/numbers/...)
+#                                   independent of the UI language
+#
+# The files are created with the target user's ownership -- KDE refuses
+# to read a user config file that is owned by root, which is why the
+# plain "> file" redirect as root would not have worked.
+
+if [[ "$DE_CHOICE" == "2" ]]; then
+    gauge_msg 75 "Setting KDE defaults (Breeze Dark, formats)..."
+    log "Configuring KDE defaults for $TARGET_USER..."
+
+    _kde_config_dir="${TARGET_HOME}/.config"
+    install -d -m 755 -o "$TARGET_USER" -g "$TARGET_USER" "$_kde_config_dir"
+
+    # Breeze Dark. Both keys are set: [KDE] LookAndFeelPackage is the
+    # modern setting (Plasma 5.24+ / Plasma 6) and covers the whole desktop
+    # (colours, widget style, splash, wallpaper); [General] ColorScheme is
+    # the older fallback that still works for GTK/Toolkit apps. If a
+    # kdeglobals already exists (shouldn't on a fresh install, but a re-run
+    # of installDE.sh must stay idempotent), our block is merged in place
+    # instead of overwriting other keys.
+    _kdeglobals="${_kde_config_dir}/kdeglobals"
+    touch "$_kdeglobals"
+
+    if ! grep -q '^\[KDE\]' "$_kdeglobals"; then
+        printf '\n[KDE]\n' >> "$_kdeglobals"
+    fi
+    if grep -q '^LookAndFeelPackage=' "$_kdeglobals"; then
+        sed -i 's|^LookAndFeelPackage=.*|LookAndFeelPackage=org.kde.breezedark.desktop|' "$_kdeglobals"
+    else
+        sed -i '/^\[KDE\]/a LookAndFeelPackage=org.kde.breezedark.desktop' "$_kdeglobals"
+    fi
+
+    if ! grep -q '^\[General\]' "$_kdeglobals"; then
+        printf '[General]\n' >> "$_kdeglobals"
+    fi
+    if grep -q '^ColorScheme=' "$_kdeglobals"; then
+        sed -i 's|^ColorScheme=.*|ColorScheme=BreezeDark|' "$_kdeglobals"
+    else
+        sed -i '/^\[General\]/a ColorScheme=BreezeDark' "$_kdeglobals"
+    fi
+    chown "$TARGET_USER:$TARGET_USER" "$_kdeglobals"
+
+    # Regional formats. KDE reads these from plasma-localerc and applies
+    # them independently of the interface language (the same separation
+    # GNOME exposes as Region & Language -> Formats).
+    if [[ -n "$FORMAT_LOCALE" ]]; then
+        cat > "${_kde_config_dir}/plasma-localerc" <<PLASMA_LOCALERC_EOF
+[Formats]
+LANG=${FORMAT_LOCALE}
+
+[Translations]
+LANGUAGE=${LOCALE%%.*}
+PLASMA_LOCALERC_EOF
+        chown "$TARGET_USER:$TARGET_USER" "${_kde_config_dir}/plasma-localerc"
+        info "KDE Breeze Dark + regional formats ($FORMAT_LOCALE) set for $TARGET_USER."
+    else
+        info "KDE Breeze Dark set for $TARGET_USER."
+    fi
+fi
+
+# ---------------- XFCE: REGIONAL FORMATS + 24H CLOCK ----------------
+#
+# XFCE inherits LC_TIME from the session, so with LC_TIME=hr_HR.UTF-8 in
+# /etc/locale.conf the panel clock renders dd.mm.yyyy and 24h time
+# automatically after login. There is nothing else to set on the chroot
+# side. If a user later wants a different format, XFCE Panel -> Clock
+# properties allows it per-panel -- not something this script should force.
+
 # ---------------- BLUETOOTH (GNOME, full KDE) ----------------
 
 if [[ "$DE_CHOICE" == "1" || ( "$DE_CHOICE" == "2" && "$INSTALL_MODE" == "full" ) ]]; then
@@ -735,6 +805,9 @@ echo "Log out and back in (or reboot) to get to the $DM_SERVICE login screen."
 if [[ "$DE_CHOICE" == "1" ]]; then
     echo "GNOME dark theme was pre-set -- it should already be dark on first login."
 fi
+if [[ "$DE_CHOICE" == "2" ]]; then
+    echo "KDE Breeze Dark was pre-set -- it should already be applied on first login."
+fi
 if [[ "$DE_CHOICE" == "3" ]]; then
     echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen looks"
     echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
@@ -754,7 +827,18 @@ if (( INTERACTIVE )); then
         msg_box "Installation FAILED" "The desktop environment install did not finish.\n\nSee the log for details:\n  $LOG_FILE"
         exit 1
     fi
-    msg_box "Desktop installed" "$DE_NAME was installed.\n\nLog out and back in (or reboot) to reach the $DM_SERVICE login screen."
+
+    # Show accumulated warnings in the final dialog so "theme failed to
+    # download", "package skipped" etc. don't get lost in the log file.
+    _warn_tail=""
+    if [[ "${#WARN_LIST[@]}" -gt 0 ]]; then
+        _warn_tail="\n\nWarnings:\n"
+        for _w in "${WARN_LIST[@]}"; do
+            _warn_tail+="  [!] $_w\n"
+        done
+    fi
+
+    msg_box "Desktop installed" "$DE_NAME was installed.${_warn_tail}\n\nLog out and back in (or reboot) to reach the $DM_SERVICE login screen."
 else
     run_de_install
 fi
