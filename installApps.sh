@@ -124,16 +124,36 @@ SUDOERS_DROPIN="/etc/sudoers.d/99-installer-timestamp"
 SUDOERS_DROPIN_CREATED=0
 
 if [[ ! -e "$SUDOERS_DROPIN" ]]; then
-    # Create via a root-owned temp file and `install -m 0440`, which is
-    # more robust than `sudo tee` followed by `sudo chmod` -- a failure
-    # between the two steps would otherwise leave a world-readable (or
-    # worse, world-writable) file in /etc/sudoers.d/.
+    # Two Defaults lines, both important:
+    #
+    #   timestamp_timeout=120
+    #       Lifts sudo's cache from the default 15 minutes to 2 hours,
+    #       long enough for any AUR build.
+    #
+    #   timestamp_type=global
+    #       Arch's default is timestamp_type=tty: sudo remembers the
+    #       timestamp *per terminal*. yay and makepkg spawn their own
+    #       subshells for the sudo call, and those subshells can look
+    #       like a different terminal context to sudo, so the cached
+    #       timestamp is not found and sudo falls back to asking for a
+    #       password -- even though our keepalive has been refreshing
+    #       it all along. Setting this to "global" keeps one timestamp
+    #       for the user across every terminal and every subshell,
+    #       which is exactly what a scripted, unattended install needs.
     _dropin_tmp="$(mktemp)"
-    printf 'Defaults timestamp_timeout=120\n' > "$_dropin_tmp"
+    {
+        printf 'Defaults timestamp_timeout=120\n'
+        printf 'Defaults timestamp_type=global\n'
+    } > "$_dropin_tmp"
+
+    # Create via `install -m 0440 -o root -g root`, which is atomic and
+    # sets ownership and mode in one step -- a failure between a plain
+    # `sudo tee` and a following `sudo chmod` would otherwise leave a
+    # world-readable file in /etc/sudoers.d/.
     if sudo install -m 0440 -o root -g root "$_dropin_tmp" "$SUDOERS_DROPIN" 2>/dev/null \
        && sudo visudo -cf "$SUDOERS_DROPIN" >/dev/null 2>&1; then
         SUDOERS_DROPIN_CREATED=1
-        info "Extended sudo timeout to 120 minutes (drop-in installed)."
+        info "Extended sudo timeout to 120 minutes (timestamp_type=global)."
     else
         sudo rm -f "$SUDOERS_DROPIN" 2>/dev/null || true
         warn "Could not install sudoers drop-in -- relying on the keepalive only."
@@ -143,21 +163,23 @@ else
     info "Existing sudoers drop-in found at $SUDOERS_DROPIN."
 fi
 
-# Invalidate the old timestamp and create a fresh one under the new
-# timeout. This is what actually makes the 120-minute window start now.
-# If `sudo -k` cannot invalidate (rare), we still try a plain refresh.
-sudo -k 2>/dev/null || true
-if ! sudo -n -v 2>/dev/null; then
-    # Either the drop-in did not take, or `sudo -k` cleared a timestamp
-    # that `-n` refuses to recreate. Fall back to a single interactive
-    # prompt -- it is the last one the user will see for this run.
+# Refresh the timestamp WITHOUT prompting: the initial `sudo -v` at the
+# top of the script already created a valid timestamp, and sudo extends
+# it on each `-v` call. No `sudo -k` here -- that would delete the
+# timestamp and force another interactive prompt, which is exactly the
+# "two prompts" behaviour we are trying to avoid.
+sudo -v 2>/dev/null || {
+    # Extremely rare: the initial `sudo -v` succeeded but this one fails,
+    # e.g. because sudoers was just rewritten in a way that invalidates
+    # the cached credentials. Ask once more; this is the last prompt.
     log "Refreshing sudo timestamp (one prompt, then covered by the keepalive)..."
     sudo -v || die "sudo access is required."
-fi
+}
 
-# Aggressive keepalive: refresh every 15 s. If it ever fails, print a
-# loud message to stderr so the user actually notices -- writing only to
-# the log file would hide the warning behind the dialog.
+# Keepalive: refresh every 15 s. With timestamp_type=global this works
+# regardless of which subshell the next sudo call comes from. If it ever
+# fails, print a loud message to stderr so the user notices -- writing
+# only to the log file would hide the warning behind the dialog.
 (
     while kill -0 "$$" 2>/dev/null; do
         sleep 15
