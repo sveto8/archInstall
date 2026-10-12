@@ -262,6 +262,26 @@ LOCALE="$(dlg_capture --title "System language" --default-item "$LOCALE" \
 in_array "$LOCALE" "${LOCALES[@]}" || LOCALES+=("$LOCALE")
 LOCALES_STR="${LOCALES[*]}"
 
+# ---------------- REGIONAL FORMATS ----------------
+#
+# Independent of the interface language above. Controls how dates, times,
+# numbers and currency are displayed -- GNOME exposes this as
+# Settings -> Region & Language -> Formats (backed by the gsettings key
+# org.gnome.system.locale region), and for CLI tools the same effect is
+# achieved through LC_TIME, LC_NUMERIC, LC_MONETARY, LC_MEASUREMENT and
+# LC_PAPER in /etc/locale.conf. Both are written below.
+
+FORMAT_LOCALE="$(dlg_capture --title "Regional formats" --default-item "$LOCALE" \
+    --menu "How should dates, numbers, times and currency be formatted?\n\nThis is independent of the interface language." \
+    0 "$BOX_W" 0 \
+    "$LOCALE"        "Same as the interface language (${LOCALE})" \
+    hr_HR.UTF-8      "Croatian -- dd.mm.yyyy, 1.234,56, EUR" \
+    en_US.UTF-8      "English US -- mm/dd/yyyy, 1,234.56, \$" \
+    de_DE.UTF-8      "German -- dd.mm.yyyy, 1.234,56, EUR")" || abort
+
+in_array "$FORMAT_LOCALE" "${LOCALES[@]}" || LOCALES+=("$FORMAT_LOCALE")
+LOCALES_STR="${LOCALES[*]}"
+
 # ---------------- USER ACCOUNT + PASSWORD ----------------
 
 NEW_USERNAME=""
