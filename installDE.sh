@@ -719,29 +719,37 @@ PLASMA_LOCALERC_EOF
     fi
 fi
 
-# ---------------- XFCE: ADWAITA-DARK + REGIONAL FORMATS ----------------
+# ---------------- XFCE: ADWAITA-DARK + PANEL CLOCK ----------------
 #
-# XFCE has no "apply these settings as a default for a new user" mechanism
-# that works from a chroot without a running session bus, so the settings
-# are written as the target user's own xfconf channel files. XFCE reads
-# them on first login and applies them without any extra step.
+# XFCE has no "apply these settings for a new user" mechanism that works
+# from a chroot without a running session bus, so the settings are written
+# as the target user's own xfconf channel files. XFCE reads them on first
+# login and applies them without any extra step.
 #
-#   ~/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
-#       -> GTK theme (Adwaita-dark) + Adwaita icons/cursor
-#   ~/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
-#       -> window manager theme. "Default" follows the GTK color scheme
-#          on XFCE 4.16+, so with Adwaita-dark set above the title bars
-#          come up dark as well.
+# Three files under ~/.config/xfce4/xfconf/xfce-perchannel-xml/:
+#
+#   xsettings.xml     -> GTK theme (Adwaita-dark) + Adwaita icons/cursor
+#   xfwm4.xml         -> window manager theme. "Default" follows the GTK
+#                        color scheme on XFCE 4.16+, so with Adwaita-dark
+#                        set above the title bars come up dark as well.
+#   xfce4-panel.xml   -> the panel layout, including the clock plugin
+#                        configured as "Time, then date" with a 24-hour
+#                        time (%H:%M) and a "12 lis 2026"-style date
+#                        (%d %b %Y).
+#
+# The panel file uses our own plugin IDs (1..7). XFCE accepts them as the
+# initial configuration -- it doesn't need the IDs to match some built-in
+# scheme, it just reads whatever is in the file. This is the only way to
+# preconfigure a clock plugin, because XFCE otherwise assigns the IDs at
+# first login and we'd have no way to target the right one.
 #
 # Adwaita-dark ships inside the gtk3 package (XFCE pulls gtk3 in as a
-# dependency), so no extra package is needed.
-#
-# Regional formats are handled at the system level via LC_TIME in
-# /etc/locale.conf -- XFCE inherits it from the session, so the panel
-# clock shows dd.mm.yyyy and 24h time automatically.
+# dependency), so no extra package is needed. Regional formats are handled
+# at the system level via LC_TIME in /etc/locale.conf -- XFCE inherits it,
+# so the date string renders in Croatian once hr_HR.UTF-8 is the LC_TIME.
 
 if [[ "$DE_CHOICE" == "3" ]]; then
-    gauge_msg 75 "Setting XFCE defaults (Adwaita-dark)..."
+    gauge_msg 75 "Setting XFCE defaults (Adwaita-dark, panel clock)..."
     log "Configuring XFCE defaults for $TARGET_USER..."
 
     _xfce_conf_dir="${TARGET_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml"
@@ -776,12 +784,61 @@ XSETTINGS_EOF
 </channel>
 XFWM4_EOF
 
+    cat > "${_xfce_conf_dir}/xfce4-panel.xml" <<'PANEL_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xfce4-panel" version="1.0">
+  <property name="configver" type="int" value="2"/>
+  <property name="panels" type="array">
+    <value type="int" value="1"/>
+    <property name="panel-1" type="empty">
+      <property name="position" type="string" value="p=6;x=0;y=0"/>
+      <property name="length" type="uint" value="100"/>
+      <property name="position-locked" type="bool" value="true"/>
+      <property name="size" type="uint" value="30"/>
+      <property name="plugin-ids" type="array">
+        <value type="int" value="1"/>
+        <value type="int" value="2"/>
+        <value type="int" value="3"/>
+        <value type="int" value="4"/>
+        <value type="int" value="5"/>
+        <value type="int" value="6"/>
+        <value type="int" value="7"/>
+      </property>
+    </property>
+  </property>
+  <property name="plugins" type="empty">
+    <property name="plugin-1" type="string" value="applicationsmenu"/>
+    <property name="plugin-2" type="string" value="launcher">
+      <property name="items" type="array"/>
+    </property>
+    <property name="plugin-3" type="string" value="tasklist">
+      <property name="grouping" type="uint" value="1"/>
+      <property name="show-labels" type="bool" value="false"/>
+    </property>
+    <property name="plugin-4" type="string" value="separator">
+      <property name="expand" type="bool" value="true"/>
+      <property name="style" type="uint" value="0"/>
+    </property>
+    <property name="plugin-5" type="string" value="systray">
+      <property name="known-legacy-items" type="array"/>
+    </property>
+    <property name="plugin-6" type="string" value="clock">
+      <property name="digital-layout" type="uint" value="3"/>
+      <property name="digital-time-format" type="string" value="%H:%M"/>
+      <property name="digital-date-format" type="string" value="%d %b %Y"/>
+    </property>
+    <property name="plugin-7" type="string" value="showdesktop"/>
+  </property>
+</channel>
+PANEL_EOF
+
     chown "$TARGET_USER:$TARGET_USER" \
         "${_xfce_conf_dir}/xsettings.xml" \
-        "${_xfce_conf_dir}/xfwm4.xml"
-    info "XFCE Adwaita-dark GTK theme + Adwaita icons set for $TARGET_USER."
+        "${_xfce_conf_dir}/xfwm4.xml" \
+        "${_xfce_conf_dir}/xfce4-panel.xml"
+    info "XFCE Adwaita-dark theme + 24h clock panel set for $TARGET_USER."
 fi
-
 # ---------------- BLUETOOTH (GNOME, full KDE) ----------------
 
 if [[ "$DE_CHOICE" == "1" || ( "$DE_CHOICE" == "2" && "$INSTALL_MODE" == "full" ) ]]; then
@@ -864,8 +921,10 @@ if [[ "$DE_CHOICE" == "2" ]]; then
     echo "KDE Breeze Dark was pre-set -- it should already be applied on first login."
 fi
 if [[ "$DE_CHOICE" == "3" ]]; then
-    echo "XFCE Adwaita-dark theme was pre-set -- it should already be applied"
-    echo "on first login (both GTK apps and window decorations)."
+    echo "XFCE defaults were pre-set for first login:"
+    echo "  - Adwaita-dark GTK theme + Adwaita icons/cursor"
+    echo "  - Dark window decorations (Default xfwm4 follows the GTK scheme)"
+    echo "  - Panel clock: Time then Date, 24h (%H:%M), date '%d %b %Y'"
     echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen"
     echo "looks wrong, check /etc/lightdm/lightdm.conf's [Seat:*] line."
 fi
