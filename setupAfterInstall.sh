@@ -561,6 +561,10 @@ local WIN=5
 _phase_prompt() {
     local i j n start end out=""
     for ((i=0; i<${#PHASES[@]}; i++)); do
+        # Progress marker line -- see archInstall.sh for the rationale.
+        if (( i == CURRENT_PHASE && CURRENT_PHASE > 0 )); then
+            out+="$(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
+        fi    
         if (( i < CURRENT_PHASE )); then
             out+="  [x] ${PHASES[i]}"$'\n'
         elif (( i == CURRENT_PHASE )); then
