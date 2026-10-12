@@ -470,6 +470,7 @@ $(lsblk -l -o NAME,SIZE,FSTYPE,LABEL "$DEVICE")
   Hostname:       $NEW_HOSTNAME
   Timezone:       $TIMEZONE
   Locale:         $LOCALE  (generated: $LOCALES_STR)
+  Formats:        $FORMAT_LOCALE
   Keymap:         $KEYMAP
   Btrfs options:  $MOUNT_OPTS
   Microcode:      ${UCODE_PKG:-none detected}
@@ -860,7 +861,19 @@ done
 
 locale-gen
 
-echo "LANG=${LOCALE}" > /etc/locale.conf
+# Interface language vs regional formats are separate settings. LANG is
+# the UI language; the LC_* variables below control how dates, numbers,
+# currency and measurements are displayed. Anything not listed falls
+# back to LANG.
+{
+    printf 'LANG=%s\n'           "${LOCALE}"
+    printf 'LC_TIME=%s\n'        "${FORMAT_LOCALE}"
+    printf 'LC_NUMERIC=%s\n'     "${FORMAT_LOCALE}"
+    printf 'LC_MONETARY=%s\n'    "${FORMAT_LOCALE}"
+    printf 'LC_MEASUREMENT=%s\n' "${FORMAT_LOCALE}"
+    printf 'LC_PAPER=%s\n'       "${FORMAT_LOCALE}"
+} > /etc/locale.conf
+
 echo "KEYMAP=${KEYMAP_PRIMARY}" > /etc/vconsole.conf
 if [[ -n "${KEYMAP_TOGGLE}" ]]; then
     echo "KEYMAP_TOGGLE=${KEYMAP_TOGGLE}" >> /etc/vconsole.conf
@@ -976,6 +989,7 @@ if [[ -n "$DE_CHOICE" ]]; then
         mkfifo "$_de_fifo"
         arch-chroot /mnt env DE_CHOICE="$DE_CHOICE" INSTALL_MODE="$DE_MODE" \
                 TARGET_USER="$NEW_USERNAME" ASSUME_YES=1 INSTALL_IN_CHROOT=1 \
+                FORMAT_LOCALE="$FORMAT_LOCALE" \
                 /root/arch-setup-tmp/installDE.sh > "$_de_fifo" 2>&1 &
         _de_pid=$!
 
