@@ -26,14 +26,14 @@ BACKTITLE="Arch Linux: application install"
 # script instead of scattering files around $HOME; running it from the
 # installed system (/archInstall/scripts/, owned by root) still falls
 # back to $HOME because SCRIPT_DIR is not writable.
-SCRIPT_DIR_EARLY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -w "$SCRIPT_DIR_EARLY" ]]; then
-    LOG_FILE="${SCRIPT_DIR_EARLY}/installApps.log"
+_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -w "$_script_dir" ]]; then
+    LOG_FILE="${_script_dir}/installApps.log"
 else
     LOG_FILE="${HOME}/installApps.log"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$_script_dir"
 _repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     # Download to a temporary file FIRST (never write a partial file
@@ -383,7 +383,7 @@ exec 1>>"$LOG_FILE"
                 out+="$(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
             fi
             if (( i < CUR_PHASE )); then
-                out+=" [x] ${PHASE_NAMES[i]}"$'\n'
+                out+="  [x] ${PHASE_NAMES[i]}"$'\n'
             elif (( i == CUR_PHASE )); then
                 out+="  [>] ${PHASE_NAMES[i]}"$'\n'
                 n=${#CUR_ITEMS[@]}
