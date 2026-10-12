@@ -70,11 +70,11 @@ ENABLE_BTRFS_QUOTA="yes"
 # optical media are skipped), everything os-prober finds, or none.
 ENABLE_OS_PROBER="yes"
 
-# Plymouth themes base URL (your GitHub repo)
-PLYMOUTH_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main/plymouth-themes"
-
-# List of available Plymouth themes (names of .tar.xz archives without extension)
-# Add/remove themes as you have in your repo.
+# Fallback lists of the theme archives in the repo (names of the .tar.xz
+# files without extension). They are used ONLY when the repo folder can't be
+# listed (offline, GitHub API rate limit); normally the menus are built from
+# what really is in grub-themes/ and plymouth-themes/ on GitHub, so adding a
+# theme to the repo is all it takes -- no script edit.
 PLYMOUTH_THEMES=(
     "cuts_alt"
     "hud_3"
@@ -95,8 +95,11 @@ GRUB_BOOTLOADER_ID="Arch Linux"
 # can safely reference it.
 GRUB_DEFAULT_FILE="/etc/default/grub"
 
-# GRUB theme is chosen interactively later (menu: Xenlism-Arch / arch-linux
-# / poly-dark / none), not hardcoded here.
+GRUB_THEMES=(
+    "Xenlism-Arch"
+    "arch-linux"
+    "poly-dark"
+)
 
 # Some GRUB versions (2.12+) auto-add a menuentry for every UEFI "Boot####"
 # variable in NVRAM -- "UiApp", "UEFI VBOX CD-ROM", "UEFI VBOX HARDDISK",
@@ -108,6 +111,7 @@ GRUB_DEFAULT_FILE="/etc/default/grub"
 STRIP_EFI_BOOTNEXT_ENTRIES="yes"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     # Download to a temporary file FIRST (never write a partial file
     # directly next to the script -- the folder may be a read-only or
@@ -119,7 +123,7 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
         exit 1
     }
     _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
-        "https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh" 2>/dev/null || true)"
+        "${_repo_url}/lib.sh" 2>/dev/null || true)"
     if [[ -s "$_lib_tmp" ]]; then
         if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
             :
@@ -132,7 +136,7 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     else
         rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
-        echo "       URL: https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh (HTTP ${_code:-000})" >&2
+        echo "       URL: ${_repo_url}/lib.sh (HTTP ${_code:-000})" >&2
         echo "       Put lib.sh in the same folder as this script and run it again." >&2
         exit 1
     fi
@@ -140,10 +144,13 @@ fi
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 
+# Theme archives live next to the scripts in the same repository.
+PLYMOUTH_THEMES_BASE_URL="${REPO_RAW_URL}/plymouth-themes"
+GRUB_THEMES_BASE_URL="${REPO_RAW_URL}/grub-themes"
+
 BACKTITLE="Arch Linux installer -- Btrfs / Snapper / GRUB"
 LOG_FILE="/root/setupAfterInstall.log"
 
-SCRIPT_NAME="$(basename "$0")"
 BACKUP_DIR="/root/btrfs-setup-backups/$(date +%Y%m%d-%H%M%S)"
 PLYMOUTH_TMP="/tmp/plymouth-theme-$$"
 PLYMOUTH_OK=0   # 0 = not installed / failed, 1 = success
@@ -177,8 +184,11 @@ set_grub_option() {
     local key="$1"
     local value="$2"
     local file="$3"
-    # Escape '&' so sed doesn't interpret it as "the matched text"
-    local escaped_value="${value//&/\\&}"
+    # Escape what sed treats specially in the replacement: '\', '&' (= the
+    # matched text) and the '|' delimiter used below.
+    local escaped_value="${value//\\/\\\\}"
+    escaped_value="${escaped_value//&/\\&}"
+    escaped_value="${escaped_value//|/\\|}"
 
     if grep -qE "^#?[[:space:]]*${key}=" "$file"; then
         sed -i -E "s|^#?[[:space:]]*${key}=.*|${key}=${escaped_value}|" "$file"
@@ -201,14 +211,14 @@ set_grub_option() {
 # Prints "UUID@/dev/part" for every filesystem on a removable (RM=1) or
 # USB-attached (TRAN=usb) disk, including optical drives.
 external_skip_list() {
-    local disk rm tran part uuid out=()
+    local disk rm tran part uuid skip_out=()
     while read -r disk rm tran; do
         [[ "$rm" == "1" || "$tran" == "usb" ]] || continue
         while read -r part uuid; do
-            [[ -n "$uuid" ]] && out+=("${uuid}@/dev/${part}")
+            [[ -n "$uuid" ]] && skip_out+=("${uuid}@/dev/${part}")
         done < <(lsblk -rno NAME,UUID "/dev/${disk}" | awk 'NF==2')
     done < <(lsblk -dno NAME,RM,TRAN | awk '{print $1, $2, ($3 == "" ? "-" : $3)}')
-    echo "${out[*]:-}"
+    echo "${skip_out[*]:-}"
 }
 
 # True if the given partition (/dev/...) sits on a removable/USB disk.
@@ -359,9 +369,18 @@ fi
 LUKS_UUID="$(cryptsetup luksUUID "$LUKS_DEVICE")"
 ROOT_BTRFS_UUID="$(findmnt -n -o UUID /)"
 
+# Name of the opened LUKS mapping and the subvolume / is mounted from --
+# taken from the running system instead of assuming "cryptroot" and "@".
+CRYPT_NAME="${MAPPER_NAME:-cryptroot}"
+ROOT_SUBVOL="$(findmnt -n -o OPTIONS / | tr ',' '\n' | sed -n 's/^subvol=//p' | head -n1)"
+ROOT_SUBVOL="${ROOT_SUBVOL#/}"
+[[ -n "$ROOT_SUBVOL" ]] || ROOT_SUBVOL="@"
+
 info "LUKS device: $LUKS_DEVICE"
 info "LUKS UUID:   $LUKS_UUID"
 info "Btrfs UUID:  $ROOT_BTRFS_UUID"
+info "Mapper name: $CRYPT_NAME"
+info "Root subvol: $ROOT_SUBVOL"
 
 # ---------------- CPU VENDOR / MICROCODE ----------------
 
@@ -377,17 +396,32 @@ info "Microcode:  ${UCODE_PKG:-none detected}"
 
 # ---------------- GRUB THEME ----------------
 
-GRUB_THEMES_BASE_URL="https://raw.githubusercontent.com/sveto8/archInstall/main/grub-themes"
+# Prefer the archives that really are in the repo's grub-themes/ folder.
+mapfile -t _remote_themes < <(repo_list_archives grub-themes || true)
+if [[ "${#_remote_themes[@]}" -gt 0 ]]; then
+    GRUB_THEMES=("${_remote_themes[@]}")
+else
+    info "Could not list grub-themes/ in the repo -- using the built-in theme list."
+fi
+
+GRUB_ITEMS=(none "None / skip (plain GRUB menu)")
+for theme in "${GRUB_THEMES[@]}"; do
+    GRUB_ITEMS+=("$theme" "$theme")
+done
 
 GRUB_THEME_NAME="$(dlg_capture --title "GRUB theme" --default-item none \
     --menu "Choose a theme for the GRUB boot menu." 0 "$BOX_W" 0 \
-    none         "None / skip (plain GRUB menu)" \
-    Xenlism-Arch "Xenlism-Arch" \
-    arch-linux   "arch-linux" \
-    poly-dark    "poly-dark")" || abort
+    "${GRUB_ITEMS[@]}")" || abort
 [[ "$GRUB_THEME_NAME" != "none" ]] || GRUB_THEME_NAME=""
 
 # ---------------- PLYMOUTH THEME ----------------
+
+mapfile -t _remote_themes < <(repo_list_archives plymouth-themes || true)
+if [[ "${#_remote_themes[@]}" -gt 0 ]]; then
+    PLYMOUTH_THEMES=("${_remote_themes[@]}")
+else
+    info "Could not list plymouth-themes/ in the repo -- using the built-in theme list."
+fi
 
 PLY_ITEMS=(none "None / skip (no boot splash)")
 for theme in "${PLYMOUTH_THEMES[@]}"; do
@@ -425,6 +459,8 @@ printf '%s\n' "============================================================"
 printf '%s\n' "LUKS device : $LUKS_DEVICE"
 printf '%s\n' "LUKS UUID   : $LUKS_UUID"
 printf '%s\n' "Btrfs UUID  : $ROOT_BTRFS_UUID"
+printf '%s\n' "Mapper name : $CRYPT_NAME"
+printf '%s\n' "Root subvol : $ROOT_SUBVOL"
 printf '%s\n' "Root        : $ROOT_SOURCE"
 printf '%s\n' "Snapshots   : $SNAP_SOURCE"
 printf '%s\n' "Boot        : $(findmnt -n -o SOURCE /boot)"
@@ -598,8 +634,8 @@ local -a _pkg_items=(
     "Snapshots: snapper, snap-pac"
     "Boot: grub, grub-btrfs, efibootmgr"
     "Tools: git, curl, inotify-tools, btrfs-assistant"
-    "Plymouth"
 )
+[[ -z "$PLYMOUTH_SELECTED" ]] || _pkg_items+=("Plymouth")
 [[ -n "$UCODE_PKG" ]] && _pkg_items+=("Microcode: $UCODE_PKG")
 [[ "$ENABLE_OS_PROBER" == "yes" ]] && _pkg_items+=("Other OS: os-prober, ntfs-3g, fuse3")
 set_items "${_pkg_items[@]}"
@@ -616,12 +652,12 @@ PACKAGES=(
     grub-btrfs
     inotify-tools
     btrfs-assistant
-    plymouth
     git
     curl
     efibootmgr
 )
 [[ -n "$UCODE_PKG" ]] && PACKAGES+=("$UCODE_PKG")
+[[ -z "$PLYMOUTH_SELECTED" ]] || PACKAGES+=(plymouth)
 if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     PACKAGES+=(os-prober ntfs-3g fuse3)
 fi
@@ -632,6 +668,11 @@ pacman -S --needed --noconfirm --noprogressbar "${PACKAGES[@]}"
 CUR_IDX=${#CUR_ITEMS[@]}
 
 # ---------------- GRUB THEME INSTALL ----------------
+#
+# Archives are extracted into a scratch directory first and the theme is
+# located INSIDE it (theme.txt / *.plymouth), so it doesn't matter what the
+# archive's own top-level folder is called -- the theme is installed under
+# the name it was selected by.
 
 set_phase 2
 set_items \
@@ -642,32 +683,31 @@ if [[ -n "$GRUB_THEME_NAME" ]]; then
     gauge_msg 10 "Installing GRUB theme: $GRUB_THEME_NAME..."
     log "Installing GRUB theme: $GRUB_THEME_NAME..."
 
-    mkdir -p /boot/grub/themes
-
-    GRUB_THEME_ARCHIVE="/tmp/${GRUB_THEME_NAME}.tar.xz"
     GRUB_THEME_URL="${GRUB_THEMES_BASE_URL}/${GRUB_THEME_NAME}.tar.xz"
+    GRUB_WORK="$(mktemp -d)"
 
-    if curl -fsSL -o "$GRUB_THEME_ARCHIVE" "$GRUB_THEME_URL"; then
-        log "Extracting theme..."
-        rm -rf "/boot/grub/themes/${GRUB_THEME_NAME}"
-        tar -xf "$GRUB_THEME_ARCHIVE" -C /boot/grub/themes/
-        rm -f "$GRUB_THEME_ARCHIVE"
+    if curl -fsSL -o "$GRUB_WORK/theme.tar.xz" "$GRUB_THEME_URL" \
+        && mkdir "$GRUB_WORK/x" \
+        && tar -xf "$GRUB_WORK/theme.tar.xz" -C "$GRUB_WORK/x"; then
+        GRUB_THEME_TXT="$(find "$GRUB_WORK/x" -name theme.txt -type f -print -quit)"
+        if [[ -n "$GRUB_THEME_TXT" ]]; then
+            mkdir -p /boot/grub/themes
+            rm -rf "/boot/grub/themes/${GRUB_THEME_NAME}"
+            cp -a "$(dirname "$GRUB_THEME_TXT")" "/boot/grub/themes/${GRUB_THEME_NAME}"
+            chmod -R u=rwX,go=rX "/boot/grub/themes/${GRUB_THEME_NAME}"
+            info "Theme files installed: /boot/grub/themes/${GRUB_THEME_NAME}/theme.txt"
 
-        if [[ -f "/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt" ]]; then
-            chmod -R 755 "/boot/grub/themes/${GRUB_THEME_NAME}"
-            info "Theme files verified: /boot/grub/themes/${GRUB_THEME_NAME}/theme.txt"
-
-            cp -an /etc/default/grub /etc/default/grub.bak 2>/dev/null || true
-            sed -i -E '/^[[:space:]]*GRUB_BACKGROUND=/d' /etc/default/grub
+            sed -i -E '/^[[:space:]]*GRUB_BACKGROUND=/d' "$GRUB_DEFAULT_FILE"
             set_grub_option "GRUB_THEME" "\"/boot/grub/themes/${GRUB_THEME_NAME}/theme.txt\"" "$GRUB_DEFAULT_FILE"
             log "GRUB theme installed and set: $GRUB_THEME_NAME"
         else
-            warn "theme.txt not found after extracting $GRUB_THEME_NAME -- archive layout unexpected. Skipping GRUB_THEME."
+            warn "No theme.txt found inside the $GRUB_THEME_NAME archive -- skipping GRUB_THEME."
         fi
     else
-        warn "Could not download $GRUB_THEME_URL"
+        warn "Could not download/extract $GRUB_THEME_URL"
         warn "Check that the archive exists at that path in the repo. Skipping GRUB theme installation."
     fi
+    rm -rf "$GRUB_WORK"
 else
     info "No GRUB theme selected -- skipping."
 fi
@@ -679,51 +719,44 @@ if [[ -n "$PLYMOUTH_SELECTED" ]]; then
     gauge_msg 15 "Installing Plymouth theme: $PLYMOUTH_SELECTED..."
     log "Installing Plymouth theme: $PLYMOUTH_SELECTED..."
 
-    mkdir -p "$PLYMOUTH_TMP"
-    THEME_ARCHIVE="$PLYMOUTH_TMP/${PLYMOUTH_SELECTED}.tar.xz"
     THEME_URL="${PLYMOUTH_THEMES_BASE_URL}/${PLYMOUTH_SELECTED}.tar.xz"
+    mkdir -p "$PLYMOUTH_TMP/x"
 
-    if curl -fsSL -o "$THEME_ARCHIVE" "$THEME_URL"; then
-        log "Extracting theme..."
-        mkdir -p /usr/share/plymouth/themes
-        tar -xf "$THEME_ARCHIVE" -C /usr/share/plymouth/themes/
-
-        if [[ -d "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}" ]]; then
-            if [[ -f "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}/${PLYMOUTH_SELECTED}.plymouth" ]]; then
-                info "Theme verified: /usr/share/plymouth/themes/${PLYMOUTH_SELECTED}/${PLYMOUTH_SELECTED}.plymouth"
+    if curl -fsSL -o "$PLYMOUTH_TMP/theme.tar.xz" "$THEME_URL" \
+        && tar -xf "$PLYMOUTH_TMP/theme.tar.xz" -C "$PLYMOUTH_TMP/x"; then
+        PLYMOUTH_FILE="$(find "$PLYMOUTH_TMP/x" -name '*.plymouth' -type f -print -quit)"
+        if [[ -n "$PLYMOUTH_FILE" ]]; then
+            # plymouth-set-default-theme needs themes/<name>/<name>.plymouth,
+            # so the install name comes from the .plymouth file itself.
+            PLYMOUTH_THEME_ID="$(basename "$PLYMOUTH_FILE" .plymouth)"
+            if [[ -z "$PLYMOUTH_THEME_ID" || "$PLYMOUTH_THEME_ID" == *..* ]]; then
+                warn "Unusable .plymouth file name '$PLYMOUTH_FILE' -- skipping the theme."
             else
-                if find "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}" -name "*.plymouth" | grep -q .; then
-                    info "Found .plymouth file in theme directory."
-                else
-                    PLYMOUTH_FILE=$(find /usr/share/plymouth/themes -name "*.plymouth" -type f | head -n1)
-                    if [[ -n "$PLYMOUTH_FILE" ]]; then
-                        THEME_DIR=$(dirname "$PLYMOUTH_FILE")
-                        THEME_DIR_NAME=$(basename "$THEME_DIR")
-                        if [[ "$THEME_DIR_NAME" != "$PLYMOUTH_SELECTED" ]]; then
-                            mv "$THEME_DIR" "/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}"
-                            info "Renamed theme directory to ${PLYMOUTH_SELECTED}"
-                        fi
+                PLYMOUTH_DEST="/usr/share/plymouth/themes/${PLYMOUTH_THEME_ID}"
+                mkdir -p /usr/share/plymouth/themes
+                rm -rf "$PLYMOUTH_DEST"
+                cp -a "$(dirname "$PLYMOUTH_FILE")" "$PLYMOUTH_DEST"
+                info "Theme files installed: $PLYMOUTH_DEST"
+                if [[ "$PLYMOUTH_THEME_ID" != "$PLYMOUTH_SELECTED" ]]; then
+                    info "(installed as '$PLYMOUTH_THEME_ID' -- the name inside the archive)"
+                fi
+
+                if command -v plymouth-set-default-theme >/dev/null 2>&1; then
+                    if plymouth-set-default-theme "$PLYMOUTH_THEME_ID"; then
+                        PLYMOUTH_OK=1
+                        log "Plymouth theme set successfully."
                     else
-                        warn "Could not find .plymouth file after extraction. Theme may not be correctly installed."
+                        warn "plymouth-set-default-theme failed for '$PLYMOUTH_THEME_ID'."
                     fi
-                fi
-            fi
-
-            if command -v plymouth-set-default-theme >/dev/null 2>&1; then
-                if plymouth-set-default-theme "$PLYMOUTH_SELECTED"; then
-                    PLYMOUTH_OK=1
-                    log "Plymouth theme set successfully."
                 else
-                    warn "plymouth-set-default-theme failed for '$PLYMOUTH_SELECTED'."
+                    warn "plymouth-set-default-theme not found; keeping default theme."
                 fi
-            else
-                warn "plymouth-set-default-theme not found; keeping default theme."
             fi
         else
-            warn "Theme directory '/usr/share/plymouth/themes/${PLYMOUTH_SELECTED}' not found after extraction."
+            warn "No .plymouth file found inside the $PLYMOUTH_SELECTED archive -- theme not installed."
         fi
     else
-        warn "Could not download $THEME_URL"
+        warn "Could not download/extract $THEME_URL"
         warn "Check that the archive exists at that path in the repo. Skipping Plymouth theme installation."
     fi
 else
@@ -842,14 +875,16 @@ MKINITCPIO_CONF="/etc/mkinitcpio.conf"
 cp -a "$MKINITCPIO_CONF" "$BACKUP_DIR/mkinitcpio.conf.before"
 sed -i -E '/^[[:space:]]*HOOKS=/d' "$MKINITCPIO_CONF"
 
-cat >> "$MKINITCPIO_CONF" <<'EOF'
+# Drop the block a previous run of this script added (idempotent re-runs).
+sed -i '/^# >>> arch-setup HOOKS/,/^# <<< arch-setup HOOKS/d' "$MKINITCPIO_CONF"
 
-# ============================================================
-# Added by setup-btrfs-snapper.sh
-# systemd-based initramfs + LUKS2 + Plymouth
-# ============================================================
-HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block plymouth sd-encrypt filesystems fsck)
-EOF
+# The plymouth hook is only added when a Plymouth theme was chosen.
+HOOKS_LINE="HOOKS=(base systemd autodetect microcode modconf kms keyboard sd-vconsole block ${PLYMOUTH_SELECTED:+plymouth }sd-encrypt filesystems fsck)"
+{
+    printf '\n# >>> arch-setup HOOKS (systemd initramfs + LUKS2%s)\n' "${PLYMOUTH_SELECTED:+ + Plymouth}"
+    printf '%s\n' "$HOOKS_LINE"
+    printf '# <<< arch-setup HOOKS\n'
+} >> "$MKINITCPIO_CONF"
 advance
 
 gauge_msg 54 "Rebuilding initramfs..."
@@ -922,7 +957,14 @@ CURRENT_CMDLINE="$(
              s/ $//'
 )"
 
-NEW_CMDLINE="$CURRENT_CMDLINE rd.luks.name=$LUKS_UUID=cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ quiet splash loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0"
+NEW_CMDLINE="$CURRENT_CMDLINE rd.luks.name=${LUKS_UUID}=${CRYPT_NAME} root=/dev/mapper/${CRYPT_NAME} rootflags=subvol=${ROOT_SUBVOL} quiet loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0"
+[[ -z "$PLYMOUTH_SELECTED" ]] || NEW_CMDLINE+=" splash"
+
+# De-duplicate (e.g. 'quiet' already set by archInstall.sh must not appear
+# twice) and drop a stale 'splash' when no Plymouth theme was chosen.
+NEW_CMDLINE="$(tr -s ' ' '\n' <<< "$NEW_CMDLINE" \
+    | awk -v keep_splash="${PLYMOUTH_SELECTED:+1}" 'NF && !seen[$0]++ && ($0 != "splash" || keep_splash)' \
+    | paste -sd' ' -)"
 
 set_grub_option "GRUB_CMDLINE_LINUX_DEFAULT" "\"$NEW_CMDLINE\"" "$GRUB_DEFAULT_FILE"
 
@@ -940,7 +982,7 @@ gauge_msg 66 "Installing GRUB for UEFI (boot entry '$GRUB_BOOTLOADER_ID')..."
 log "Installing/reinstalling GRUB for UEFI with boot entry '$GRUB_BOOTLOADER_ID'..."
 
 grub-install \
-    --target=x86_64-efi \
+    --target="$(efi_grub_target)" \
     --efi-directory=/efi \
     --bootloader-id="$GRUB_BOOTLOADER_ID" \
     --recheck
@@ -1088,7 +1130,7 @@ btrfs subvolume list / || true
 
 echo
 echo "--- LUKS ---"
-cryptsetup status cryptroot 2>/dev/null || true
+cryptsetup status "$CRYPT_NAME" 2>/dev/null || true
 
 echo
 echo "--- Snapper config ---"
