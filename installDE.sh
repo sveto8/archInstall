@@ -495,15 +495,57 @@ fi
 set_phase 2
 gauge_msg 65 "Enabling $DM_SERVICE..."
 log "Enabling $DM_SERVICE..."
-systemctl enable "$DM_SERVICE"
 
-# Enabling a display manager only creates the symlink
-# /etc/systemd/system/display-manager.service + graphical.target.wants/…;
-# the DEFAULT target, however, is still multi-user.target, so
-# graphical.target (and thus the DM) is never reached and the machine
-# boots straight to a text console. Idempotent -- harmless if already set.
+# --- Enable the display manager ---
+#
+# `systemctl enable` is supposed to work in a chroot (it only creates
+# symlinks), but on a fresh chroot it can return 0 while silently NOT
+# creating the alias symlink (bus/dbus checks, unit-loading quirks).
+# Without /etc/systemd/system/display-manager.service the graphical
+# target has nothing to start and the system drops to a TTY login
+# prompt -- exactly the symptom we are fixing here. So: try systemctl
+# first, then verify the symlink and create it by hand if needed.
+if ! systemctl enable "$DM_SERVICE" 2>>"$LOG_FILE"; then
+    warn "systemctl enable $DM_SERVICE failed -- will create the link manually."
+fi
+
+DM_UNIT="/usr/lib/systemd/system/${DM_SERVICE}"
+DM_LINK="/etc/systemd/system/display-manager.service"
+if [[ -f "$DM_UNIT" ]]; then
+    if [[ ! -e "$DM_LINK" ]]; then
+        log "Creating $DM_LINK -> $DM_UNIT manually."
+        ln -sf "$DM_UNIT" "$DM_LINK"
+    fi
+else
+    warn "Display manager unit $DM_UNIT not found -- cannot enable the DM."
+fi
+
+# --- Set graphical.target as the default boot target ---
+#
+# Same reasoning as above: without /etc/systemd/system/default.target
+# pointing at graphical.target, systemd boots multi-user.target (a TTY
+# login) even though the DM is enabled.
 log "Setting graphical.target as the default boot target..."
-systemctl set-default graphical.target
+if ! systemctl set-default graphical.target 2>>"$LOG_FILE"; then
+    warn "systemctl set-default failed -- will create the link manually."
+fi
+
+DEFAULT_LINK="/etc/systemd/system/default.target"
+DEFAULT_TARGET="/usr/lib/systemd/system/graphical.target"
+if [[ -f "$DEFAULT_TARGET" ]]; then
+    if [[ ! -L "$DEFAULT_LINK" || "$(readlink -f "$DEFAULT_LINK" 2>/dev/null)" != "$DEFAULT_TARGET" ]]; then
+        log "Ensuring $DEFAULT_LINK -> $DEFAULT_TARGET."
+        ln -sf "$DEFAULT_TARGET" "$DEFAULT_LINK"
+    fi
+fi
+
+# --- Loud warning if either link is still missing after the fix ---
+if [[ ! -e "$DM_LINK" ]]; then
+    warn "display-manager.service is still missing -- the DM will not start at boot."
+fi
+if [[ "$(readlink -f "$DEFAULT_LINK" 2>/dev/null)" != "$DEFAULT_TARGET" ]]; then
+    warn "default.target does not point to graphical.target -- boot may stay on a TTY."
+fi
 
 # ---------------- GNOME: DARK THEME + SLATE ACCENT ----------------
 
