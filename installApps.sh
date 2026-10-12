@@ -363,7 +363,7 @@ run_install() {
                 out+="$(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
             fi
             if (( i < CUR_PHASE )); then
-                out+="  [x] ${PHASE_NAMES[i]}"$'\n'
+                out+="  [✓] ${PHASE_NAMES[i]}"$'\n'
             elif (( i == CUR_PHASE )); then
                 out+="  [>] ${PHASE_NAMES[i]}"$'\n'
                 n=${#CUR_ITEMS[@]}
