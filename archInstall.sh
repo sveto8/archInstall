@@ -420,7 +420,7 @@ fi
 # without installing any DE.
 
 DE_CHOICE=""
-if ask_yes "Install desktop environment" "Do you want to install a desktop environment now?\n\nThis will also enable the matching display manager." no; then
+if ask_yes "Install desktop environment" "Do you want to install a desktop environment now?" no; then
     DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 1 \
         --menu "Which desktop environment do you want to install?" \
         0 "$BOX_W" 0 \
@@ -1004,7 +1004,7 @@ cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
 cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
     if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
-        fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
+        fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch  $s for /archInstall/scripts."
     fi
 done
 chmod +x /mnt/archInstall/*.sh /mnt/archInstall/scripts/*.sh 2>/dev/null || true
