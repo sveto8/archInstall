@@ -19,7 +19,19 @@ set -o errtrace
 # ============================================================
 
 BACKTITLE="Arch Linux: application install"
-LOG_FILE="${HOME}/installApps.log"
+
+# Log location: prefer the script's own directory when it is writable,
+# otherwise fall back to the user's home. Running a locally-copied tree
+# (e.g. ~/Downloads/installApps.sh) then drops the log right next to the
+# script instead of scattering files around $HOME; running it from the
+# installed system (/archInstall/scripts/, owned by root) still falls
+# back to $HOME because SCRIPT_DIR is not writable.
+SCRIPT_DIR_EARLY="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -w "$SCRIPT_DIR_EARLY" ]]; then
+    LOG_FILE="${SCRIPT_DIR_EARLY}/installApps.log"
+else
+    LOG_FILE="${HOME}/installApps.log"
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
@@ -333,6 +345,13 @@ install_aur() {
 # (unprivileged) shell are exactly what we want -- not by sudo.
 # shellcheck disable=SC2024
 run_install() {
+# Save the pipe to dialog --gauge as FD 3; redirect stdout to the log.
+# Without these two lines gauge_msg (which writes to >&3) fails with
+# "Bad file descriptor" on the very first frame -- the exact symptom
+# "installApps.sh crashes right after the confirmation dialog".
+exec 3>&1
+exec 1>>"$LOG_FILE"
+
     local total current=0 pkg yay_tmp
     local log="$LOG_FILE"
 
