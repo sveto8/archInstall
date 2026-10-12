@@ -27,7 +27,7 @@ set -o errtrace
 #
 # Optionally installs GNOME, KDE Plasma or XFCE right away by running
 # installDE.sh inside the new system (non-interactive). After reboot run
-# setupAfterInstall.sh (Snapper/GRUB setup) and installApps.sh.
+# setupAfterInstall.sh (Snapper/GRUB/Plymouth) and installApps.sh.
 # ============================================================
 
 # ---------------- CONFIGURATION (edit before running) ----------------
@@ -66,9 +66,6 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
             _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
             mv "$_lib_tmp" "$_lib_fallback"
             echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
-            # Make the sourced copy look like the local one for the rest of
-            # the script by symlinking it next to the script if possible,
-            # else just point SCRIPT_DIR at the fallback's directory.
             SCRIPT_DIR="$(dirname "$_lib_fallback")"
         fi
     else
@@ -212,8 +209,6 @@ while true; do
     _km_ok=(); _km_bad=()
     for _km in "${_km_arr[@]}"; do
         [[ -n "$_km" ]] || continue
-        # If the keymap list can't be read (e.g. offline localectl), accept
-        # the names as typed.
         if [[ -z "$_keymaps" ]] || grep -qxF -- "$_km" <<< "$_keymaps"; then
             _km_ok+=("$_km")
         else
@@ -230,17 +225,11 @@ while true; do
         continue
     fi
 
-    # Join with commas: "us,croat" (no spaces -- the canonical internal form).
     KEYMAP="$(IFS=,; printf '%s' "${_km_ok[*]}")"
     break
 done
 
 # ---------------- SYSTEM LANGUAGE (primary locale) ----------------
-#
-# The primary locale sets LANG in /etc/locale.conf. Both en_US.UTF-8 and
-# hr_HR.UTF-8 are always generated in /etc/locale.gen (see the LOCALES
-# array at the top of this script), so the user can switch later with
-# `localectl set-locale LANG=...` without regenerating anything.
 
 LOCALE="$(dlg_capture --title "System language" --default-item "$LOCALE" \
     --menu "Which language should the system use by default (LANG in /etc/locale.conf)?" \
@@ -248,17 +237,10 @@ LOCALE="$(dlg_capture --title "System language" --default-item "$LOCALE" \
     en_US.UTF-8 "English (United States)" \
     hr_HR.UTF-8 "Croatian (Hrvatska)")" || abort
 
-# Make sure the chosen locale is in the generated list (it already is by
-# default, but this keeps the invariant if the defaults are edited later).
 in_array "$LOCALE" "${LOCALES[@]}" || LOCALES+=("$LOCALE")
 LOCALES_STR="${LOCALES[*]}"
 
-# ---------------- USER ACCOUNT + PASSWORD (asked together) ----------------
-#
-# Username, superuser question and password come one after another.
-# Passwords are applied later with chpasswd (no interactive passwd).
-# If no sudo-enabled user is created, a root password is required --
-# otherwise nothing could log in with admin rights.
+# ---------------- USER ACCOUNT + PASSWORD ----------------
 
 NEW_USERNAME=""
 MAKE_SUDO="no"
@@ -286,7 +268,7 @@ if [[ -n "$NEW_USERNAME" ]]; then
 fi
 
 if [[ -n "$NEW_USERNAME" && "$MAKE_SUDO" == "yes" ]]; then
-    SET_ROOT_PASSWORD="no"        # root stays locked; use sudo
+    SET_ROOT_PASSWORD="no"
 else
     SET_ROOT_PASSWORD="yes"
     ROOT_INTRO="No sudo-enabled user will exist, so the root account needs a password to be able to log in."
@@ -294,19 +276,11 @@ else
 fi
 
 # ---------------- DISK ENCRYPTION PASSPHRASE ----------------
-#
-# The warning and the passphrase prompt are ONE screen: the warning text
-# is passed as the (optional) intro of ask_password and is shown above
-# the password field inside the same dialog. No separate msg_box.
 
 LUKS_INTRO="The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
 ask_password LUKS_PASS "LUKS passphrase" "$LUKS_INTRO" || abort
 
 # ---------------- HARDWARE CLOCK (RTC) ----------------
-#
-# Linux keeps the hardware clock in UTC by default. Windows assumes LOCAL
-# time. On a dual-boot machine the two disagree and one OS shows the
-# wrong time, unless you pick local time here.
 
 RTC_MODE="$(dlg_capture --title "Hardware clock (RTC)" \
     --menu "How should the hardware clock be stored?\n\nChoose 'local' if you dual-boot Windows (avoids touching the Windows registry)." \
@@ -315,13 +289,6 @@ RTC_MODE="$(dlg_capture --title "Hardware clock (RTC)" \
     local "Local time (Windows-compatible, for dual-boot)")" || abort
 
 # ---------------- WAKE-ON-LAN (WOL) ----------------
-#
-# WOL needs the NIC told to listen for a magic packet (ethtool -s <iface>
-# wol g) and that setting re-applied on every boot, since most drivers
-# reset it. The wired interface name is detected here (names like
-# enp39s0 follow the PCI topology, so they carry over to the installed
-# system on the same hardware) and a templated systemd service
-# re-applies the setting at every boot.
 
 ENABLE_WOL="no"
 WOL_IFACE=""
@@ -332,7 +299,7 @@ if ask_yes "Wake-on-LAN" "Enable Wake-on-LAN (WOL)?\n\nThe wired network interfa
     for ifc in /sys/class/net/*; do
         name="$(basename "$ifc")"
         [[ "$name" == "lo" ]] && continue
-        [[ -d "$ifc/wireless" ]] && continue      # Wi-Fi has no WOL
+        [[ -d "$ifc/wireless" ]] && continue
         WOL_CANDIDATES+=("$name")
     done
 
@@ -356,8 +323,6 @@ if ask_yes "Wake-on-LAN" "Enable Wake-on-LAN (WOL)?\n\nThe wired network interfa
 
     if [[ -n "$WOL_IFACE" ]]; then
         ENABLE_WOL="yes"
-        # Best-effort capability check -- informational only (ethtool may
-        # not exist on the live ISO; some drivers misreport support).
         if command -v ethtool >/dev/null 2>&1; then
             wol_caps="$(ethtool "$WOL_IFACE" 2>/dev/null | sed -n 's/.*Supports Wake-on:[[:space:]]*//p' || true)"
             if [[ "$wol_caps" == *g* ]]; then
@@ -370,20 +335,11 @@ if ask_yes "Wake-on-LAN" "Enable Wake-on-LAN (WOL)?\n\nThe wired network interfa
 fi
 
 # ---------------- WI-FI CARRY-OVER (iwd -> NetworkManager) ----------------
-#
-# A connection made with iwctl on the live ISO lives only in the live
-# system's RAM, so the installed system would boot with NetworkManager
-# but no saved network -- and no internet for the next scripts. Saved
-# WPA-PSK networks (/var/lib/iwd/*.psk) are written as NetworkManager
-# profiles on the new system. Open and 802.1X networks are not carried
-# over; use 'nmtui' after the first boot for those.
 
 IWD_DIR="/var/lib/iwd"
 WIFI_CARRY="no"
 WIFI_PSK_FILES=()
 
-# iwd stores SSIDs containing anything besides [A-Za-z0-9 _-] as
-# "=" + hex of the SSID bytes in the file name; decode that back.
 iwd_ssid_from_file() {
     local name
     name="$(basename "$1" .psk)"
@@ -414,85 +370,243 @@ if [[ "${#WIFI_PSK_FILES[@]}" -gt 0 ]]; then
     fi
 fi
 
-# ---------------- DESKTOP ENVIRONMENT (jedan korak – None na kraju) ----------------
+# ---------------- DESKTOP ENVIRONMENT ----------------
 #
-# Optional desktop environment. If you choose None, the installer still continues
-# without installing any DE.
+# SINGLE menu (as requested): the first item is "None", the other three are
+# the DEs. If "None" is chosen, no DE is installed by archInstall.sh -- you
+# can still install one later with installDE.sh.
 
-DE_CHOICE=""
-if ask_yes "Install desktop environment" "Do you want to install a desktop environment now?" no; then
-    DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 1 \
-        --menu "Which desktop environment do you want to install?" \
+DE_CHOICE=""      # "", 1 = GNOME, 2 = KDE Plasma, 3 = XFCE
+DE_MODE=""        # full | minimal
+DE_LABEL="none (CLI only)"
+
+if [[ -n "$NEW_USERNAME" ]]; then
+    DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 0 \
+        --menu "Install a desktop environment now?\n\nIt is installed as the last step; if it fails the base system stays intact and you can run installDE.sh after reboot." \
         0 "$BOX_W" 0 \
+        0 "None -- CLI only (install later with installDE.sh)" \
         1 "GNOME (Wayland)" \
         2 "KDE Plasma (Wayland)" \
-        3 "XFCE (X11)" \
-        4 "None / cancel")" || abort
-
-    [[ "$DE_CHOICE" == "4" ]] && DE_CHOICE=""
+        3 "XFCE (X11)")" || abort
+    if [[ "$DE_CHOICE" == "0" ]]; then
+        DE_CHOICE=""
+    else
+        DE_MODE="$(dlg_capture --title "Package set" \
+            --menu "Full or minimal package set?" 0 "$BOX_W" 0 \
+            full    "Full -- complete desktop with its usual applications" \
+            minimal "Minimal -- just the desktop and the essentials")" || abort
+        case "$DE_CHOICE" in
+            1) DE_LABEL="GNOME ($DE_MODE)" ;;
+            2) DE_LABEL="KDE Plasma ($DE_MODE)" ;;
+            3) DE_LABEL="XFCE ($DE_MODE)" ;;
+        esac
+    fi
 fi
 
-# ---------------- DISK PARTITIONING ----------------
+# ---------------- SUMMARY + WIPE CONFIRMATION ----------------
 
-# Everything below this point runs unattended (after the typed WIPE confirmation).
-# The disk is wiped, partitioned, encrypted, subvolumes created, base system installed,
-# and the new system is ready for the first boot.
-
-# ---------------- WIPE AND PARTITION ----------------
-#
-# A single typed confirmation is required before any disk change. This is
-# the only place where the user can accidentally wipe data.
-
-ask_text WIPE_CONFIRM "WIPE CONFIRMATION" "Type WIPE (all caps) to continue and wipe the disk.\n\nThis action cannot be undone." "NOPE" || abort
-
-if [[ "$WIPE_CONFIRM" != "WIPE" ]]; then
-    die "Confirmation not received. Nothing was changed."
+if [[ -n "$NEW_USERNAME" ]]; then
+    USER_LINE="$NEW_USERNAME ($([[ "$MAKE_SUDO" == "yes" ]] && echo "superuser/sudo" || echo "no sudo"))"
+else
+    USER_LINE="(none -- only root)"
 fi
+ROOT_LINE="$([[ "$SET_ROOT_PASSWORD" == "yes" ]] && echo "password set" || echo "locked (use sudo)")"
+WOL_LINE="$([[ "$ENABLE_WOL" == "yes" ]] && echo "enabled on ${WOL_IFACE}${WOL_NOTE}" || echo "no")"
+WIFI_LINE="$([[ "$WIFI_CARRY" == "yes" ]] && echo "carry over ${WIFI_NAMES[*]}" || echo "no")"
 
-# ---------------- DISK ENCRYPTION PASSPHRASE (again -- user already entered it) ----------------
+SUMMARY_FILE="$(mktemp)"
+cat > "$SUMMARY_FILE" <<SUMMARY_EOF
+  THIS WILL DESTROY ALL DATA ON: $DEVICE
+
+$(lsblk -l -o NAME,SIZE,FSTYPE,LABEL "$DEVICE")
+
+  Planned layout:
+    ${ESP}       ESP (FAT32, $ESP_SIZE)      -> /efi
+    ${BOOTPART}  ext4 ($BOOT_SIZE)           -> /boot
+    ${LUKSPART}  LUKS2 -> Btrfs (@  @home  @snapshots)
+
+  Hostname:       $NEW_HOSTNAME
+  Timezone:       $TIMEZONE
+  Locale:         $LOCALE  (generated: $LOCALES_STR)
+  Keymap:         $KEYMAP
+  Btrfs options:  $MOUNT_OPTS
+  Microcode:      ${UCODE_PKG:-none detected}
+  Hardware clock: $RTC_MODE
+  User:           $USER_LINE
+  Root account:   $ROOT_LINE
+  Wake-on-LAN:    $WOL_LINE
+  Wi-Fi:          $WIFI_LINE
+  Desktop:        $DE_LABEL
+
+  (scroll with the arrow keys / PgUp / PgDn)
+SUMMARY_EOF
+
+dlg --title "Summary -- review before the disk is wiped" \
+    --exit-label "Continue" --textbox "$SUMMARY_FILE" "$LOG_H" "$LOG_W"
+rm -f "$SUMMARY_FILE"
+
+ask_text CONFIRM "FINAL CONFIRMATION" "This is the point of no return.\n\n$DEVICE will be completely erased.\n\nType WIPE (all caps) to continue:" "" || abort
+[[ "$CONFIRM" == "WIPE" ]] || abort "Cancelled -- nothing was changed."
+
+# ============================================================
+# INSTALL (unattended; live progress in a dialog --gauge)
 #
-# We already asked and stored it. Now we use it for cryptsetup.
+# Everything below runs inside run_install(). NOTE: the body is
+# deliberately not indented -- the heredocs inside must keep their
+# terminators in column 0.
+#
+# run_with_gauge gives the function FD 3 pointing at the gauge; stdout
+# is redirected inside run_install to $LOG_FILE so that pacman's output
+# and our own log/info/warn lines are captured cleanly. Only
+# gauge_msg writes the percent+message+phase frames to FD 3.
+# ============================================================
 
-echo "Setting up disk encryption..."
-# Create ESP, boot and LUKS partitions
-sgdisk -n 1:0:+${ESP_SIZE} -t 1:ef00 -c 1:"EFI System" "$DEVICE"
-sgdisk -n 2:0:+${BOOT_SIZE} -t 2:8300 -c 2:"Boot" "$DEVICE"
-sgdisk -n 3:0:0 -t 3:8300 -c 3:"Root" "$DEVICE"
+DE_FAILED_FILE="$(mktemp)"
+
+run_install() {
+
+# Save the pipe to dialog --gauge as FD 3; redirect stdout to the log.
+exec 3>&1
+exec 1>>"$LOG_FILE"
+
+# ---- Phase tree shown inside the gauge prompt ----
+local -a PHASES=(
+    "User info collected"
+    "Disk partitioned"
+    "Encryption & filesystems"
+    "Base system install (pacstrap)"
+    "System configured (chroot)"
+    "Desktop environment"
+    "Finalizing"
+)
+local CURRENT_PHASE=0
+local -a CUR_ITEMS=()
+local CUR_IDX=0
+local WIN=5
+
+_phase_prompt() {
+    local i j n start end out=""
+    for ((i=0; i<${#PHASES[@]}; i++)); do
+        if (( i < CURRENT_PHASE )); then
+            out+="  [x] ${PHASES[i]}"$'\n'
+        elif (( i == CURRENT_PHASE )); then
+            out+="  [>] ${PHASES[i]}"$'\n'
+            n=${#CUR_ITEMS[@]}
+            if (( n > 0 )); then
+                start=$(( CUR_IDX - WIN/2 ))
+                (( start < 0 )) && start=0
+                end=$(( start + WIN ))
+                (( end > n )) && end=$n
+                (( start > 0 )) && out+="        ..."$'\n'
+                for ((j=start; j<end; j++)); do
+                    if (( j < CUR_IDX )); then
+                        out+="        [x] ${CUR_ITEMS[j]}"$'\n'
+                    elif (( j == CUR_IDX )); then
+                        out+="        [>] ${CUR_ITEMS[j]}"$'\n'
+                    else
+                        out+="        [ ] ${CUR_ITEMS[j]}"$'\n'
+                    fi
+                done
+                (( end < n )) && out+="        ..."$'\n'
+            fi
+        else
+            out+="  [ ] ${PHASES[i]}"$'\n'
+        fi
+    done
+    printf '%s' "$out"
+}
+
+gauge_msg() {
+    local pct="$1" msg="$2"
+    {
+        printf 'XXX\n%d\n' "$pct"
+        _phase_prompt
+        printf '\n%s\n' "$msg"
+        printf 'XXX\n'
+    } >&3
+}
+
+set_phase()  { CURRENT_PHASE="$1"; }
+set_items()  { CUR_ITEMS=("$@"); CUR_IDX=0; }
+advance()    { CUR_IDX=$((CUR_IDX + 1)); }
+
+# ---------------- PARTITIONING ----------------
+
+set_phase 1
+set_items "Wiping disk signatures" "Creating partitions" "Re-reading partition table"
+
+gauge_msg 2 "Wiping filesystem signatures on $DEVICE..."
+log "Wiping and partitioning $DEVICE..."
+wipefs -af "$DEVICE"
+advance
+
+gauge_msg 4 "Creating partitions on $DEVICE..."
+sgdisk --zap-all "$DEVICE"
+sgdisk -n1:0:+${ESP_SIZE} -t1:ef00 -c1:"EFI" "$DEVICE"
+sgdisk -n2:0:+${BOOT_SIZE} -t2:8300 -c2:"boot" "$DEVICE"
+sgdisk -n3:0:0 -t3:8309 -c3:"cryptroot" "$DEVICE"
+advance
+
+gauge_msg 6 "Re-reading partition table..."
 partprobe "$DEVICE"
-
-# Wait for partitions to appear
+udevadm settle
 sleep 3
+for p in "$ESP" "$BOOTPART" "$LUKSPART"; do
+    [[ -b "$p" ]] || die "$p does not exist yet -- the kernel may not have re-read the partition table. Try running 'partprobe $DEVICE' manually, then re-run this script."
+done
+advance
 
-ESP="${DEVICE}1"
-BOOTPART="${DEVICE}2"
-LUKSPART="${DEVICE}3"
+# ---------------- FORMAT + LUKS + BTRFS ----------------
 
-# ---------------- ENCRYPT AND SETUP LUKS ----------------
+set_phase 2
+set_items \
+    "Formatting ESP and /boot" \
+    "Creating and opening LUKS2" \
+    "Creating Btrfs and subvolumes" \
+    "Mounting filesystems" \
+    "Optimizing mirrorlist"
 
-printf '%s\n' "$LUKS_PASS" | cryptsetup -q luksFormat "$LUKSPART"
+gauge_msg 9 "Formatting ESP and /boot..."
+log "Formatting ESP and /boot..."
+mkfs.fat -F32 -n EFI "$ESP"
+mkfs.ext4 -F -L boot "$BOOTPART"
+sync
+udevadm settle
+advance
 
-printf '%s\n' "$LUKS_PASS" | cryptsetup open "$LUKSPART" cryptroot
+gauge_msg 11 "Creating LUKS2 container on $LUKSPART..."
+log "Creating LUKS2 container on $LUKSPART..."
+printf '%s' "$LUKS_PASS" | cryptsetup luksFormat --type luks2 --label cryptroot --batch-mode --key-file=- "$LUKSPART"
 
-# ---------------- CREATE BTRFS FILESYSTEM AND SUBVOLUMES ----------------
+gauge_msg 13 "Opening LUKS2 container..."
+log "Opening LUKS2 container..."
+printf '%s' "$LUKS_PASS" | cryptsetup open --key-file=- "$LUKSPART" cryptroot
+LUKS_UUID="$(cryptsetup luksUUID "$LUKSPART")"
+info "LUKS UUID: $LUKS_UUID"
+advance
 
+gauge_msg 15 "Creating Btrfs filesystem and subvolumes..."
+log "Creating Btrfs filesystem and subvolumes..."
 mkfs.btrfs -L cryptroot /dev/mapper/cryptroot
 mount /dev/mapper/cryptroot /mnt
 btrfs subvolume create /mnt/@
 btrfs subvolume create /mnt/@home
 btrfs subvolume create /mnt/@snapshots
 umount /mnt
+advance
 
-# ---------------- MOUNT ALL FILESYSTEMS ----------------
-
+gauge_msg 17 "Mounting filesystems..."
+log "Mounting filesystems..."
 mount -o "${MOUNT_OPTS},subvol=@" /dev/mapper/cryptroot /mnt
 mkdir -p /mnt/{home,.snapshots,boot,efi}
 mount -o "${MOUNT_OPTS},subvol=@home" /dev/mapper/cryptroot /mnt/home
 mount -o "${MOUNT_OPTS},subvol=@snapshots" /dev/mapper/cryptroot /mnt/.snapshots
 mount "$BOOTPART" /mnt/boot
 mount "$ESP" /mnt/efi
+advance
 
-# ---------------- OPTIMIZE PACMAN MIRRORLIST WITH REFLECTOR ----------------
-
+gauge_msg 19 "Optimizing pacman mirrorlist with reflector..."
+log "Optimizing pacman mirrorlist with reflector..."
 REFLECTOR_AVAILABLE=1
 if ! command -v reflector >/dev/null 2>&1; then
     pacman -S --needed --noconfirm reflector || REFLECTOR_AVAILABLE=0
@@ -508,6 +622,7 @@ if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
 else
     warn "Could not install reflector -- continuing with the default mirrorlist."
 fi
+advance
 
 # ---------------- PACSTRAP ----------------
 
@@ -621,10 +736,6 @@ if [[ -n "${NEW_USERNAME}" ]]; then
     log "Creating user ${NEW_USERNAME}..."
     if [[ "${MAKE_SUDO}" == "yes" ]]; then
         arch-chroot /mnt useradd -m -G wheel -s /bin/bash "${NEW_USERNAME}"
-        # A sudoers.d drop-in instead of sed-ing the commented line in
-        # /etc/sudoers: it can't silently fail to match, and it survives
-        # sudo package updates. Root is locked in this case, so a broken
-        # sudo setup would leave an unusable system -- abort instead.
         install -d -m 750 /mnt/etc/sudoers.d
         printf '%%wheel ALL=(ALL:ALL) ALL\n' > /mnt/etc/sudoers.d/10-wheel
         chmod 440 /mnt/etc/sudoers.d/10-wheel
@@ -767,105 +878,20 @@ mkinitcpio -P
 CHROOT_EOF
 advance
 
-# ---------------- GRUB INSTALL (FIX: GRUB_CMDLINE_LINUX_DEFAULT is always written as a new value) ----------------
-#
-# We always append a fresh GRUB_CMDLINE_LINUX_DEFAULT. This guarantees that
-# the correct parameters (rd.luks.name, rootflags=subvol=@, etc.) are present
-# and that grub-mkconfig will pick them up.
+gauge_msg 74 "Installing GRUB for UEFI..."
+arch-chroot /mnt /bin/bash <<CHROOT_EOF
+set -Eeuo pipefail
 
-set_phase 4
-set_items "Configuring GRUB kernel parameters..." \
-          "Installing GRUB for UEFI..." \
-          "Stale UEFI cleanup..." \
-          "grub-btrfs daemon..." \
-          "Windows ESP search..."
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet ${VCONSOLE_CMDLINE} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
-gauge_msg 68 "Configuring GRUB kernel parameters..."
-log "Configuring GRUB kernel parameters..."
-
-cp -a "$GRUB_DEFAULT_FILE" "$BACKUP_DIR/grub.before"
-
-set_grub_option "GRUB_TIMEOUT"       "5"    "$GRUB_DEFAULT_FILE"
-set_grub_option "GRUB_TIMEOUT_STYLE" "menu" "$GRUB_DEFAULT_FILE"
-
-log "Enabling GRUB saved-entry default..."
-set_grub_option "GRUB_DEFAULT"     "saved" "$GRUB_DEFAULT_FILE"
-set_grub_option "GRUB_SAVEDEFAULT" "true"  "$GRUB_DEFAULT_FILE"
-
-if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
-    log "Enabling os-prober so GRUB detects other operating systems..."
-    set_grub_option "GRUB_DISABLE_OS_PROBER" "false" "$GRUB_DEFAULT_FILE"
-
-    if [[ "$OS_PROBER_MODE" == "internal" ]]; then
-        OS_SKIP_LIST="$(external_skip_list)"
-        set_grub_option "GRUB_OS_PROBER_SKIP_LIST" "\"${OS_SKIP_LIST}\"" "$GRUB_DEFAULT_FILE"
-        if [[ -n "$OS_SKIP_LIST" ]]; then
-            info "os-prober will skip these USB/removable filesystems:"
-            for entry in $OS_SKIP_LIST; do info "  $entry"; done
-        else
-            info "No USB/removable disks with filesystems are connected right now."
-        fi
-        info "(Only devices connected NOW are listed. A USB stick with a different"
-        info " UUID plugged in later can still be detected -- re-run this step or add"
-        info " its UUID@device to GRUB_OS_PROBER_SKIP_LIST in /etc/default/grub.)"
-    elif grep -qE '^#?[[:space:]]*GRUB_OS_PROBER_SKIP_LIST=' "$GRUB_DEFAULT_FILE"; then
-        set_grub_option "GRUB_OS_PROBER_SKIP_LIST" '""' "$GRUB_DEFAULT_FILE"
-    fi
-elif [[ "$OS_PROBER_MODE" == "off" ]]; then
-    set_grub_option "GRUB_DISABLE_OS_PROBER" "true" "$GRUB_DEFAULT_FILE"
-fi
-
-CURRENT_CMDLINE="$(
-    grep -E '^GRUB_CMDLINE_LINUX_DEFAULT=' "$GRUB_DEFAULT_FILE" |
-        head -n1 |
-        cut -d= -f2- |
-        sed 's/^"//;s/"$//' || true
-)"
-
-CURRENT_CMDLINE="$(
-    printf '%s' "$CURRENT_CMDLINE" |
-        sed -E \
-            's/(^| )cryptdevice=[^ ]+//g;
-             s/(^| )rd\.luks\.name=[^ ]+//g;
-             s/(^| )root=UUID=[^ ]+//g;
-             s/(^| )root=\/dev\/mapper\/[^ ]+//g;
-             s/(^| )rootflags=[^ ]+//g;
-             s/[[:space:]]+/ /g;
-             s/^ //;
-             s/ $//'
-)"
-
-NEW_CMDLINE="$CURRENT_CMDLINE rd.luks.name=${LUKS_UUID}=cryptroot root=/dev/mapper/cryptroot rootflags=subvol=@ quiet loglevel=3 rd.udev.log_priority=3 vt.global_cursor_default=0"
-[[ -z "$PLYMOUTH_SELECTED" ]] || NEW_CMDLINE+=" splash"
-
-# De-duplicate (e.g. 'quiet' already set by archInstall.sh must not appear
-# twice) and drop a stale 'splash' when no Plymouth theme was chosen.
-NEW_CMDLINE="$(tr -s ' ' '\n' <<< "$NEW_CMDLINE" \
-    | awk -v keep_splash="${PLYMOUTH_SELECTED:+1}" 'NF && !seen[$0]++ && ($0 != "splash" || keep_splash)' \
-    | paste -sd' ' -)"
-
-set_grub_option "GRUB_CMDLINE_LINUX_DEFAULT" "\"$NEW_CMDLINE\"" "$GRUB_DEFAULT_FILE"
-
-if grep -qE '^[[:space:]]*GRUB_THEME=' /etc/default/grub; then
-    THEME_PATH=$(grep -E '^[[:space:]]*GRUB_THEME=' /etc/default/grub | cut -d= -f2 | tr -d '"')
-    if [[ -f "$THEME_PATH" ]]; then
-        log "GRUB theme configured: $THEME_PATH"
-    else
-        warn "GRUB theme file not found: $THEME_PATH"
-    fi
-fi
-advance
-
-gauge_msg 74 "Installing GRUB for UEFI (boot entry '$GRUB_BOOTLOADER_ID')..."
-log "Installing/reinstalling GRUB for UEFI with boot entry '$GRUB_BOOTLOADER_ID'..."
-
-grub-install \
-    --target="$(efi_grub_target)" \
-    --efi-directory=/efi \
-    --bootloader-id="$GRUB_BOOTLOADER_ID" \
-    --recheck
-
+grub-install --target=${GRUB_TARGET} --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
+
+if ! grep -q '^menuentry' /boot/grub/grub.cfg; then
+    echo "==> WARNING: /boot/grub/grub.cfg has no menuentry -- GRUB will likely drop to a rescue shell on boot." >&2
+fi
+
+CHROOT_EOF
 advance
 
 # ---------------- DESKTOP ENVIRONMENT (optional, non-fatal) ----------------
@@ -1004,7 +1030,7 @@ cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
 cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
     if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
-        fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch  $s for /archInstall/scripts."
+        fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
     fi
 done
 chmod +x /mnt/archInstall/*.sh /mnt/archInstall/scripts/*.sh 2>/dev/null || true
