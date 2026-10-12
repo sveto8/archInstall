@@ -396,9 +396,9 @@ run_install() {
         {
             printf 'XXX\n%d\n' "$pct"
             _phase_prompt
-            printf '\n%s\n' "$msg"
+            printf '%s\n' "$msg"
             printf 'XXX\n'
-        }
+        } >&3
     }
 
     total=$(( 2 + ${#REPO_PACKAGES[@]} + ${#AUR_PACKAGES[@]} + ${#EXTRA_PACKAGES[@]} ))
