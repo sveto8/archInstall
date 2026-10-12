@@ -198,13 +198,11 @@ done
 _keymaps="$(localectl list-keymaps 2>/dev/null || true)"
 while true; do
     ask_text KEYMAP "Console keymap" \
-        "Console keymap(s). Use one name, or several separated by commas (or spaces).\n\nExamples:\n  us          -- US only\n  croat       -- Croatian only\n  us,croat    -- US + Croatian (stacked; the last one wins)\n\nList: localectl list-keymaps" \
+        "Console keymap(s). Use one name, or several separated by commas (or spaces).\n\nExamples:\n  us          -- US only\n  croat       -- Croatian only\n  us,croat    -- both; you will be asked which is PRIMARY\n\nList: localectl list-keymaps" \
         "$KEYMAP" || abort
 
     # Split the input on commas and/or whitespace, validate each name
-    # against the keymap list, and store the result back as a normalized
-    # comma-separated string -- the canonical internal form (the split
-    # into primary + toggle happens further down, before the chroot).
+    # against the keymap list.
     read -r -a _km_arr <<< "${KEYMAP//,/ }"
     _km_ok=(); _km_bad=()
     for _km in "${_km_arr[@]}"; do
@@ -225,6 +223,30 @@ while true; do
         continue
     fi
 
+    # If two or more keymaps were given, let the user pick which one is
+    # the PRIMARY layout. It goes into KEYMAP= / rd.vconsole.keymap=; the
+    # other one into KEYMAP_TOGGLE= / rd.vconsole.keymap_toggle=. The
+    # default is the LAST name typed, because "us,croat" reads naturally
+    # as "us first, croat on top".
+    if [[ "${#_km_ok[@]}" -ge 2 ]]; then
+        _km_items=()
+        for _k in "${_km_ok[@]}"; do _km_items+=("$_k" ""); done
+        KEYMAP_PRIMARY="$(dlg_capture --title "Primary keymap" \
+            --default-item "${_km_ok[-1]}" \
+            --menu "Which keymap should be the PRIMARY layout (active by default at boot)?" \
+            0 "$BOX_W" 0 "${_km_items[@]}")" || abort
+        KEYMAP_TOGGLE=""
+        for _k in "${_km_ok[@]}"; do
+            [[ "$_k" == "$KEYMAP_PRIMARY" ]] && continue
+            KEYMAP_TOGGLE="$_k"
+            break
+        done
+    else
+        KEYMAP_PRIMARY="${_km_ok[0]}"
+        KEYMAP_TOGGLE=""
+    fi
+
+    # Keep the full list for the summary line.
     KEYMAP="$(IFS=,; printf '%s' "${_km_ok[*]}")"
     break
 done
@@ -787,8 +809,6 @@ log "Configuring the new system (chroot)..."
 # are expanded by THIS (outer) shell inside the unquoted chroot heredoc,
 # so no \$ escaping is needed.
 IFS=, read -r -a _km_arr <<< "$KEYMAP"
-KEYMAP_PRIMARY="${_km_arr[0]}"
-KEYMAP_TOGGLE="${_km_arr[1]:-}"
 
 # The GRUB kernel cmdline receives the two keymaps as SEPARATE parameters,
 # exactly like /etc/vconsole.conf does. Comma-separated would break
