@@ -102,40 +102,68 @@ sudo -v || die "sudo access is required."
 # them pop a password prompt right in the middle of the --gauge dialog
 # (that is the "tosevjenajbolji:" prompt the user sees over the bar).
 #
-# Fix: raise sudo's timestamp_timeout to 2 hours via a short-lived
-# sudoers drop-in (removed in cleanup). 2 hours covers any AUR build.
-# Combined with the keepalive below, no sudo prompt can ever appear
-# during the install.
+# Two layers of defense:
+#
+#   1. A short-lived sudoers.d drop-in that raises timestamp_timeout to
+#      120 minutes. Removed on exit by cleanup().
+#   2. A background keepalive that refreshes the timestamp every 15 s.
+#
+# CRITICAL DETAIL: the initial `sudo -v` above ran BEFORE the drop-in
+# existed, so the timestamp it created is still bound to the old
+# (usually 15-minute) timeout in sudo's eyes. sudo reads the timeout
+# from sudoers at each call, but the *timestamp file* records the moment
+# it was last refreshed -- and it does not retroactively "grow" just
+# because the config changed. This is the reason the user still sees a
+# password prompt: the timestamp quietly expires 15 minutes after the
+# initial `sudo -v`, no matter what the drop-in says.
+#
+# The fix is to explicitly invalidate the old timestamp (`sudo -k`) and
+# create a fresh one under the new timeout, so the entire 120-minute
+# window starts from *now*, not from before the drop-in existed.
 SUDOERS_DROPIN="/etc/sudoers.d/99-installer-timestamp"
 SUDOERS_DROPIN_CREATED=0
+
 if [[ ! -e "$SUDOERS_DROPIN" ]]; then
-    if printf 'Defaults timestamp_timeout=120\n' | sudo tee "$SUDOERS_DROPIN" >/dev/null 2>&1; then
-        sudo chmod 440 "$SUDOERS_DROPIN" 2>/dev/null || true
-        if sudo visudo -cf "$SUDOERS_DROPIN" >/dev/null 2>&1; then
-            SUDOERS_DROPIN_CREATED=1
-            info "Extended sudo timeout to 120 minutes for this session."
-        else
-            warn "Invalid sudoers drop-in; removing."
-            sudo rm -f "$SUDOERS_DROPIN"
-        fi
+    # Create via a root-owned temp file and `install -m 0440`, which is
+    # more robust than `sudo tee` followed by `sudo chmod` -- a failure
+    # between the two steps would otherwise leave a world-readable (or
+    # worse, world-writable) file in /etc/sudoers.d/.
+    _dropin_tmp="$(mktemp)"
+    printf 'Defaults timestamp_timeout=120\n' > "$_dropin_tmp"
+    if sudo install -m 0440 -o root -g root "$_dropin_tmp" "$SUDOERS_DROPIN" 2>/dev/null \
+       && sudo visudo -cf "$SUDOERS_DROPIN" >/dev/null 2>&1; then
+        SUDOERS_DROPIN_CREATED=1
+        info "Extended sudo timeout to 120 minutes (drop-in installed)."
     else
-        warn "Could not create sudoers drop-in -- keeping default timeout."
+        sudo rm -f "$SUDOERS_DROPIN" 2>/dev/null || true
+        warn "Could not install sudoers drop-in -- relying on the keepalive only."
     fi
+    rm -f "$_dropin_tmp"
+else
+    info "Existing sudoers drop-in found at $SUDOERS_DROPIN."
 fi
 
-# Refresh the timestamp now that the new timeout is active.
-sudo -v 2>/dev/null || true
+# Invalidate the old timestamp and create a fresh one under the new
+# timeout. This is what actually makes the 120-minute window start now.
+# If `sudo -k` cannot invalidate (rare), we still try a plain refresh.
+sudo -k 2>/dev/null || true
+if ! sudo -n -v 2>/dev/null; then
+    # Either the drop-in did not take, or `sudo -k` cleared a timestamp
+    # that `-n` refuses to recreate. Fall back to a single interactive
+    # prompt -- it is the last one the user will see for this run.
+    log "Refreshing sudo timestamp (one prompt, then covered by the keepalive)..."
+    sudo -v || die "sudo access is required."
+fi
 
-# Keepalive as a second line of defense: refresh every 30 s so the
-# timestamp never gets close to expiring, even if the drop-in was not
-# created (e.g. read-only /etc). Uses `sudo -n -v` (which explicitly
-# EXTENDS the timestamp) rather than `sudo -n true` (which on some
-# sudo builds only checks it).
+# Aggressive keepalive: refresh every 15 s. If it ever fails, print a
+# loud message to stderr so the user actually notices -- writing only to
+# the log file would hide the warning behind the dialog.
 (
     while kill -0 "$$" 2>/dev/null; do
-        sleep 30
+        sleep 15
         if ! sudo -n -v 2>/dev/null; then
-            echo "$(date): sudo keepalive: timestamp refresh failed" >> "$LOG_FILE"
+            printf '\n\033[1;31m[!] sudo keepalive failed -- a password prompt is likely.\033[0m\n' >&2
+            echo "$(date): sudo keepalive FAILED" >> "$LOG_FILE"
             exit 0
         fi
     done
