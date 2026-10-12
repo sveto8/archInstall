@@ -282,6 +282,7 @@ ask_yes "Confirm" "$SUMMARY" yes || abort
 package_exists() {
     local pkg="$1"
     pacman -Si "$pkg" >/dev/null 2>&1 && return 0
+    pacman -Sg "$pkg" >/dev/null 2>&1 && return 0
     yay -Si "$pkg" >/dev/null 2>&1 && return 0
     return 1
 }
