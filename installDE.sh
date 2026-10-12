@@ -719,13 +719,68 @@ PLASMA_LOCALERC_EOF
     fi
 fi
 
-# ---------------- XFCE: REGIONAL FORMATS + 24H CLOCK ----------------
+# ---------------- XFCE: ADWAITA-DARK + REGIONAL FORMATS ----------------
 #
-# XFCE inherits LC_TIME from the session, so with LC_TIME=hr_HR.UTF-8 in
-# /etc/locale.conf the panel clock renders dd.mm.yyyy and 24h time
-# automatically after login. There is nothing else to set on the chroot
-# side. If a user later wants a different format, XFCE Panel -> Clock
-# properties allows it per-panel -- not something this script should force.
+# XFCE has no "apply these settings as a default for a new user" mechanism
+# that works from a chroot without a running session bus, so the settings
+# are written as the target user's own xfconf channel files. XFCE reads
+# them on first login and applies them without any extra step.
+#
+#   ~/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml
+#       -> GTK theme (Adwaita-dark) + Adwaita icons/cursor
+#   ~/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+#       -> window manager theme. "Default" follows the GTK color scheme
+#          on XFCE 4.16+, so with Adwaita-dark set above the title bars
+#          come up dark as well.
+#
+# Adwaita-dark ships inside the gtk3 package (XFCE pulls gtk3 in as a
+# dependency), so no extra package is needed.
+#
+# Regional formats are handled at the system level via LC_TIME in
+# /etc/locale.conf -- XFCE inherits it from the session, so the panel
+# clock shows dd.mm.yyyy and 24h time automatically.
+
+if [[ "$DE_CHOICE" == "3" ]]; then
+    gauge_msg 75 "Setting XFCE defaults (Adwaita-dark)..."
+    log "Configuring XFCE defaults for $TARGET_USER..."
+
+    _xfce_conf_dir="${TARGET_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml"
+    install -d -m 755 -o "$TARGET_USER" -g "$TARGET_USER" "$_xfce_conf_dir"
+
+    cat > "${_xfce_conf_dir}/xsettings.xml" <<'XSETTINGS_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xsettings" version="1.0">
+  <property name="Net" type="empty">
+    <property name="ThemeName" type="string" value="Adwaita-dark"/>
+    <property name="IconThemeName" type="string" value="Adwaita"/>
+    <property name="CursorThemeName" type="string" value="Adwaita"/>
+    <property name="CursorThemeSize" type="int" value="24"/>
+  </property>
+  <property name="Gtk" type="empty">
+    <property name="FontName" type="string" value="Sans 10"/>
+    <property name="MonospaceFontName" type="string" value="Monospace 10"/>
+  </property>
+</channel>
+XSETTINGS_EOF
+
+    cat > "${_xfce_conf_dir}/xfwm4.xml" <<'XFWM4_EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="Default"/>
+    <property name="title_font" type="string" value="Sans Bold 10"/>
+    <property name="title_alignment" type="string" value="center"/>
+  </property>
+</channel>
+XFWM4_EOF
+
+    chown "$TARGET_USER:$TARGET_USER" \
+        "${_xfce_conf_dir}/xsettings.xml" \
+        "${_xfce_conf_dir}/xfwm4.xml"
+    info "XFCE Adwaita-dark GTK theme + Adwaita icons set for $TARGET_USER."
+fi
 
 # ---------------- BLUETOOTH (GNOME, full KDE) ----------------
 
@@ -809,8 +864,10 @@ if [[ "$DE_CHOICE" == "2" ]]; then
     echo "KDE Breeze Dark was pre-set -- it should already be applied on first login."
 fi
 if [[ "$DE_CHOICE" == "3" ]]; then
-    echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen looks"
-    echo "wrong, check /etc/lightdm/lightdm.conf's [Seat:*] greeter-session line."
+    echo "XFCE Adwaita-dark theme was pre-set -- it should already be applied"
+    echo "on first login (both GTK apps and window decorations)."
+    echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen"
+    echo "looks wrong, check /etc/lightdm/lightdm.conf's [Seat:*] line."
 fi
 echo "============================================================"
 
