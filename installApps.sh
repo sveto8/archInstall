@@ -99,57 +99,54 @@ sudo -v || die "sudo access is required."
 #
 # yay and makepkg call sudo internally WITHOUT -n, so even though every
 # sudo call we make ourselves uses -n, an expired timestamp would let
-# them pop a password prompt right in the middle of the --gauge dialog
-# (that is the "tosevjenajbolji:" prompt the user sees over the bar).
+# them pop a password prompt right in the middle of the --gauge dialog.
 #
-# Two layers of defense:
+# Strategy -- ORDER MATTERS:
 #
-#   1. A short-lived sudoers.d drop-in that raises timestamp_timeout to
-#      120 minutes. Removed on exit by cleanup().
-#   2. A background keepalive that refreshes the timestamp every 15 s.
+#   1. Install the sudoers drop-in FIRST. sudo detects that sudoers
+#      changed and automatically invalidates any existing timestamp, so
+#      writing it before any prompt means the prompt the user is about
+#      to see already happens under the new 120-minute / global rules.
+#      (Writing it AFTER a `sudo -v` would cause a *second* prompt --
+#      sudo drops the timestamp the moment sudoers is rewritten.)
 #
-# CRITICAL DETAIL: the initial `sudo -v` above ran BEFORE the drop-in
-# existed, so the timestamp it created is still bound to the old
-# (usually 15-minute) timeout in sudo's eyes. sudo reads the timeout
-# from sudoers at each call, but the *timestamp file* records the moment
-# it was last refreshed -- and it does not retroactively "grow" just
-# because the config changed. This is the reason the user still sees a
-# password prompt: the timestamp quietly expires 15 minutes after the
-# initial `sudo -v`, no matter what the drop-in says.
+#   2. Then ask for the password exactly once. This creates a global
+#      120-minute timestamp.
 #
-# The fix is to explicitly invalidate the old timestamp (`sudo -k`) and
-# create a fresh one under the new timeout, so the entire 120-minute
-# window starts from *now*, not from before the drop-in existed.
+#   3. Start a 15-second keepalive that refreshes it silently.
+#
+# Both Defaults lines matter:
+#
+#   timestamp_timeout=120
+#       Lifts the cache from sudo's default 15 minutes to 2 hours.
+#
+#   timestamp_type=global
+#       Arch's default is timestamp_type=tty -- the timestamp is scoped
+#       per terminal, and the subshells yay/makepkg spawn can look like
+#       a different terminal to sudo, so the cached timestamp is not
+#       found and sudo asks for a password again mid-install. "global"
+#       keeps a single timestamp for the user across every terminal and
+#       every subshell.
 SUDOERS_DROPIN="/etc/sudoers.d/99-installer-timestamp"
 SUDOERS_DROPIN_CREATED=0
 
 if [[ ! -e "$SUDOERS_DROPIN" ]]; then
-    # Two Defaults lines, both important:
-    #
-    #   timestamp_timeout=120
-    #       Lifts sudo's cache from the default 15 minutes to 2 hours,
-    #       long enough for any AUR build.
-    #
-    #   timestamp_type=global
-    #       Arch's default is timestamp_type=tty: sudo remembers the
-    #       timestamp *per terminal*. yay and makepkg spawn their own
-    #       subshells for the sudo call, and those subshells can look
-    #       like a different terminal context to sudo, so the cached
-    #       timestamp is not found and sudo falls back to asking for a
-    #       password -- even though our keepalive has been refreshing
-    #       it all along. Setting this to "global" keeps one timestamp
-    #       for the user across every terminal and every subshell,
-    #       which is exactly what a scripted, unattended install needs.
     _dropin_tmp="$(mktemp)"
     {
         printf 'Defaults timestamp_timeout=120\n'
         printf 'Defaults timestamp_type=global\n'
     } > "$_dropin_tmp"
 
-    # Create via `install -m 0440 -o root -g root`, which is atomic and
-    # sets ownership and mode in one step -- a failure between a plain
-    # `sudo tee` and a following `sudo chmod` would otherwise leave a
-    # world-readable file in /etc/sudoers.d/.
+    # `install -m 0440 -o root -g root` sets mode and ownership
+    # atomically -- a failure between a plain `sudo tee` and a following
+    # `sudo chmod` would otherwise leave a world-readable file in
+    # /etc/sudoers.d/.
+    #
+    # NOTE: this runs BEFORE the first `sudo -v` on purpose. sudo
+    # invalidates its cached timestamp whenever sudoers is rewritten, so
+    # writing the drop-in after the first prompt would force a second
+    # one. Writing it first means the only prompt the user sees already
+    # uses the new settings.
     if sudo install -m 0440 -o root -g root "$_dropin_tmp" "$SUDOERS_DROPIN" 2>/dev/null \
        && sudo visudo -cf "$SUDOERS_DROPIN" >/dev/null 2>&1; then
         SUDOERS_DROPIN_CREATED=1
@@ -163,18 +160,10 @@ else
     info "Existing sudoers drop-in found at $SUDOERS_DROPIN."
 fi
 
-# Refresh the timestamp WITHOUT prompting: the initial `sudo -v` at the
-# top of the script already created a valid timestamp, and sudo extends
-# it on each `-v` call. No `sudo -k` here -- that would delete the
-# timestamp and force another interactive prompt, which is exactly the
-# "two prompts" behaviour we are trying to avoid.
-sudo -v 2>/dev/null || {
-    # Extremely rare: the initial `sudo -v` succeeded but this one fails,
-    # e.g. because sudoers was just rewritten in a way that invalidates
-    # the cached credentials. Ask once more; this is the last prompt.
-    log "Refreshing sudo timestamp (one prompt, then covered by the keepalive)..."
-    sudo -v || die "sudo access is required."
-}
+# Single interactive prompt, under the new settings. From this point on
+# every sudo call (ours, yay's, makepkg's) hits the cached timestamp.
+log "Checking sudo access (you may be asked for your password)..."
+sudo -v || die "sudo access is required."
 
 # Keepalive: refresh every 15 s. With timestamp_type=global this works
 # regardless of which subshell the next sudo call comes from. If it ever
