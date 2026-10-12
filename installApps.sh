@@ -92,9 +92,6 @@ trap cleanup EXIT
 
 command -v pacman >/dev/null || die "pacman not found -- is this an Arch system?"
 
-log "Checking sudo access (you may be asked for your password)..."
-sudo -v || die "sudo access is required."
-
 # ---------------- SUDO: ONE PROMPT ONLY ----------------
 #
 # yay and makepkg call sudo internally WITHOUT -n, so even though every
