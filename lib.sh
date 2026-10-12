@@ -126,16 +126,21 @@ repo_list_archives() {
 }
 
 # existing_repo_packages <pkg>...
-# Prints only the packages that exist in the sync databases. A single
-# renamed/removed package makes `pacman -S` abort the WHOLE transaction;
-# filtering first turns that into a warning and keeps the rest installable.
+# Prints only the names that exist in the sync databases -- EITHER as a
+# package (pacman -Si) OR as a group (pacman -Sg). This is important
+# because the "full" GNOME package set is just the group name "gnome",
+# and a group is not a package: `pacman -Si gnome` fails with "not
+# found" even though `pacman -S gnome` works fine. Without the group
+# check the filter silently dropped "gnome" from the DE package list,
+# and with it gdm -- so GNOME ended up installed without a display
+# manager and the system booted to a TTY login prompt.
 existing_repo_packages() {
     local p
     for p in "$@"; do
-        if pacman -Si "$p" >/dev/null 2>&1; then
+        if pacman -Si "$p" >/dev/null 2>&1 || pacman -Sg "$p" >/dev/null 2>&1; then
             printf '%s\n' "$p"
         else
-            warn "Package '$p' was not found in the repositories -- skipping it." >&2
+            warn "Package or group '$p' was not found in the repositories -- skipping it." >&2
         fi
     done
 }
