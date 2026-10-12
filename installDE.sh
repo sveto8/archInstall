@@ -587,6 +587,7 @@ set -e
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
 gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark'
 gsettings set org.gnome.desktop.interface accent-color 'slate' 2>/dev/null || true
+gsettings set org.gnome.desktop.interface clock-format '24h'
 gsettings set org.gtk.Settings.FileChooser sort-directories-first true
 gsettings set org.gnome.shell always-show-log-out true
 gsettings set org.gnome.desktop.interface icon-theme 'Reversal' 2>/dev/null || true
@@ -626,6 +627,7 @@ gtk-theme='Adwaita-dark'
 accent-color='slate'
 icon-theme='Reversal'
 cursor-theme='DeppinDark-cursors'
+clock-format='24h'
 
 [org/gtk/settings/file-chooser]
 sort-directories-first=true
