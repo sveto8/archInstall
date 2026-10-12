@@ -1008,6 +1008,45 @@ if [[ -n "$DE_CHOICE" ]]; then
         [[ "$DE_RC" -eq 0 ]] && DE_OK=1
 
         rm -rf /mnt/root/arch-setup-tmp
+
+        # --- Safety net ---
+        #
+        # installDE.sh just tried to enable the display manager and set
+        # graphical.target as the default, but a fresh chroot can end up
+        # without the necessary symlinks even when systemctl reports
+        # success. Without them the system boots to a TTY login prompt
+        # instead of the graphical login. This re-creates the two
+        # symlinks directly inside the chroot, using chroot-relative
+        # paths so they resolve correctly once the system boots.
+        if [[ "$DE_OK" -eq 1 ]]; then
+            case "$DE_CHOICE" in
+                1) _dm="gdm.service" ;;
+                2) _dm="sddm.service" ;;
+                3) _dm="lightdm.service" ;;
+                *) _dm="" ;;
+            esac
+            if [[ -n "$_dm" ]]; then
+                arch-chroot /mnt /bin/bash <<DM_FIX_EOF >>"$LOG_FILE" 2>&1
+set -Eeuo pipefail
+DM_UNIT="/usr/lib/systemd/system/${_dm}"
+DM_LINK="/etc/systemd/system/display-manager.service"
+DEFAULT_LINK="/etc/systemd/system/default.target"
+DEFAULT_TARGET="/usr/lib/systemd/system/graphical.target"
+
+if [[ -f "\$DM_UNIT" && ! -e "\$DM_LINK" ]]; then
+    ln -sf "\$DM_UNIT" "\$DM_LINK"
+    echo "safety net: created \$DM_LINK -> \$DM_UNIT"
+fi
+if [[ -f "\$DEFAULT_TARGET" ]]; then
+    if [[ ! -L "\$DEFAULT_LINK" || "\$(readlink -f "\$DEFAULT_LINK" 2>/dev/null)" != "\$DEFAULT_TARGET" ]]; then
+        ln -sf "\$DEFAULT_TARGET" "\$DEFAULT_LINK"
+        echo "safety net: set \$DEFAULT_LINK -> \$DEFAULT_TARGET"
+    fi
+fi
+DM_FIX_EOF
+                info "Verified display-manager and graphical.target setup."
+            fi
+        fi
     fi
     [[ -z "$DE_DL" ]] || rm -f "$DE_DL"
 
