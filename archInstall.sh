@@ -414,13 +414,13 @@ if [[ "${#WIFI_PSK_FILES[@]}" -gt 0 ]]; then
     fi
 fi
 
-# ---------------- DESKTOP ENVIRONMENT ----------------
+# ---------------- DESKTOP ENVIRONMENT (jedan korak – None na kraju) ----------------
 #
-# Optional: runs installDE.sh inside the new system (non-interactive) as
-# the very last step. It is non-fatal -- if it fails the base system is
-# still complete. After reboot run installDE.sh again if needed.
+# Optional desktop environment. If you choose None, the installer still continues
+# without installing any DE.
 
-if ask_yes "Install desktop environment" "Do you want to install a desktop environment now? (GNOME / KDE Plasma / XFCE)\n\nThis will also enable the matching display manager." no; then
+DE_CHOICE=""
+if ask_yes "Install desktop environment" "Do you want to install a desktop environment now?\n\nThis will also enable the matching display manager." no; then
     DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 1 \
         --menu "Which desktop environment do you want to install?" \
         0 "$BOX_W" 0 \
@@ -867,8 +867,6 @@ grub-install \
 
 grub-mkconfig -o /boot/grub/grub.cfg
 advance
-
-# ... rest of the script remains exactly the same from here on ...
 
 # ---------------- DESKTOP ENVIRONMENT (optional, non-fatal) ----------------
 
