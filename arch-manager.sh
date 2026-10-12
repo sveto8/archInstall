@@ -9,8 +9,10 @@ set -Eeuo pipefail
 # it again (it is copied to /archInstall/) and use options 2-4 or 5.
 # ============================================================
 
-# URL for the scripts repository (change according to your repo)
-SCRIPT_URL="https://raw.githubusercontent.com/sveto8/archInstall/main"
+# URL for the scripts repository. Override without editing the file:
+#   ARCH_REPO_URL=https://raw.githubusercontent.com/<user>/<repo>/<branch> ./arch-manager.sh
+# (lib.sh uses the very same variable, so every script follows the fork.)
+SCRIPT_URL="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 
 # Everything the manager downloads (lib.sh is sourced by the others).
 SCRIPTS=(
@@ -87,7 +89,7 @@ fix_ownership
 
 status_text() {
     local arch="no" live="no" root="no" btrfs="no" snapper="no"
-    [[ -f /etc/os-release ]] && grep -q "ID=arch" /etc/os-release && arch="yes"
+    [[ -f /etc/os-release ]] && grep -qE '^ID=("?)arch\1$' /etc/os-release && arch="yes"
     is_live_iso && live="yes"
     [[ $EUID -eq 0 ]] && root="yes"
     if command -v findmnt >/dev/null && [[ "$(findmnt -n -o FSTYPE / 2>/dev/null || true)" == "btrfs" ]]; then
@@ -329,12 +331,16 @@ if [[ $# -gt 0 ]]; then
         --download) download_all; exit 0 ;;
         --install)
             # Live ISO: download everything and run archInstall.sh.
+            ensure_dialog
+            ui_init
             download_all
             run_script "archInstall.sh"
             exit "$RUN_SCRIPT_RC"
             ;;
         --help) echo "Usage: $0 [--download|--install|--help|<script.sh>]"; exit 0 ;;
         *)
+            ensure_dialog
+            ui_init
             seed_from_local
             if in_array "$1" "${SCRIPTS[@]}" || [[ -f "${DOWNLOAD_DIR}/$1" ]]; then
                 run_script "$1"
