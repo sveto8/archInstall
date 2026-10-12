@@ -1237,8 +1237,11 @@ exec 1>&3
 exec 3>&-
 }
 
-# Taller gauge so the phase tree + sub-steps fit comfortably.
-GAUGE_HEIGHT=22
+# Taller gauge so the phase tree + sub-steps fit comfortably. Capped to
+# what the terminal can actually show; ui_init guarantees TERM_LINES >= 20.
+GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
+(( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
+(( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
 
 run_with_gauge "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup
 
