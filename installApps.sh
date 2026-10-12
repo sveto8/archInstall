@@ -22,15 +22,32 @@ BACKTITLE="Arch Linux: application install"
 LOG_FILE="${HOME}/installApps.log"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
-    _url="https://raw.githubusercontent.com/sveto8/archInstall/main/lib.sh"
-    _code="$(curl -sSL -o "$SCRIPT_DIR/lib.sh.tmp" -w '%{http_code}' "$_url" 2>/dev/null || true)"
-    if [[ "$_code" == "200" ]]; then
-        mv "$SCRIPT_DIR/lib.sh.tmp" "$SCRIPT_DIR/lib.sh"
+    # Download to a temporary file FIRST (never write a partial file
+    # directly next to the script -- the folder may be a read-only or
+    # permission-quirky mount). Verify the download produced a non-empty
+    # file, then move it into place. If the script folder turns out to be
+    # unwritable, fall back to keeping lib.sh in $TMPDIR.
+    _lib_tmp="$(mktemp "${TMPDIR:-/tmp}/lib.sh.XXXXXX")" || {
+        echo "ERROR: could not create a temporary file for lib.sh." >&2
+        exit 1
+    }
+    _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
+        "${_repo_url}/lib.sh" 2>/dev/null || true)"
+    if [[ -s "$_lib_tmp" ]]; then
+        if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
+            :
+        else
+            _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
+            mv "$_lib_tmp" "$_lib_fallback"
+            echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
+            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+        fi
     else
-        rm -f "$SCRIPT_DIR/lib.sh.tmp"
+        rm -f "$_lib_tmp"
         echo "ERROR: lib.sh is missing next to $0 and could not be downloaded." >&2
-        echo "       URL: $_url  (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
+        echo "       URL: ${_repo_url}/lib.sh (HTTP ${_code:-000}; 404 = not pushed to the repo, 000 = no network)" >&2
         echo "       Put lib.sh in the same folder as this script and run it again." >&2
         exit 1
     fi
@@ -150,9 +167,14 @@ AUR_PACKAGES=(
     python-pyqt5                        # for hp-setup
 )
 
+# JDK used for work. Package + the name `archlinux-java` knows it by: change
+# both here (e.g. jdk17-openjdk / java-17-openjdk) and nothing else.
+JAVA_PKG="jdk11-openjdk"
+JAVA_ENV="java-11-openjdk"
+
 # Work-related packages (optional, asked separately)
 WORK_REPO=(
-    jdk11-openjdk
+    "$JAVA_PKG"
     meld
     code                                # open-source VS Code
     remmina
@@ -169,7 +191,8 @@ WORK_AUR=(
 # ---------------- DIALOG: OPTIONAL PACKAGES ----------------
 #
 # Defaults: everything ON except the office suites (LibreOffice, WPS,
-# OnlyOffice), which are OFF. nautilus-admin-gtk4 is a Nautilus-specific
+# OnlyOffice), which are OFF; LACT / CoolerControl depend on the hardware
+# (see below). nautilus-admin-gtk4 is a Nautilus-specific
 # AUR package ("Open as Administrator" in the context menu), so it is
 # only offered when gnome-shell is detected.
 
@@ -178,10 +201,20 @@ if pacman -Qq gnome-shell >/dev/null 2>&1; then
     NAUTILUS_ITEM=(nautilus-admin "Nautilus 'Open as Administrator' (AUR)" on)
 fi
 
+# Hardware-dependent defaults: LACT only makes sense with an AMD GPU, and
+# CoolerControl (case fans / AIO) is a desktop thing. The same script can
+# therefore be run on a desktop with a Radeon and on an Intel-graphics
+# laptop and offer sensible defaults on both. Everything stays selectable.
+GPU_VENDORS="$(detect_gpu_vendors)"
+LACT_STATE="off"; LACT_NOTE=" -- no AMD GPU detected"
+if [[ " $GPU_VENDORS " == *" amd "* ]]; then LACT_STATE="on"; LACT_NOTE=""; fi
+COOLER_STATE="on"; COOLER_NOTE=""
+if is_laptop; then COOLER_STATE="off"; COOLER_NOTE=" -- laptop detected"; fi
+
 CHOICES="$(dlg_capture --title "Optional packages" --separate-output \
     --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel." 0 "$BOX_W" 0 \
-    lact           "Lact - AMD GPU control/overclock (pacman)" on \
-    coolercontrol  "CoolerControl - fan/cooling control (AUR)" on \
+    lact           "Lact - AMD GPU control/overclock (pacman)${LACT_NOTE}" "$LACT_STATE" \
+    coolercontrol  "CoolerControl - fan/cooling control (AUR)${COOLER_NOTE}" "$COOLER_STATE" \
     "${NAUTILUS_ITEM[@]}" \
     libreoffice    "LibreOffice still (pacman)" off \
     wps            "WPS Office + fonts (AUR)" off \
@@ -231,7 +264,7 @@ read -r -a EXTRA_PACKAGES <<< "$EXTRA_INPUT"
 
 SUMMARY="Repo (pacman):\n  ${REPO_PACKAGES[*]}\n\nAUR (yay):\n  ${AUR_PACKAGES[*]}\n\nExtra:\n  ${EXTRA_PACKAGES[*]:-none}\n\nProceed with the installation?"
 
-dlg --title "Confirm" --no-collapse --cr-wrap --yesno "$SUMMARY" 0 "$BOX_W" || abort
+ask_yes "Confirm" "$SUMMARY" yes || abort
 
 # ---------------- INSTALL HELPERS ----------------
 #
@@ -295,6 +328,9 @@ install_aur() {
 # NOTE: the body is deliberately not indented -- we keep the same
 # style as the other scripts in this repository.
 
+# The log lives in the user's own home, so the redirects performed by the
+# (unprivileged) shell are exactly what we want -- not by sudo.
+# shellcheck disable=SC2024
 run_install() {
     local total current=0 pkg yay_tmp
     local log="$LOG_FILE"
@@ -371,7 +407,7 @@ run_install() {
 
     gauge_msg $((current * 100 / total)) "Installing base-devel, git..."
     if ! sudo -n pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1; then
-        warn "Failed to install base-devel/git -- sudo timestamp may have expired."
+        warn "Failed to install base-devel/git -- sudo timestamp may have expired." >> "$log"
         echo "base-devel git" >> "$FAILED_FILE"
     fi
     CUR_IDX=1
@@ -438,18 +474,18 @@ run_install() {
     CUR_ITEMS=("Java default" "CUPS enable")
     CUR_IDX=0
 
-    if [[ -d /usr/lib/jvm/java-11-openjdk ]]; then
-        if [[ "$(archlinux-java get 2>/dev/null)" != "java-11-openjdk" ]]; then
-            gauge_msg 99 "Setting OpenJDK 11 as the default JVM..."
-            sudo -n archlinux-java set java-11-openjdk >> "$log" 2>&1 || \
-                warn "Could not set default Java (sudo may have timed out)."
+    if [[ -d "/usr/lib/jvm/${JAVA_ENV}" ]]; then
+        if [[ "$(archlinux-java get 2>/dev/null)" != "$JAVA_ENV" ]]; then
+            gauge_msg 99 "Setting ${JAVA_ENV} as the default JVM..."
+            sudo -n archlinux-java set "$JAVA_ENV" >> "$log" 2>&1 || \
+                warn "Could not set default Java (sudo may have timed out)." >> "$log"
         fi
     fi
     CUR_IDX=1
 
     gauge_msg 99 "Enabling CUPS (printing)..."
     sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
-        warn "Could not enable CUPS (sudo may have timed out)."
+        warn "Could not enable CUPS (sudo may have timed out)." >> "$log"
     CUR_IDX=2
 
     # ---- Phase 5: done ----
@@ -513,7 +549,7 @@ if in_array f5vpn-ng "${AUR_PACKAGES[@]}"; then
 fi
 RESULT+="\nFull log: $LOG_FILE"
 
-dlg --clear --title "App install complete" --no-collapse --cr-wrap --msgbox "$RESULT" 0 "$BOX_W"
+msg_box "App install complete" "$RESULT"
 
 clear
 log "App install complete. Log: $LOG_FILE"
