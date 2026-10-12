@@ -62,12 +62,14 @@ trap 'die "Failed at line $LINENO."' ERR
 # TARGET_USER, and no dialog is shown. Without them it asks via dialog.
 INTERACTIVE=1
 [[ -z "${ASSUME_YES:-}" ]] || INTERACTIVE=0
+
 # Optional, only used when installing GNOME. Empty means "don't touch
 # the current Formats setting". Set by archInstall.sh to the LC_TIME etc.
 # locale chosen in the "Regional formats" dialog; can also be set by hand
 # when running this script standalone:
 #   FORMAT_LOCALE=hr_HR.UTF-8 ./installDE.sh
 FORMAT_LOCALE="${FORMAT_LOCALE:-}"
+
 # ---------------- BASIC CHECKS ----------------
 
 if [[ $EUID -ne 0 ]]; then
@@ -557,25 +559,67 @@ if [[ "$(readlink -f "$DEFAULT_LINK" 2>/dev/null)" != "$DEFAULT_TARGET" ]]; then
     warn "default.target does not point to graphical.target -- boot may stay on a TTY."
 fi
 
-# ---------------- GNOME: DARK THEME + SLATE ACCENT ----------------
+# ---------------- GNOME: DARK THEME + SLATE ACCENT + REGIONAL FORMATS ----------------
 
 set_phase 3
 if [[ "$DE_CHOICE" == "1" ]]; then
     gauge_msg 75 "Configuring GNOME theme for $TARGET_USER..."
     log "Setting GNOME dark theme + slate accent for $TARGET_USER..."
 
-    if in_chroot; then
-        # No running session bus in a chroot, so gsettings can't write the
-        # user's settings. Install the same values as SYSTEM-WIDE dconf
-        # defaults instead (applies to every user; users can still change
-        # them). Keys unknown to the installed GNOME (e.g. accent-color
-        # before 47) are simply ignored.
-        mkdir -p /etc/dconf/profile /etc/dconf/db/local.d
-        cat > /etc/dconf/profile/user <<'DCONF_PROFILE_EOF'
+    # Apply per-user gsettings FIRST, using a temporary dbus session as the
+    # target user. This works inside a chroot too: arch-chroot bind-mounts
+    # /proc, /sys and /dev, and dbus-run-session creates its own session
+    # socket under /tmp, so a session bus can start without a running
+    # systemd user instance.
+    #
+    # This is the ONLY reliable way to set org.gnome.system.locale region:
+    # GNOME treats it as a per-user preference and ignores the system-wide
+    # dconf default for that key (unlike color-scheme / icon-theme, which
+    # GNOME DOES read from /etc/dconf/db/local). Skipping this step is why
+    # "Formats" stayed on the LANG default and never moved to CROAT.
+    _user_gsettings_ok=0
+    if command -v dbus-run-session >/dev/null 2>&1; then
+        _user_gsettings_ok=1
+
+        # Run every gsettings call in a single session so dbus starts once.
+        if ! runuser -u "$TARGET_USER" -- dbus-run-session -- bash -s <<'GSETTINGS_EOF'
+set -e
+gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark'
+gsettings set org.gnome.desktop.interface accent-color 'slate' 2>/dev/null || true
+gsettings set org.gtk.Settings.FileChooser sort-directories-first true
+gsettings set org.gnome.shell always-show-log-out true
+gsettings set org.gnome.desktop.interface icon-theme 'Reversal' 2>/dev/null || true
+gsettings set org.gnome.desktop.interface cursor-theme 'DeppinDark-cursors' 2>/dev/null || true
+GSETTINGS_EOF
+        then
+            _user_gsettings_ok=0
+            warn "Per-user gsettings failed -- falling back to system-wide dconf defaults."
+        fi
+
+        # Regional formats -- a separate setting, and the important one here.
+        if [[ -n "$FORMAT_LOCALE" && "$_user_gsettings_ok" -eq 1 ]]; then
+            if runuser -u "$TARGET_USER" -- dbus-run-session -- \
+                    gsettings set org.gnome.system.locale region "$FORMAT_LOCALE"; then
+                info "GNOME regional formats set per-user to $FORMAT_LOCALE."
+            else
+                warn "Could not set GNOME regional formats to $FORMAT_LOCALE per-user."
+            fi
+        fi
+    else
+        warn "dbus-run-session not found (package: dbus) -- per-user gsettings unavailable."
+    fi
+
+    # System-wide dconf defaults as a fallback, and to cover the keys GNOME
+    # DOES read from /etc/dconf/db/local (color-scheme, gtk-theme,
+    # icon-theme, cursor-theme, always-show-log-out). Writing them here is
+    # idempotent even when the per-user path above succeeded.
+    mkdir -p /etc/dconf/profile /etc/dconf/db/local.d
+    cat > /etc/dconf/profile/user <<'DCONF_PROFILE_EOF'
 user-db:user
 system-db:local
 DCONF_PROFILE_EOF
-        cat > /etc/dconf/db/local.d/00-arch-defaults <<'DCONF_EOF'
+    cat > /etc/dconf/db/local.d/00-arch-defaults <<'DCONF_EOF'
 [org/gnome/desktop/interface]
 color-scheme='prefer-dark'
 gtk-theme='Adwaita-dark'
@@ -589,66 +633,25 @@ sort-directories-first=true
 [org/gnome/shell]
 always-show-log-out=true
 DCONF_EOF
-        # Regional formats: separate from the UI language. Setting this
-        # makes GNOME show dates/numbers/currency in the chosen locale
-        # while the interface stays in the language set for LANG.
-        if [[ -n "$FORMAT_LOCALE" ]]; then
-            printf '\n[org/gnome/system/locale]\nregion=%s\n' "'${FORMAT_LOCALE}'" \
-                >> /etc/dconf/db/local.d/00-arch-defaults
-        fi
-        
-        if command -v dconf >/dev/null 2>&1; then
-            dconf update || warn "dconf update failed -- GNOME defaults may not apply."
-            info "GNOME defaults installed system-wide (dark theme, slate accent, Reversal icons, cursor theme)."
-        else
-            warn "dconf not found -- GNOME defaults were written but not compiled."
-        fi
-    elif command -v dbus-run-session >/dev/null 2>&1; then
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark' \
-            || warn "Could not set GNOME color-scheme to prefer-dark."
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' \
-            || warn "Could not set GNOME gtk-theme to Adwaita-dark (older GTK3 apps)."
-        # Accent color is a GNOME 47+ feature. On older versions the key
-        # doesn't exist and gsettings will error out -- that's fine, we
-        # just warn and continue.
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface accent-color 'slate' \
-            || warn "Could not set GNOME accent-color to slate (requires GNOME 47+)."
-        # Directories before files when browsing. This sets the GTK
-        # FileChooser preference, which is the closest available option:
-        # Nautilus 42+ removed the per-view "sort folders before files"
-        # toggle from its own preferences, but this still affects GTK
-        # file dialogs (open/save) system-wide.
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gtk.Settings.FileChooser sort-directories-first true \
-            || warn "Could not set sort-directories-first for GTK file dialogs."
-        # Always show "Log Out" in the GNOME system menu. By default it is
-        # hidden behind the power-off dialog, which is inconvenient on
-        # multi-user or session-switching setups.
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.shell always-show-log-out true \
-            || warn "Could not enable always-show-log-out in GNOME shell."
-        # Apply the Reversal icon theme and Deepin dark cursor theme
-        # installed earlier by this script.
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface icon-theme 'Reversal' \
-            || warn "Could not set GNOME icon-theme to Reversal."
-        runuser -u "$TARGET_USER" -- dbus-run-session -- \
-            gsettings set org.gnome.desktop.interface cursor-theme 'DeppinDark-cursors' \
-            || warn "Could not set GNOME cursor-theme to DeppinDark-cursors."
-        # Regional formats (independent of the UI language). Same setting
-        # GNOME exposes as Settings -> Region & Language -> Formats.
-        if [[ -n "$FORMAT_LOCALE" ]]; then
-            runuser -u "$TARGET_USER" -- dbus-run-session -- \
-                gsettings set org.gnome.system.locale region "$FORMAT_LOCALE" \
-                || warn "Could not set GNOME regional formats to $FORMAT_LOCALE."
-        fi
-        info "GNOME dark theme + slate accent set (applies on first login)."
+
+    # Regional formats also go into the system-wide defaults: on some
+    # GNOME versions the key IS honoured from here, and it costs nothing
+    # to set both. Per-user gsettings above is still the primary mechanism.
+    if [[ -n "$FORMAT_LOCALE" ]]; then
+        printf '\n[org/gnome/system/locale]\nregion=%s\n' "'${FORMAT_LOCALE}'" \
+            >> /etc/dconf/db/local.d/00-arch-defaults
+    fi
+
+    if command -v dconf >/dev/null 2>&1; then
+        dconf update || warn "dconf update failed -- GNOME defaults may not apply."
     else
-        warn "dbus-run-session not found (package: dbus) -- skipping GNOME theme setup."
-        info "Set it manually after login: Settings -> Appearance -> Dark + Slate."
+        warn "dconf not found -- GNOME defaults were written but not compiled."
+    fi
+
+    if [[ "$_user_gsettings_ok" -eq 1 ]]; then
+        info "GNOME dark theme + regional formats set (applies on first login)."
+    else
+        info "GNOME defaults installed system-wide (per-user gsettings not available)."
     fi
 fi
 
