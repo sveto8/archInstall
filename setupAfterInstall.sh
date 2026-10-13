@@ -630,6 +630,17 @@ do
 done
 info "Backups: $BACKUP_DIR"
 
+# fstab: drop numeric subvolid= pins (older archInstall.sh runs / manual
+# installs have them). With a subvolid in the "/" entry a snapshot booted
+# from grub-btrfs would be mounted over by the original @ subvolume, and
+# Snapper rollbacks would point at the wrong subvolume. The subvol=/<name>
+# option stays, so every mount keeps working. The original file is in the
+# backup directory (made above).
+if grep -qE 'subvolid=[0-9]+' /etc/fstab; then
+    log "Removing subvolid= pins from /etc/fstab (backup: $BACKUP_DIR/fstab)..."
+    sed -i -E 's/,subvolid=[0-9]+//' /etc/fstab
+fi
+
 # ---------------- PACKAGES ----------------
 
 set_phase 1
@@ -853,7 +864,7 @@ log "Enabling Snapper timers..."
 systemctl enable --now snapper-cleanup.timer
 systemctl enable --now snapper-timeline.timer
 
-if systemctl list-unit-files snapper-boot.timer >/dev/null 2>&1; then
+if unit_exists snapper-boot.timer; then
     systemctl enable --now snapper-boot.timer
 else
     warn "snapper-boot.timer is not available in this Snapper version."
@@ -863,6 +874,10 @@ advance
 gauge_msg 45 "Enabling fstrim.timer (periodic TRIM)..."
 log "Enabling fstrim.timer (periodic TRIM)..."
 systemctl enable --now fstrim.timer
+# fstrim only works through dm-crypt when the mapping allows discards.
+if ! cryptsetup status "$CRYPT_NAME" 2>/dev/null | grep -qE '^[[:space:]]*flags:.*discards'; then
+    warn "LUKS discards are not enabled on '$CRYPT_NAME', so fstrim.timer cannot TRIM this disk. To enable (small privacy trade-off: used/free blocks become visible) add rd.luks.options=discard to GRUB_CMDLINE_LINUX_DEFAULT and rebuild GRUB."
+fi
 advance
 
 # ---------------- INITRAMFS ----------------
@@ -1025,7 +1040,7 @@ advance
 gauge_msg 74 "Enabling grub-btrfs daemon..."
 log "Enabling grub-btrfs daemon..."
 
-if systemctl list-unit-files grub-btrfsd.service >/dev/null 2>&1; then
+if unit_exists grub-btrfsd.service; then
     systemctl enable --now grub-btrfsd.service
 else
     warn "grub-btrfsd.service not found."
