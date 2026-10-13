@@ -113,6 +113,13 @@ fi
 
 TARGET_HOME="$(getent passwd "$TARGET_USER" | cut -d: -f6)"
 [[ -n "$TARGET_HOME" ]] || die "Could not determine home directory for $TARGET_USER."
+TARGET_GROUP="$(id -gn "$TARGET_USER")"
+
+# UI language of the system (LANG from /etc/locale.conf, written by
+# archInstall.sh). Used for KDE's language setting below; this script runs
+# as a separate process, so it has to read it from the system itself.
+SYSTEM_LANG="$(sed -n 's/^LANG=//p' /etc/locale.conf 2>/dev/null | head -n1 || true)"
+SYSTEM_LANG="${SYSTEM_LANG:-${LANG:-en_US.UTF-8}}"
 
 # ---------------- DESKTOP ENVIRONMENT ----------------
 
@@ -312,7 +319,7 @@ done
 for _p in "${DE_SKIPPED[@]}"; do
     warn "Package '$_p' is not in the repositories -- skipped."
 done
-[[ "${#DE_PACKAGES[@]}" -gt 0 ]] || die "None of the selected packages exist in the repositories -- is the pacman database synced (pacman -Sy)?"
+[[ "${#DE_PACKAGES[@]}" -gt 0 ]] || die "None of the selected packages exist in the repositories -- is the pacman database synced? (run: pacman -Syu)"
 
 # ---------------- CONFIRM ----------------
 
@@ -580,11 +587,11 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         if ! runuser -u "$TARGET_USER" -- dbus-run-session -- bash -s <<'GSETTINGS_EOF'
 set -e
 gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
-gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark'
+gsettings set org.gnome.desktop.interface gtk-theme 'Adwaita-dark' 2>/dev/null || true
 gsettings set org.gnome.desktop.interface accent-color 'slate' 2>/dev/null || true
 gsettings set org.gnome.desktop.interface clock-format '24h'
-gsettings set org.gtk.Settings.FileChooser sort-directories-first true
-gsettings set org.gnome.shell always-show-log-out true
+gsettings set org.gtk.Settings.FileChooser sort-directories-first true 2>/dev/null || true
+gsettings set org.gnome.shell always-show-log-out true 2>/dev/null || true
 gsettings set org.gnome.desktop.interface icon-theme 'Reversal' 2>/dev/null || true
 gsettings set org.gnome.desktop.interface cursor-theme 'DeppinDark-cursors' 2>/dev/null || true
 GSETTINGS_EOF
@@ -670,7 +677,7 @@ if [[ "$DE_CHOICE" == "2" ]]; then
     log "Configuring KDE defaults for $TARGET_USER..."
 
     _kde_config_dir="${TARGET_HOME}/.config"
-    install -d -m 755 -o "$TARGET_USER" -g "$TARGET_USER" "$_kde_config_dir"
+    install -d -m 755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$_kde_config_dir"
 
     # Breeze Dark. Both keys are set: [KDE] LookAndFeelPackage is the
     # modern setting (Plasma 5.24+ / Plasma 6) and covers the whole desktop
@@ -699,7 +706,7 @@ if [[ "$DE_CHOICE" == "2" ]]; then
     else
         sed -i '/^\[General\]/a ColorScheme=BreezeDark' "$_kdeglobals"
     fi
-    chown "$TARGET_USER:$TARGET_USER" "$_kdeglobals"
+    chown "$TARGET_USER:$TARGET_GROUP" "$_kdeglobals"
 
     # Regional formats. KDE reads these from plasma-localerc and applies
     # them independently of the interface language (the same separation
@@ -710,9 +717,9 @@ if [[ "$DE_CHOICE" == "2" ]]; then
 LANG=${FORMAT_LOCALE}
 
 [Translations]
-LANGUAGE=${LOCALE%%.*}
+LANGUAGE=${SYSTEM_LANG%%.*}
 PLASMA_LOCALERC_EOF
-        chown "$TARGET_USER:$TARGET_USER" "${_kde_config_dir}/plasma-localerc"
+        chown "$TARGET_USER:$TARGET_GROUP" "${_kde_config_dir}/plasma-localerc"
         info "KDE Breeze Dark + regional formats ($FORMAT_LOCALE) set for $TARGET_USER."
     else
         info "KDE Breeze Dark set for $TARGET_USER."
@@ -734,7 +741,7 @@ fi
 #                        set above the title bars come up dark as well.
 #   xfce4-panel.xml   -> the panel layout, including the clock plugin
 #                        configured as "Time, then date" with a 24-hour
-#                        time (%H:%M) and a "12 lis 2026"-style date
+#                        time (%H:%M) and a "12 Oct 2026"-style date
 #                        (%d %b %Y).
 #
 # The panel file uses our own plugin IDs (1..7). XFCE accepts them as the
@@ -753,7 +760,7 @@ if [[ "$DE_CHOICE" == "3" ]]; then
     log "Configuring XFCE defaults for $TARGET_USER..."
 
     _xfce_conf_dir="${TARGET_HOME}/.config/xfce4/xfconf/xfce-perchannel-xml"
-    install -d -m 755 -o "$TARGET_USER" -g "$TARGET_USER" "$_xfce_conf_dir"
+    install -d -m 755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$_xfce_conf_dir"
 
     cat > "${_xfce_conf_dir}/xsettings.xml" <<'XSETTINGS_EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -833,7 +840,7 @@ XFWM4_EOF
 </channel>
 PANEL_EOF
 
-    chown "$TARGET_USER:$TARGET_USER" \
+    chown "$TARGET_USER:$TARGET_GROUP" \
         "${_xfce_conf_dir}/xsettings.xml" \
         "${_xfce_conf_dir}/xfwm4.xml" \
         "${_xfce_conf_dir}/xfce4-panel.xml"
@@ -845,7 +852,7 @@ if [[ "$DE_CHOICE" == "1" || ( "$DE_CHOICE" == "2" && "$INSTALL_MODE" == "full" 
     log "Enabling Bluetooth service and auto-enable policy..."
 
     # Enable and start the bluetooth systemd service.
-    if systemctl list-unit-files bluetooth.service >/dev/null 2>&1; then
+    if unit_exists bluetooth.service; then
         systemctl enable bluetooth.service
         info "bluetooth.service enabled (will start on next boot)."
     else
@@ -877,7 +884,7 @@ fi
 # ---------------- GNOME: POWER PROFILES ----------------
 
 if [[ "$DE_CHOICE" == "1" ]]; then
-    if systemctl list-unit-files power-profiles-daemon.service >/dev/null 2>&1; then
+    if unit_exists power-profiles-daemon.service; then
         log "Enabling power-profiles-daemon (needed for Settings -> Power)..."
         systemctl enable power-profiles-daemon.service
     else
