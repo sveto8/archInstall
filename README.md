@@ -386,10 +386,7 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    from this repo's `icons/Reversal-icon-theme-master.tar.xz` — extracted
    to a temp dir and built via its own `install.sh`, once per color
    variant (`yellow` default, then `orange`, `black`, `grey` via `-t
-   <color>`) — plus a Deepin-style dark cursor theme from
-   `cursor/DeppinDark-cursors.tar.xz`, extracted straight into
-   `/usr/share/icons/` (no build step needed, unlike the icons). A
-   failed download or a missing `install.sh` in the archive warns and
+   <color>`). A failed download or a missing `install.sh` in the archive warns and
    skips that theme rather than failing the script; the icon cache is
    refreshed afterwards so both themes show up immediately in
    theme pickers
@@ -623,9 +620,6 @@ the offline fallback.
 | What            | Archive                                          | Source |
 |-----------------|---------------------------------------------------|--------|
 | Icon theme      | `icons/Reversal-icon-theme-master.tar.xz`         | [yeyushengfan258/Reversal-icon-theme](https://github.com/yeyushengfan258/Reversal-icon-theme) |
-| Cursor theme    | `cursor/DeppinDark-cursors.tar.xz`                | Deepin-style dark cursor set (same author's Pling/GitHub uploads) |
-
-Cursor theme is not working at the momnet because it relies on the older Xcursor format.
 
 Unlike the icon theme, the cursor archive is expected to be a
 ready-to-use cursor directory (no `install.sh`), so it's extracted
