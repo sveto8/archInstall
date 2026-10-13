@@ -625,6 +625,8 @@ the offline fallback.
 | Icon theme      | `icons/Reversal-icon-theme-master.tar.xz`         | [yeyushengfan258/Reversal-icon-theme](https://github.com/yeyushengfan258/Reversal-icon-theme) |
 | Cursor theme    | `cursor/DeppinDark-cursors.tar.xz`                | Deepin-style dark cursor set (same author's Pling/GitHub uploads) |
 
+Cursor theme is not working at the momnet because it relies on the older Xcursor format.
+
 Unlike the icon theme, the cursor archive is expected to be a
 ready-to-use cursor directory (no `install.sh`), so it's extracted
 directly into `/usr/share/icons/`. The icon archive, by contrast, ships
