@@ -482,18 +482,21 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     # Note: unlike the Reversal icons, the cursor theme is a ready-to-use
     # directory of cursor files, so we just extract it straight into
     # /usr/share/icons/ -- no install.sh needed.
-    log "Downloading Deepin dark cursor theme..."
-    CURSOR_ARCHIVE="$(mktemp --suffix=.tar.xz)"
-    if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
-        log "Extracting Deepin dark cursor theme to /usr/share/icons/..."
-        tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
-        rm -f "$CURSOR_ARCHIVE"
-        info "Deepin dark cursor theme installed."
-    else
-        rm -f "$CURSOR_ARCHIVE"
-        warn "Could not download Deepin dark cursor theme from ${ICONS_BASE_URL}/cursor/"
-    fi
 
+    # !!!!!!!!!!!!!!!!!!!!!!!!!NOT WORKING AT THE MOMENT!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    # log "Downloading Deepin dark cursor theme..."
+    # CURSOR_ARCHIVE="$(mktemp --suffix=.tar.xz)"
+    # if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
+    #     log "Extracting Deepin dark cursor theme to /usr/share/icons/..."
+    #     tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
+    #     rm -f "$CURSOR_ARCHIVE"
+    #     info "Deepin dark cursor theme installed."
+    # else
+    #     rm -f "$CURSOR_ARCHIVE"
+    #     warn "Could not download Deepin dark cursor theme from ${ICONS_BASE_URL}/cursor/"
+    # fi
+    # !!!!!!!!!!!!!!!!!!!!!!!!!NOT WORKING AT THE MOMENT!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    
     # Update the icon cache so the new themes are picked up immediately.
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         log "Updating icon cache..."
