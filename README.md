@@ -123,11 +123,19 @@ Questions, in this order:
    mounted partitions). The disk the live USB booted from and `zram`
    devices are never offered. If leftover mounts from an interrupted run
    exist, it offers to unmount them and close `cryptroot`
-2. **Hostname, timezone, console keymap** — three input boxes pre-filled
-   with the defaults from the config block (`monarch`, `Europe/Zagreb`,
-   `us`) and validated (hostname syntax, the timezone must exist in
-   `/usr/share/zoneinfo`, the keymap must be in `localectl list-keymaps`),
-   so the same script gives each machine (laptop, desktop) its own name
+2. **Hostname, timezone, console keymap(s), language, regional formats**
+   — input boxes pre-filled with the defaults from the config block
+   (`monarch`, `Europe/Zagreb`, `us`) and validated (hostname syntax, the
+   timezone must exist in `/usr/share/zoneinfo`, every keymap must be in
+   `localectl list-keymaps`), so the same script gives each machine
+   (laptop, desktop) its own name. Several keymaps can be given
+   (`us,croat`): you then pick the **primary** one (`KEYMAP=` /
+   `rd.vconsole.keymap=`), the other becomes the toggle layout
+   (`KEYMAP_TOGGLE=`). Two menus follow: the **system language** (`LANG`:
+   English or Croatian) and, independently, the **regional formats**
+   (dates, numbers, currency, measurements, paper: `LC_TIME`,
+   `LC_NUMERIC`, `LC_MONETARY`, `LC_MEASUREMENT`, `LC_PAPER` in
+   `/etc/locale.conf`; also handed to `installDE.sh` for GNOME/KDE)
 3. **User, superuser, password — one after another:** username (empty =
    skip; validated: lowercase, digits, `_`/`-`, not `root`), *"should this
    user be a superuser (wheel + sudo)?"* (default Yes), then the password
@@ -138,7 +146,11 @@ Questions, in this order:
      still log in with admin rights
 4. **LUKS passphrase** — asked twice; it is passed to `cryptsetup` via
    stdin (`--key-file=-`, `--batch-mode`), so there are no interactive
-   cryptsetup prompts in the middle of the install
+   cryptsetup prompts in the middle of the install. **Keymap caveat:** you
+   type it now with the live ISO's layout (normally US) but at every boot
+   with the primary keymap chosen above; if that is not `us`, the dialog
+   warns you — use only characters that sit on the same key in both
+   layouts (avoid `Y`/`Z` and symbols)
 5. **Hardware clock** — `UTC` (Linux default) or `local` (pick this if you
    dual-boot Windows, which assumes the RTC is local time)
 6. **Wake-on-LAN** (default No) — if yes, the wired interface is
@@ -165,11 +177,16 @@ Then, unattended:
 
 1. Partitions the disk: ESP → `/efi`, ext4 → `/boot`, LUKS2 → Btrfs
    (partition names follow the device name: a name ending in a digit gets
-   a `p` — `nvme0n1p1`, `mmcblk0p1` — otherwise none — `sda1`, `vda1`)
+   a `p` — `nvme0n1p1`, `mmcblk0p1` — otherwise none — `sda1`, `vda1`);
+   stale signatures of a previous install are wiped from the new
+   partitions as well
 2. Creates the `@`, `@home`, `@snapshots` subvolumes and mounts them
    (`compress=zstd:3`, `noatime`, `space_cache=v2`; the `ssd` option is
    added only when `/sys/block/<disk>/queue/rotational` says the disk is
-   non-rotational)
+   non-rotational). `genfstab`'s numeric `subvolid=` pins are removed from
+   `/etc/fstab` (only `subvol=/<name>` stays) — with a `subvolid` in the
+   `/` entry, a snapshot booted from grub-btrfs would be overlaid by the
+   original `@` and Snapper rollbacks would target the wrong subvolume
 3. Ranks pacman mirrors with `reflector` (non-fatal if it fails — the
    disk is already formatted, so it just falls back to the default
    mirrorlist)
@@ -193,13 +210,18 @@ Then, unattended:
    drivers reset it) enabled for the detected interface, a minimal
    systemd + `sd-encrypt` `mkinitcpio.conf`, GRUB install + config (the
    GRUB `--target` follows the firmware: `x86_64-efi`, or `i386-efi` on
-   32-bit UEFI)
+   32-bit UEFI). On SSD/NVMe disks `rd.luks.options=discard` is added to
+   the kernel command line (`LUKS_ALLOW_DISCARDS="yes"` in the config
+   block): TRIM only passes through dm-crypt when discards are allowed,
+   otherwise `fstrim.timer` would silently do nothing on the encrypted
+   root. Trade-off: it reveals which blocks are unused (not their
+   content) — set it to `"no"` for the strictest setting
 7. **Optional desktop:** runs `installDE.sh` *inside the new system*
    (`arch-chroot`) non-interactively. This step is **non-fatal** — if it
    fails (mirror/AUR hiccup), the base system is already complete and the
-   closing dialog tells you to run `installDE.sh` after reboot. In a
-   chroot there is no session bus, so the GNOME defaults are installed as
-   system-wide dconf defaults (see `installDE.sh`)
+   closing dialog tells you to run `installDE.sh` after reboot. The
+   display manager and `graphical.target` links are verified afterwards
+   (a fresh chroot can report success without creating them)
 8. Copies `arch-manager.sh`, `lib.sh` and all scripts to `/archInstall/`
    on the new system (`/archInstall/scripts/` for the phase scripts;
    missing ones are fetched from the repo)
@@ -255,7 +277,9 @@ the summary instead of scrolling past.
 5. Shows a scrollable summary and asks for confirmation
 6. Backs up `/etc/fstab`, `/etc/mkinitcpio.conf`, `/etc/default/grub`,
    `/etc/snapper/configs/root` to `/root/btrfs-setup-backups/<timestamp>/`.
-   From here on, every `/etc/default/grub` option the script touches
+   Then any numeric `subvolid=` pins left in `/etc/fstab` are removed (see
+   `archInstall.sh`; matters for booting snapshots from grub-btrfs and for
+   rollbacks). From here on, every `/etc/default/grub` option the script touches
    (`GRUB_TIMEOUT`, `GRUB_DEFAULT`, `GRUB_SAVEDEFAULT`,
    `GRUB_DISABLE_OS_PROBER`, `GRUB_OS_PROBER_SKIP_LIST`, `GRUB_THEME`,
    `GRUB_CMDLINE_LINUX_DEFAULT`)
@@ -272,7 +296,9 @@ the summary instead of scrolling past.
    with number + timeline retention policy and space-based cleanup
    (Btrfs quota/qgroups — can be disabled via `ENABLE_BTRFS_QUOTA=no`)
 9. Enables `snapper-cleanup.timer`, `snapper-timeline.timer`,
-   `snapper-boot.timer`, `fstrim.timer`
+   `snapper-boot.timer`, `fstrim.timer`. If the LUKS mapping does not
+   allow discards (no `rd.luks.options=discard`), a warning explains that
+   `fstrim` cannot TRIM the encrypted root
 10. Installs the selected Plymouth theme (if any): the archive is
     extracted to a scratch directory, the `.plymouth` file is located
     inside it, the theme is installed under the name of that file
@@ -353,8 +379,7 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    a name that no longer exists is **skipped with a warning** instead of
    making `pacman -S` abort the whole transaction
 5. Shows a summary (user, DE, GPU, package list, skipped packages) and
-   asks for confirmation (default is yes — press Enter to proceed, or
-   type `n` to cancel)
+   asks for confirmation in a yes/no dialog (default Yes)
 6. Installs the packages
 7. **GNOME only:** downloads and installs the
    [Reversal icon theme](https://github.com/yeyushengfan258/Reversal-icon-theme)
@@ -399,15 +424,21 @@ and `TARGET_USER`, and no dialog is shown — e.g.
 `ASSUME_YES=1 DE_CHOICE=2 INSTALL_MODE=minimal TARGET_USER=alice ./installDE.sh`.
 
 **Chroot behaviour (GNOME):** package install, `systemctl enable`, theme
-downloads, Bluetooth and LightDM config all work in a chroot. Setting the
-GNOME defaults with `gsettings` does not (no running session bus), so when
-`INSTALL_IN_CHROOT=1` is set — or `systemd-detect-virt --chroot` says so —
-the same values (dark scheme, Adwaita-dark, slate accent, Reversal icons,
-cursor theme, directories-first, always-show-log-out) are written as
-**system-wide dconf defaults** (`/etc/dconf/db/local.d/00-arch-defaults` +
-`dconf update`; applies to every user, who can still change them). Run
-normally on an installed system, it keeps using per-user `gsettings`.
-That chroot path is the part to check first when you test in a VM.
+downloads, Bluetooth and LightDM config all work in a chroot. The GNOME
+defaults are applied in **two layers, always**: first per-user with
+`gsettings` inside a temporary `dbus-run-session` as the target user
+(works in a chroot too — it needs no running desktop session; this is the
+only reliable way to set the *Formats* region), then as **system-wide
+dconf defaults** (`/etc/dconf/db/local.d/00-arch-defaults` +
+`dconf update`; applies to every user, who can still change them) as a
+fallback. Non-essential keys (accent colour, file-chooser, log-out entry)
+are best-effort, so a schema missing on one GNOME version cannot abort the
+rest. Testing the chroot path in a VM is the first thing to do after
+changing this part.
+
+**KDE:** the target user's `kdeglobals` (Breeze Dark) and
+`plasma-localerc` (regional formats + UI language, read from `LANG` in
+`/etc/locale.conf`) are written with the user's ownership.
 
 You can re-run this later to install a different desktop environment or
 change from full to minimal (or vice versa) — it doesn't remove
@@ -426,10 +457,14 @@ live output inside a dialog box. Works on a plain TTY (no desktop
 needed). Keys: `SPACE` toggles a checkbox, `ENTER` confirms, `ESC`
 cancels (nothing is installed on cancel).
 
-1. Refuses to run as root; checks `sudo` access and starts a background
-   `sudo` keep-alive (long AUR builds can outlast sudo's 15-minute
-   timeout, and a password prompt would garble the dialog screen).
-   Installs `dialog` itself if it's missing
+1. Refuses to run as root; asks for your `sudo` password **once**, then
+   installs a short-lived `NOPASSWD` drop-in
+   (`/etc/sudoers.d/99-installer-timestamp`, mode 0440, validated with
+   `visudo -cf`, this user only) so that `yay`/`makepkg` — which call
+   `sudo` themselves — can never pop a password prompt over the dialog
+   during a long AUR build. The drop-in is removed on every normal exit
+   path (success, error, Ctrl+C); only a `kill -9` would leave it behind
+   (then delete it by hand). Installs `dialog` itself if it's missing
 2. **Optional packages checklist** — defaults shown below (Enter
    without touching anything gives you these):
 
@@ -445,19 +480,27 @@ cancels (nothing is installed on cancel).
 3. **Work programs** yes/no box — defaults to **No**. The box lists the
    exact packages so you know what you're agreeing to: `jdk11-openjdk`,
    `meld`, `code` (open-source VS Code build), `remmina` from the repos,
-   plus `intellij-idea-community-edition`, `postman-bin`, `f5vpn-ng`
+   plus `intellij-idea-community-edition` (JetBrains no longer ships a
+   separate Community build for newer releases, so this AUR package may be
+   outdated or gone — if so it just shows up under SKIPPED), `postman-bin`,
+   `f5vpn-ng`
    (F5 BIG-IP APM VPN client — can occasionally need a library fix after
    a libxml2/webkit2gtk update), `ferdium-bin`, `snx-rs` (Check Point
    VPN client, slow Rust build) from AUR — useful for splitting a
    personal machine from a work machine without editing the script
 4. **Extra packages** input box (space-separated, blank to skip) —
-   official-repo and AUR names both work
+   official-repo and AUR names both work. Only plain package names are
+   accepted; anything starting with `-` (which pacman/yay would treat as
+   an option, e.g. `--overwrite`) is ignored with a message
 5. **Confirmation** box showing the final repo / AUR / extra lists;
    answering No (or `ESC`) at any dialog above aborts cleanly
 6. Installs unattended, with live output in a dialog box (also saved to
    `~/installApps.log`):
    - bootstraps `yay` if missing (`base-devel` + `git` via `pacman`, then
-     `yay` itself built from AUR with `makepkg`)
+     `yay` itself built from AUR with `makepkg`). If that build fails the
+     run **continues** with the official-repo packages; the AUR packages
+     are then listed as FAILED ("yay is not available") instead of the
+     whole run stopping
    - always-installed base set — **Repo:** `terminator`, `guake`,
      `qmmp`, `kolourpaint`, `mission-center`, `stow`, `eza`, `hplip` +
      `cups` + `system-config-printer` (printer support); **AUR:**
@@ -473,7 +516,9 @@ cancels (nothing is installed on cancel).
    installed (part of the work bundle) — the package and its
    `archlinux-java` name are the two variables `JAVA_PKG` / `JAVA_ENV` at
    the top of the script (default `jdk11-openjdk` / `java-11-openjdk`),
-   and enables the CUPS service
+   enables the CUPS service and, if they were installed, the root daemons
+   behind the GUIs: `lactd.service` (LACT) and `coolercontrold.service`
+   (CoolerControl) — the packages install them but don't start them
 9. Final summary dialog: what was skipped/failed, and manual next steps
    (`hp-setup` for the actual printer; a note about `snx-rs` build time
    and `f5vpn-ng` library fixes, shown only if those were selected)
@@ -609,6 +654,10 @@ Sourced by all five scripts so the dialog code lives in one place:
 - `ui_init`, `dlg_capture`, `abort`, `ask_yes`, `msg_box` (never fails,
   so an ESC can't kill a `set -e` script), `ask_text`, `ask_password`
   (asks twice, loops until they match)
+- `unit_exists <unit>` — true if a systemd unit file is installed. Uses
+  the listing itself, not the exit code of `systemctl list-unit-files`
+  (which is 0 even when nothing matched on some systemd versions), and
+  works inside a chroot
 - Hardware/repo helpers: `detect_gpu_vendors` (amd / intel / nvidia from
   sysfs), `is_laptop` (battery or DMI chassis type), `efi_grub_target`
   (`x86_64-efi` / `i386-efi`), `repo_list_archives <folder>` (theme
@@ -622,6 +671,13 @@ Sourced by all five scripts so the dialog code lives in one place:
   never inside `if`/`&&`/`||`, because bash disables `set -e` for
   everything inside such a call, so a failing command would no longer
   abort the function
+- `run_with_gauge <title> <logfile> <function>` — same contract (result in
+  `$RUN_GAUGE_RC`), but shows a filling progress bar (`dialog --gauge`);
+  the function prints `XXX / percent / text / XXX` frames, which is how the
+  phase checklists in the install scripts are drawn
+- `run_on_terminal <title> <logfile> <function>` — runs a function directly
+  on the terminal (pacman's native progress bar needs a TTY), output also
+  logged; result in `$RUN_TTY_RC`
 
 Each script finds `lib.sh` next to itself and downloads it from the repo
 if it's missing, so a single script can still be fetched and run on its
@@ -712,6 +768,13 @@ can run in either order.
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
   scripts changes when run through it.
+- **Known limitation: "EFI BootNext" entries.** `setupAfterInstall.sh`
+  strips them from `grub.cfg` once, right after generating it. But
+  `grub-btrfsd` regenerates `grub.cfg` whenever a snapshot is created or
+  deleted, and a plain `grub-mkconfig` does too, so on GRUB versions that
+  emit those entries they can reappear. Remove them again with
+  `sudo grub-mkconfig -o /boot/grub/grub.cfg` followed by deleting the
+  `(EFI BootNext)` menuentry blocks, or re-run `setupAfterInstall.sh`.
 - **PXE / "USB HDD" entries are not os-prober results.** Those names are
   the firmware's own boot entries (network boot, USB boot) in the UEFI boot
   menu (e.g. F9 / Esc on HP laptops) — os-prober only reads partitions,
