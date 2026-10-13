@@ -276,8 +276,21 @@ EXTRA_INPUT="$(dlg_capture --title "Extra packages" \
     --inputbox "Any extra packages to add? (space-separated, blank to skip)\n\nOfficial-repo and AUR names both work." \
     11 "$BOX_W")" || EXTRA_INPUT=""
 
+# Only plain package names are accepted: a token starting with "-" would be
+# taken by pacman/yay as an OPTION (e.g. --overwrite), not as a package.
 EXTRA_PACKAGES=()
-read -r -a EXTRA_PACKAGES <<< "$EXTRA_INPUT"
+_extra_rejected=()
+read -r -a _extra_tokens <<< "$EXTRA_INPUT"
+for _t in "${_extra_tokens[@]}"; do
+    if [[ "$_t" =~ ^[A-Za-z0-9@._+][A-Za-z0-9@._+-]*$ ]]; then
+        EXTRA_PACKAGES+=("$_t")
+    else
+        _extra_rejected+=("$_t")
+    fi
+done
+if [[ "${#_extra_rejected[@]}" -gt 0 ]]; then
+    msg_box "Extra packages" "Ignored (not a valid package name):\n  ${_extra_rejected[*]}"
+fi
 
 # ---------------- DIALOG: CONFIRMATION ----------------
 
@@ -302,7 +315,7 @@ package_exists() {
     local pkg="$1"
     pacman -Si "$pkg" >/dev/null 2>&1 && return 0
     pacman -Sg "$pkg" >/dev/null 2>&1 && return 0
-    yay -Si "$pkg" >/dev/null 2>&1 && return 0
+    command -v yay >/dev/null 2>&1 && yay -Si "$pkg" >/dev/null 2>&1 && return 0
     return 1
 }
 
@@ -323,6 +336,11 @@ install_repo() {
 
 install_aur() {
     local pkg="$1"
+    if ! command -v yay >/dev/null 2>&1; then
+        warn "$pkg not installed -- yay is not available (see the yay build error in the log)."
+        echo "$pkg" >> "$FAILED_FILE"
+        return 0
+    fi
     if ! package_exists "$pkg"; then
         warn "$pkg not found (repo or AUR) -- skipping."
         echo "$pkg" >> "$SKIPPED_FILE"
@@ -447,11 +465,17 @@ exec 1>>"$LOG_FILE"
     if ! command -v yay >/dev/null 2>&1; then
         gauge_msg $((current * 100 / total)) "Building yay from AUR (this can take a while)..."
         yay_tmp="$(mktemp -d)"
-        git clone https://aur.archlinux.org/yay.git "$yay_tmp/yay" >> "$log" 2>&1
         # </dev/null: makepkg calls sudo internally; with no tty on stdin,
         # sudo cannot prompt and will fail immediately instead of spraying
         # a password prompt over the dialog.
-        ( cd "$yay_tmp/yay" && makepkg -si --noconfirm </dev/null ) >> "$log" 2>&1
+        # A failed yay build must not abort the run: the official-repo
+        # packages can still be installed; AUR packages are then reported
+        # as failed by install_aur().
+        if ! { git clone https://aur.archlinux.org/yay.git "$yay_tmp/yay" \
+               && ( cd "$yay_tmp/yay" && makepkg -si --noconfirm </dev/null ); } >> "$log" 2>&1; then
+            warn "Could not build yay -- AUR packages will be skipped." >> "$log"
+            echo "yay" >> "$FAILED_FILE"
+        fi
         rm -rf "$yay_tmp"
     fi
     CUR_IDX=2
@@ -502,7 +526,7 @@ exec 1>>"$LOG_FILE"
 
     # ---- Phase 4: post-install tweaks ----
     CUR_PHASE=4
-    CUR_ITEMS=("Java default" "CUPS enable")
+    CUR_ITEMS=("Java default" "CUPS enable" "Hardware daemons")
     CUR_IDX=0
 
     if [[ -d "/usr/lib/jvm/${JAVA_ENV}" ]]; then
@@ -518,6 +542,21 @@ exec 1>>"$LOG_FILE"
     sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
         warn "Could not enable CUPS (sudo may have timed out)." >> "$log"
     CUR_IDX=2
+
+    # LACT and CoolerControl are only GUIs: they talk to a root daemon that
+    # the packages install but do not start.
+    gauge_msg 99 "Enabling hardware daemons (LACT / CoolerControl)..."
+    if pacman -Qq lact >/dev/null 2>&1 && unit_exists lactd.service; then
+        sudo -n systemctl enable --now lactd.service >> "$log" 2>&1 || \
+            warn "Could not enable lactd.service." >> "$log"
+    fi
+    if pacman -Qq coolercontrol-bin >/dev/null 2>&1 || pacman -Qq coolercontrol >/dev/null 2>&1; then
+        if unit_exists coolercontrold.service; then
+            sudo -n systemctl enable --now coolercontrold.service >> "$log" 2>&1 || \
+                warn "Could not enable coolercontrold.service." >> "$log"
+        fi
+    fi
+    CUR_IDX=3
 
     # ---- Phase 5: done ----
     CUR_PHASE=5
