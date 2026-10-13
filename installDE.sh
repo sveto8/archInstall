@@ -200,7 +200,6 @@ case "$DE_CHOICE" in
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
                 gnome-tweaks            # essential for tweaking GNOME
-                catppuccin-cursors-mocha # Catppuccin Mocha cursor theme
                 "${WAYLAND_COMMON[@]}"
             )
         else
@@ -213,7 +212,6 @@ case "$DE_CHOICE" in
                 power-profiles-daemon   # power profile settings in gnome-settings
                 bluez                   # Bluetooth protocol stack
                 bluez-utils             # provides bluetoothctl
-                catppuccin-cursors-mocha # Catppuccin Mocha cursor theme
                 "${WAYLAND_COMMON[@]}"
             )
         fi
@@ -248,7 +246,6 @@ case "$DE_CHOICE" in
                 gwenview
                 okular
                 spectacle
-                catppuccin-cursors-mocha # Catppuccin Mocha cursor theme
                 "${WAYLAND_COMMON[@]}"
             )
         else
@@ -258,7 +255,6 @@ case "$DE_CHOICE" in
                 plasma-nm               # Wi-Fi/network applet + settings (not part of plasma-desktop)
                 dolphin
                 konsole
-                catppuccin-cursors-mocha # Catppuccin Mocha cursor theme
                 "${WAYLAND_COMMON[@]}"
             )
         fi
@@ -274,7 +270,6 @@ case "$DE_CHOICE" in
                 lightdm
                 lightdm-gtk-greeter
                 network-manager-applet  # nm-applet tray icon (XFCE has no built-in network UI)
-                catppuccin-cursors-mocha # Catppuccin Mocha cursor theme
                 "${X11_COMMON[@]}"
             )
         else
@@ -283,7 +278,6 @@ case "$DE_CHOICE" in
                 lightdm
                 lightdm-gtk-greeter
                 network-manager-applet  # nm-applet tray icon (XFCE has no built-in network UI)
-                catppuccin-cursors-mocha # Catppuccin Mocha cursor theme
                 "${X11_COMMON[@]}"
             )
         fi
@@ -420,19 +414,27 @@ stdbuf -oL pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}" 2>
 
 # ---------------- ICONS & CURSORS (from GitHub) ----------------
 #
-# The Reversal icon theme is downloaded and installed system-wide, but it
-# is only *applied* via gsettings, which is a GNOME-only mechanism. For
-# KDE and XFCE this step would just waste bandwidth, time and disk space
-# on themes that never get activated -- so it only runs for GNOME.
+# Two separate downloads, each only when relevant:
 #
-# Cursor theme (Catppuccin Mocha) is installed via the catppuccin-cursors-mocha
-# package (AUR) for all DEs, and applied per-DE in the theme configuration
-# steps below.
+#   Reversal icon theme -- GNOME only. It is downloaded and installed
+#   system-wide, but it is only *applied* via gsettings, which is a
+#   GNOME-only mechanism. For KDE and XFCE this step would just waste
+#   bandwidth, time and disk space on a theme that never gets activated.
+#
+#   Catppuccin Mocha cursor theme -- all DEs. The AUR package
+#   (catppuccin-cursors-mocha) cannot be used here: installDE.sh runs
+#   as root (in a chroot during archInstall.sh, or via sudo standalone),
+#   and both yay and makepkg refuse to run as root. The upstream
+#   catppuccin/cursors GitHub release just contains a ready-to-use .zip
+#   of cursor files, so we download and extract it directly -- no
+#   compilation, no AUR, no root restrictions.
 
 set_phase 1
+
+# --- Reversal icon theme (GNOME only) ---
 if [[ "$DE_CHOICE" == "1" ]]; then
-    gauge_msg 55 "Downloading icon theme..."
-    log "Downloading icon theme..."
+    gauge_msg 55 "Downloading Reversal icon theme..."
+    log "Downloading Reversal icon theme..."
 
     ICONS_BASE_URL="$REPO_RAW_URL"
 
@@ -443,7 +445,6 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     # color variant. So we download the source archive to a temp directory,
     # extract it, and run its install.sh for each color variant we want to
     # have available (yellow, orange, black, grey).
-    log "Downloading Reversal icon theme..."
     ICONS_TMP="$(mktemp -d)"
     ICON_ARCHIVE="$ICONS_TMP/Reversal-icon-theme-master.tar.xz"
 
@@ -487,7 +488,7 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         rm -rf "$ICONS_TMP"
     fi
 
-    # Update the icon cache so the new themes are picked up immediately.
+    # Update the icon cache so the new theme is picked up immediately.
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         log "Updating icon cache..."
         for dir in /usr/share/icons/*/; do
@@ -497,6 +498,49 @@ if [[ "$DE_CHOICE" == "1" ]]; then
         done
         info "Icon cache updated."
     fi
+fi
+
+# --- Catppuccin Mocha cursor theme (all DEs) ---
+#
+# Downloaded directly from the upstream GitHub release. The URL uses
+# /releases/latest/download/<asset>, which GitHub redirects to the newest
+# release automatically -- no version number to maintain here. The
+# archive is a plain .zip of cursor files with the theme directory at
+# the top level, so a straight extract into /usr/share/icons/ produces
+# /usr/share/icons/catppuccin-mocha-dark-cursors/ with everything the
+# theme needs (index.theme, cursors/, ...).
+#
+# bsdtar (from libarchive, part of `base`) is used instead of `unzip`
+# so no extra package is required. If the download or extraction fails
+# the DE's built-in default cursor is used and a warning is logged --
+# the rest of the install continues.
+CURSOR_THEME_NAME="catppuccin-mocha-dark-cursors"
+CURSOR_URL="https://github.com/catppuccin/cursors/releases/latest/download/${CURSOR_THEME_NAME}.zip"
+
+if [[ -d "/usr/share/icons/${CURSOR_THEME_NAME}" ]]; then
+    info "Cursor theme '${CURSOR_THEME_NAME}' is already installed -- skipping download."
+else
+    gauge_msg 58 "Installing Catppuccin Mocha cursor theme..."
+    log "Installing Catppuccin Mocha cursor theme..."
+
+    CURSOR_TMP="$(mktemp -d)"
+    if curl -fsSL -o "$CURSOR_TMP/cursors.zip" "$CURSOR_URL"; then
+        log "Extracting cursor theme to /usr/share/icons/..."
+        mkdir -p /usr/share/icons
+        if bsdtar -xf "$CURSOR_TMP/cursors.zip" -C /usr/share/icons/; then
+            if [[ -d "/usr/share/icons/${CURSOR_THEME_NAME}" ]]; then
+                info "Catppuccin Mocha cursor theme installed."
+            else
+                warn "Archive extracted but /usr/share/icons/${CURSOR_THEME_NAME} is missing -- unexpected archive layout."
+            fi
+        else
+            warn "Could not extract the Catppuccin cursors archive."
+        fi
+    else
+        warn "Could not download ${CURSOR_URL}"
+        warn "The cursor theme will not be available; the DE will fall back to its default."
+    fi
+    rm -rf "$CURSOR_TMP"
 fi
 
 set_phase 2
