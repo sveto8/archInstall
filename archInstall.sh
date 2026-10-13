@@ -43,6 +43,13 @@ LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated (the primary one
 KEYMAP="us"
 # 'ssd' is appended automatically when the target disk is non-rotational.
 MOUNT_OPTS="rw,noatime,compress=zstd:3,space_cache=v2"
+# TRIM only reaches the SSD through dm-crypt when discards are explicitly
+# allowed on the LUKS mapping (rd.luks.options=discard). Without it the
+# weekly fstrim.timer enabled by setupAfterInstall.sh silently does nothing
+# on an encrypted root. Trade-off: it reveals WHICH blocks are unused (not
+# their content). Set to "no" to keep the strictest setting. Only applied
+# when the target disk is non-rotational.
+LUKS_ALLOW_DISCARDS="yes"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
@@ -169,9 +176,11 @@ ESP="${DEVICE}${SUF}1"
 BOOTPART="${DEVICE}${SUF}2"
 LUKSPART="${DEVICE}${SUF}3"
 
-# Btrfs 'ssd' mount option only for non-rotational disks.
+# Btrfs 'ssd' mount option (and LUKS discards) only for non-rotational disks.
+LUKS_DISCARD_CMDLINE=""
 if [[ "$(cat "/sys/block/$(basename "$DEVICE")/queue/rotational" 2>/dev/null || echo 0)" == "0" ]]; then
     MOUNT_OPTS+=",ssd"
+    [[ "$LUKS_ALLOW_DISCARDS" != "yes" ]] || LUKS_DISCARD_CMDLINE="rd.luks.options=discard"
 fi
 
 UCODE_PKG=""
@@ -320,6 +329,9 @@ fi
 # ---------------- DISK ENCRYPTION PASSPHRASE ----------------
 
 LUKS_INTRO="The root partition will be encrypted with LUKS2.\n\nChoose the passphrase you will type at every boot. There is NO way to recover the data if you forget it."
+if [[ "$KEYMAP_PRIMARY" != "us" ]]; then
+    LUKS_INTRO+="\n\nWARNING: you type the passphrase NOW with the live ISO keymap (usually US), but at every boot with '${KEYMAP_PRIMARY}'. Use only characters that sit on the same key in both layouts (avoid Y/Z and symbols), or you will not be able to unlock the disk."
+fi
 ask_password LUKS_PASS "LUKS passphrase" "$LUKS_INTRO" || abort
 
 # ---------------- HARDWARE CLOCK (RTC) ----------------
@@ -388,7 +400,7 @@ iwd_ssid_from_file() {
     if [[ "$name" == =* ]]; then
         local hex="${name#=}" out="" i
         for ((i = 0; i < ${#hex}; i += 2)); do
-            out+="$(printf "\\x${hex:i:2}")"
+            out+="$(printf '%b' "\\x${hex:i:2}")"
         done
         printf '%s' "$out"
     else
@@ -455,6 +467,7 @@ fi
 ROOT_LINE="$([[ "$SET_ROOT_PASSWORD" == "yes" ]] && echo "password set" || echo "locked (use sudo)")"
 WOL_LINE="$([[ "$ENABLE_WOL" == "yes" ]] && echo "enabled on ${WOL_IFACE}${WOL_NOTE}" || echo "no")"
 WIFI_LINE="$([[ "$WIFI_CARRY" == "yes" ]] && echo "carry over ${WIFI_NAMES[*]}" || echo "no")"
+LUKS_DISCARD_LINE="$([[ -n "$LUKS_DISCARD_CMDLINE" ]] && echo "enabled (TRIM passes through LUKS)" || echo "disabled")"
 
 SUMMARY_FILE="$(mktemp)"
 cat > "$SUMMARY_FILE" <<SUMMARY_EOF
@@ -473,6 +486,7 @@ $(lsblk -l -o NAME,SIZE,FSTYPE,LABEL "$DEVICE")
   Formats:        $FORMAT_LOCALE
   Keymap:         $KEYMAP
   Btrfs options:  $MOUNT_OPTS
+  LUKS discards:  $LUKS_DISCARD_LINE
   Microcode:      ${UCODE_PKG:-none detected}
   Hardware clock: $RTC_MODE
   User:           $USER_LINE
@@ -606,6 +620,10 @@ sleep 3
 for p in "$ESP" "$BOOTPART" "$LUKSPART"; do
     [[ -b "$p" ]] || die "$p does not exist yet -- the kernel may not have re-read the partition table. Try running 'partprobe $DEVICE' manually, then re-run this script."
 done
+# Remove stale filesystem/LUKS signatures a previous install may have left
+# at the same offsets of the NEW partitions (the signature wipe above only
+# touched the disk itself, not the old partitions).
+wipefs -af "$ESP" "$BOOTPART" "$LUKSPART"
 advance
 
 # ---------------- FORMAT + LUKS + BTRFS ----------------
@@ -722,6 +740,11 @@ advance
 gauge_msg 45 "Generating /etc/fstab..."
 log "/etc/fstab:"
 genfstab -U /mnt >> /mnt/etc/fstab
+# genfstab pins every Btrfs mount to a numeric subvolid=. That breaks
+# booting a snapshot from grub-btrfs (fstab would force the original @
+# subvolume back over the snapshot) and Snapper rollbacks, so keep only
+# the subvol=/<name> option.
+sed -i -E 's/,subvolid=[0-9]+//' /mnt/etc/fstab
 cat /mnt/etc/fstab
 
 # ---------------- WI-FI CARRY-OVER: WRITE NM PROFILES ----------------
@@ -938,7 +961,7 @@ gauge_msg 74 "Installing GRUB for UEFI..."
 arch-chroot /mnt /bin/bash <<CHROOT_EOF
 set -Eeuo pipefail
 
-sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet ${VCONSOLE_CMDLINE} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
+sed -i -E "s/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT=\"rd.luks.name=${LUKS_UUID}=cryptroot ${LUKS_DISCARD_CMDLINE} root=\/dev\/mapper\/cryptroot rootflags=subvol=@ quiet ${VCONSOLE_CMDLINE} rd.locale.LANG=${LOCALE}\"/" /etc/default/grub
 
 grub-install --target=${GRUB_TARGET} --efi-directory=/efi --boot-directory=/boot --bootloader-id=GRUB --recheck --removable
 grub-mkconfig -o /boot/grub/grub.cfg
@@ -982,7 +1005,7 @@ if [[ -n "$DE_CHOICE" ]]; then
         _de_fifo="$(mktemp -u)"
         mkfifo "$_de_fifo"
         arch-chroot /mnt env DE_CHOICE="$DE_CHOICE" INSTALL_MODE="$DE_MODE" \
-                TARGET_USER="$NEW_USERNAME" ASSUME_YES=1 INSTALL_IN_CHROOT=1 \
+                TARGET_USER="$NEW_USERNAME" ASSUME_YES=1 \
                 FORMAT_LOCALE="$FORMAT_LOCALE" \
                 /root/arch-setup-tmp/installDE.sh > "$_de_fifo" 2>&1 &
         _de_pid=$!
