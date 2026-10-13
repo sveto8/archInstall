@@ -7,6 +7,13 @@ set -Eeuo pipefail
 # Downloads the installer scripts (+ lib.sh) from the repository and runs
 # them. On the live ISO start with option 1; after the first reboot start
 # it again (it is copied to /archInstall/) and use options 2-4 or 5.
+#
+# The menu is state-aware: entries that don't apply to the current
+# system (e.g. "Install Arch" when Arch is already installed, or any
+# of the post-install steps when running from the live ISO) are shown
+# with an [N/A -- reason] prefix. dialog has no native "disabled" flag,
+# so selecting an N/A entry shows a short explanation instead of running
+# anything.
 # ============================================================
 
 # URL for the scripts repository. Override without editing the file:
@@ -85,10 +92,24 @@ fix_ownership() {
 }
 fix_ownership
 
+# ---------------- STATE DETECTION ----------------
+
+# Prints the installed desktop environment (GNOME / KDE Plasma / XFCE),
+# or nothing and returns 1 if none is found. Detection is by package
+# presence, which works on any system regardless of the current session.
+de_name() {
+    if pacman -Qq gnome-shell    >/dev/null 2>&1; then echo "GNOME";       return 0; fi
+    if pacman -Qq plasma-desktop >/dev/null 2>&1; then echo "KDE Plasma";  return 0; fi
+    if pacman -Qq xfce4-session  >/dev/null 2>&1; then echo "XFCE";        return 0; fi
+    return 1
+}
+
+de_installed() { de_name >/dev/null 2>&1; }
+
 # ---------------- STATUS ----------------
 
 status_text() {
-    local arch="no" live="no" root="no" btrfs="no" snapper="no"
+    local arch="no" live="no" root="no" btrfs="no" snapper="no" desktop="none"
     [[ -f /etc/os-release ]] && grep -qE '^ID=("?)arch\1$' /etc/os-release && arch="yes"
     is_live_iso && live="yes"
     [[ $EUID -eq 0 ]] && root="yes"
@@ -96,16 +117,10 @@ status_text() {
         btrfs="yes"
     fi
     [[ -f /etc/snapper/configs/root ]] && snapper="yes"
-    printf 'System status:\n  Arch: %s   Live ISO: %s   Root: %s\n  Btrfs: %s   Snapper: %s\n\nChoose an action:' \
-        "$arch" "$live" "$root" "$btrfs" "$snapper"
-}
+    desktop="$(de_name || echo none)"
 
-de_installed() {
-    local p
-    for p in gnome-shell plasma-desktop xfce4-session; do
-        if pacman -Qq "$p" >/dev/null 2>&1; then return 0; fi
-    done
-    return 1
+    printf 'System status:\n  Arch: %s   Live ISO: %s   Root: %s\n  Btrfs: %s   Snapper: %s   Desktop: %s\n\nChoose an action:' \
+        "$arch" "$live" "$root" "$btrfs" "$snapper" "$desktop"
 }
 
 # ---------------- DOWNLOADING ----------------
@@ -272,23 +287,64 @@ main() {
     ensure_dialog
     ui_init
 
-    local choice
+    local choice items _de
     while true; do
+        # Build the menu entries dynamically. The tag numbers stay the
+        # same in every state (1..6), so the user builds muscle memory --
+        # only the descriptions change. Entries that are not available in
+        # the current state get an "[N/A -- reason]" prefix; dialog has no
+        # native disabled flag for --menu items, so the prefix is the
+        # visual cue, and selecting one lands in the case branch below
+        # which shows an explanation instead of running anything.
+        _de="$(de_name || true)"
+        items=()
+
+        if is_live_iso; then
+            items+=(
+                1 "Install Arch (archInstall.sh)"
+                2 "[N/A -- live ISO only installs Arch] Setup Snapper/GRUB"
+                3 "[N/A -- live ISO only installs Arch] Install desktop environment"
+                4 "[N/A -- live ISO only installs Arch] Install applications"
+                5 "[N/A -- live ISO only installs Arch] INSTALL ALL after reboot"
+                6 "Download / update scripts"
+            )
+        else
+            items+=(
+                1 "[N/A -- Arch is already installed] Install Arch"
+                2 "Setup Snapper/GRUB (setupAfterInstall.sh)"
+            )
+            if [[ -n "$_de" ]]; then
+                items+=(3 "Reinstall / change desktop environment (currently $_de)")
+            else
+                items+=(3 "Install desktop environment (installDE.sh)")
+            fi
+            items+=(
+                4 "Install applications (installApps.sh)"
+                5 "INSTALL ALL after reboot (2 -> 3 -> 4)"
+                6 "Download / update scripts"
+            )
+        fi
+
         choice="$(dlg_capture --title "Arch Linux Installation Manager" \
             --cancel-label "Exit" --no-collapse --cr-wrap \
-            --menu "$(status_text)" 0 "$BOX_W" 0 \
-            1 "Install Arch (archInstall.sh)" \
-            2 "Setup Snapper/GRUB (setupAfterInstall.sh)" \
-            3 "Install desktop environment (installDE.sh)" \
-            4 "Install applications (installApps.sh)" \
-            5 "INSTALL ALL after reboot (2 -> 3 -> 4)" \
-            6 "Download / update scripts")" || { clear; echo "Goodbye!"; exit 0; }
+            --menu "$(status_text)" 0 "$BOX_W" 0 "${items[@]}")" \
+            || { clear; echo "Goodbye!"; exit 0; }
 
         case "$choice" in
             1)
                 if ! is_live_iso; then
-                    ask_yes "Not the live ISO" "This does not look like the Arch live ISO.\n\narchInstall.sh WIPES a whole disk and is meant to be run from the live ISO only.\n\nRun it anyway?" no || continue
+                    msg_box "Arch is already installed" \
+"Option 1 runs archInstall.sh, which WIPES a whole disk and is meant
+to be run only from the Arch live ISO.
+
+The system you are on already has Arch installed.
+
+  - To configure Snapper/GRUB, use option 2.
+  - To install or replace the desktop environment, use option 3.
+  - To install applications, use option 4."
+                    continue
                 fi
+
                 run_script "archInstall.sh"
                 case "$RUN_SCRIPT_RC" in
                     0)
@@ -308,10 +364,61 @@ main() {
                         ;;
                 esac
                 ;;
-            2) run_script "setupAfterInstall.sh"; report_result "setupAfterInstall.sh" ;;
-            3) run_script "installDE.sh";         report_result "installDE.sh" ;;
-            4) run_script "installApps.sh";       report_result "installApps.sh" ;;
-            5) install_remaining ;;
+            2)
+                if is_live_iso; then
+                    msg_box "Not available on the live ISO" \
+"setupAfterInstall.sh configures the installed system (Snapper,
+GRUB, Plymouth, Btrfs snapshots). It cannot touch the live ISO,
+which runs entirely from RAM.
+
+First install Arch (option 1), reboot into the new system, then
+start the manager again and pick option 2."
+                    continue
+                fi
+                run_script "setupAfterInstall.sh"; report_result "setupAfterInstall.sh"
+                ;;
+            3)
+                if is_live_iso; then
+                    msg_box "Not available on the live ISO" \
+"The desktop environment is installed as the final step of option 1
+(Install Arch), which offers GNOME / KDE Plasma / XFCE during the
+installation.
+
+If you skipped it during install, reboot into the new system first,
+then start the manager again and pick option 3."
+                    continue
+                fi
+                run_script "installDE.sh"; report_result "installDE.sh"
+                ;;
+            4)
+                if is_live_iso; then
+                    msg_box "Not available on the live ISO" \
+"installApps.sh installs applications on the installed system.
+
+It cannot run on the live ISO: makepkg and yay refuse to run as
+root, and you are root on the live ISO by definition.
+
+First install Arch (option 1), reboot into the new system, then
+start the manager again and pick option 4."
+                    continue
+                fi
+                run_script "installApps.sh"; report_result "installApps.sh"
+                ;;
+            5)
+                if is_live_iso; then
+                    msg_box "Not available on the live ISO" \
+"INSTALL ALL runs setupAfterInstall.sh, installDE.sh and
+installApps.sh in sequence.
+
+All three need an installed Arch system to operate on -- none of
+them can run on the live ISO, which is entirely in RAM.
+
+First install Arch (option 1), reboot into the new system, then
+start the manager again and pick option 5."
+                    continue
+                fi
+                install_remaining
+                ;;
             6)
                 run_in_box "Downloading scripts" "$LOG_FILE" download_all
                 if [[ "$RUN_RC" -eq 0 ]]; then
