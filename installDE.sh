@@ -482,21 +482,7 @@ if [[ "$DE_CHOICE" == "1" ]]; then
     # Note: unlike the Reversal icons, the cursor theme is a ready-to-use
     # directory of cursor files, so we just extract it straight into
     # /usr/share/icons/ -- no install.sh needed.
-
-    # !!!!!!!!!!!!!!!!!!!!!!!!!NOT WORKING AT THE MOMENT!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    # log "Downloading Deepin dark cursor theme..."
-    # CURSOR_ARCHIVE="$(mktemp --suffix=.tar.xz)"
-    # if curl -fsSL -o "$CURSOR_ARCHIVE" "${ICONS_BASE_URL}/cursor/DeppinDark-cursors.tar.xz"; then
-    #     log "Extracting Deepin dark cursor theme to /usr/share/icons/..."
-    #     tar -xf "$CURSOR_ARCHIVE" -C /usr/share/icons/
-    #     rm -f "$CURSOR_ARCHIVE"
-    #     info "Deepin dark cursor theme installed."
-    # else
-    #     rm -f "$CURSOR_ARCHIVE"
-    #     warn "Could not download Deepin dark cursor theme from ${ICONS_BASE_URL}/cursor/"
-    # fi
-    # !!!!!!!!!!!!!!!!!!!!!!!!!NOT WORKING AT THE MOMENT!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    
+ 
     # Update the icon cache so the new themes are picked up immediately.
     if command -v gtk-update-icon-cache >/dev/null 2>&1; then
         log "Updating icon cache..."
@@ -596,7 +582,6 @@ gsettings set org.gnome.desktop.interface clock-format '24h'
 gsettings set org.gtk.Settings.FileChooser sort-directories-first true 2>/dev/null || true
 gsettings set org.gnome.shell always-show-log-out true 2>/dev/null || true
 gsettings set org.gnome.desktop.interface icon-theme 'Reversal' 2>/dev/null || true
-gsettings set org.gnome.desktop.interface cursor-theme 'DeppinDark-cursors' 2>/dev/null || true
 GSETTINGS_EOF
         then
             _user_gsettings_ok=0
@@ -631,7 +616,6 @@ color-scheme='prefer-dark'
 gtk-theme='Adwaita-dark'
 accent-color='slate'
 icon-theme='Reversal'
-cursor-theme='DeppinDark-cursors'
 clock-format='24h'
 
 [org/gtk/settings/file-chooser]
