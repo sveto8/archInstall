@@ -95,6 +95,16 @@ is_laptop() {
     return 1
 }
 
+# True if a systemd unit file with exactly this name is installed.
+# `systemctl list-unit-files <name>` is NOT reliable for this: depending on
+# the systemd version it exits 0 even when nothing matched, so the exit code
+# says nothing. Grepping the listing works the same on every version (and
+# also inside a chroot, where no systemd is running).
+unit_exists() {
+    systemctl list-unit-files --no-legend --no-pager "$1" 2>/dev/null \
+        | awk -v u="$1" '$1 == u { found = 1 } END { exit !found }'
+}
+
 # GRUB --target for the firmware bitness (64-bit UEFI almost everywhere,
 # but a few tablets / old Macs boot 32-bit UEFI on a 64-bit CPU).
 efi_grub_target() {
