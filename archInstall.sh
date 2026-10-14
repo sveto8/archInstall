@@ -541,6 +541,16 @@ local -a CUR_ITEMS=()
 local CUR_IDX=0
 local WIN=5
 
+# Info header shown above the phase tree on every gauge frame. The
+# values are captured here, once, at the very start of the install
+# -- they cannot change during the run, and this is exactly what
+# the user picked in the questions above. It replaces what used to
+# be a separate informational area that dialog cannot draw next to
+# a full-screen gauge.
+local _info_header_1 _info_header_2
+_info_header_1="USER: ${NEW_USERNAME:-(root)}   DE: ${DE_LABEL}   KEYMAP: ${KEYMAP_PRIMARY}${KEYMAP_TOGGLE:+/${KEYMAP_TOGGLE}}"
+_info_header_2="LANG: ${LOCALE}   FORMATS: ${FORMAT_LOCALE}"
+    
 _phase_prompt() {
     local i j n start end out=""
     for ((i=0; i<${#PHASES[@]}; i++)); do
