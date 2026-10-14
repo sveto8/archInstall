@@ -119,7 +119,7 @@ show_banner() {
   / ____ \| | | (__| | | |  _| |_| | | \__ \ || (_| | | |  __/ |
  /_/    \_\_|  \___|_| |_| |_____|_| |_|___/\__\__,_|_|_|\___|_|
 
-                    Arch Linux Installation Manager
+            Arch Linux Installation Manager by Sveto
 BANNER_EOF
     sleep 1.5
     clear
