@@ -307,6 +307,13 @@ done
 DE_PACKAGES+=("${GPU_PACKAGES[@]}")
 info "GPU vendor(s): ${GPU_VENDORS:-none detected}  ->  ${GPU_PACKAGES[*]}"
 
+# Audio: PipeWire with its PulseAudio and ALSA compatibility layers. The DE
+# packages only depend on libpulse (the client library), not on a sound
+# server, so on KDE and XFCE the system came up WITHOUT sound. Nothing needs
+# enabling -- Arch ships the PipeWire user sockets enabled.
+AUDIO_PACKAGES=(pipewire pipewire-pulse pipewire-alsa wireplumber)
+DE_PACKAGES+=("${AUDIO_PACKAGES[@]}")
+
 # A single renamed/removed package would make `pacman -S` abort the whole
 # transaction ("target not found"). Drop what the repositories don't have
 # (with a warning) and install the rest.
@@ -401,6 +408,9 @@ log "Installing $DE_NAME packages..."
 # only the gauge gets the (phase + percent) frames; in non-interactive
 # mode every line (including the "(N/M) installing" markers) is printed
 # to stdout so the parent can consume it.
+# "|| _pac_rc=..." keeps a pacman failure from tripping `set -e` / pipefail
+# (and the generic ERR trap) before the explicit check below can report it.
+_pac_rc=0
 stdbuf -oL pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}" 2>&1 | \
     while IFS= read -r line; do
         printf '%s\n' "$line"
@@ -409,8 +419,8 @@ stdbuf -oL pacman -S --needed --noconfirm --noprogressbar "${DE_PACKAGES[@]}" 2>
             _tot="${BASH_REMATCH[2]}"
             gauge_msg "$(( 5 + 45 * _cur / _tot ))" "Installing ${DE_NAME} (${_cur}/${_tot})..."
         fi
-    done
-[[ "${PIPESTATUS[0]}" -eq 0 ]] || die "pacman failed installing ${DE_NAME}."
+    done || _pac_rc="${PIPESTATUS[0]}"
+[[ "$_pac_rc" -eq 0 ]] || die "pacman failed installing ${DE_NAME} (exit code ${_pac_rc}) -- see $LOG_FILE."
 
 # ---------------- ICONS & CURSORS (from GitHub) ----------------
 #
@@ -1002,7 +1012,13 @@ fi
 }
 
 if (( INTERACTIVE )); then
+    # run_de_install runs in a subshell; its warnings (failed theme download,
+    # missing units, ...) come back through WARN_FILE for the final dialog.
+    WARN_FILE="$(mktemp)"
     run_with_gauge "Installing $DE_NAME" "$LOG_FILE" run_de_install
+    load_warn_file "$WARN_FILE"
+    rm -f "$WARN_FILE"
+    unset WARN_FILE
     if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
         msg_box "Installation FAILED" "The desktop environment install did not finish.\n\nSee the log for details:\n  $LOG_FILE"
         exit 1
