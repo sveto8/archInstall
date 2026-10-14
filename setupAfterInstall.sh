@@ -1056,6 +1056,10 @@ if [[ "$ENABLE_OS_PROBER" == "yes" ]]; then
     gauge_msg 82 "Searching for a Windows ESP (for os-prober detection)..."
     log "Searching for a Windows ESP (for os-prober detection)..."
     mkdir -p "$WIN_ESP_MOUNT"
+    # run_setup runs in a subshell, so this EXIT trap fires when the setup
+    # ends -- also when a later command fails. Without it a failure between
+    # the mount and the explicit umount below left the Windows ESP mounted.
+    trap 'umount "$WIN_ESP_MOUNT" 2>/dev/null || true; rmdir "$WIN_ESP_MOUNT" 2>/dev/null || true' EXIT
 
     while read -r dev; do
         [[ -b "$dev" ]] || continue
@@ -1258,7 +1262,15 @@ GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
 (( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
 (( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
 
+# Warnings raised inside run_setup (it runs in a subshell) are collected in
+# WARN_FILE so the closing dialog can show them instead of burying them in
+# the log (e.g. "theme download failed", "LUKS discards not enabled").
+_warn_before=${#WARN_LIST[@]}
+WARN_FILE="$(mktemp)"
 run_with_gauge "Btrfs / Snapper / GRUB setup" "$LOG_FILE" run_setup
+load_warn_file "$WARN_FILE"
+rm -f "$WARN_FILE"
+unset WARN_FILE
 
 if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
     _tail="$(tail -n 30 "$LOG_FILE" 2>/dev/null || echo '(log unavailable)')"
@@ -1266,7 +1278,21 @@ if [[ "$RUN_GAUGE_RC" -ne 0 ]]; then
     exit 1
 fi
 
-msg_box "Setup complete" "Btrfs / Snapper / GRUB setup finished.\n\nBackups of the changed files:\n  $BACKUP_DIR\n\nFull log:\n  $LOG_FILE\n\nBefore rebooting you can inspect: lsblk -f, /etc/fstab, /etc/default/grub, /etc/mkinitcpio.conf"
+_warn_tail=""
+if [[ "${#WARN_LIST[@]}" -gt "$_warn_before" ]]; then
+    _warn_tail="\n\nWarnings (details in the log):\n"
+    _shown=0
+    for ((_wi = _warn_before; _wi < ${#WARN_LIST[@]}; _wi++)); do
+        if (( _shown >= 6 )); then
+            _warn_tail+="  ... and $(( ${#WARN_LIST[@]} - _wi )) more\n"
+            break
+        fi
+        _warn_tail+="  [!] ${WARN_LIST[_wi]:0:200}\n"
+        _shown=$(( _shown + 1 ))
+    done
+fi
+
+msg_box "Setup complete" "Btrfs / Snapper / GRUB setup finished.\n\nBackups of the changed files:\n  $BACKUP_DIR\n\nFull log:\n  $LOG_FILE${_warn_tail}\n\nBefore rebooting you can inspect: lsblk -f, /etc/fstab, /etc/default/grub, /etc/mkinitcpio.conf"
 
 if ask_yes "Reboot" "Reboot now?" no; then
     clear
