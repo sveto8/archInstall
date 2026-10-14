@@ -600,7 +600,14 @@ _phase_prompt() {
     # Info header at the top of every gauge frame, above the phase tree.
     out+="  ${_info_header_1}"$'\n'
     out+="  ${_info_header_2}"$'\n'
-    out+="  $(printf '%*s' $(( BOX_W - 4 )) '' | tr ' ' '-')"$'\n'
+    # Separator below the info header. Width is BOX_W - 8, NOT BOX_W - 4:
+    # a separator that reaches too close to the dialog's content width
+    # (BOX_W - 2, after borders and padding) wraps onto a second line on
+    # some terminals, pushing the phase tree down by one row and clipping
+    # the last line of the prompt -- which is where the current-step
+    # message lives. BOX_W - 8 matches the phase separator below and
+    # always stays on one line.
+    out+="  $(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
     for ((i=0; i<${#PHASES[@]}; i++)); do
         # Draw the "progress marker" line just before the currently
         # running phase. Everything ABOVE the line is done; the current
@@ -1202,11 +1209,15 @@ exec 1>&3
 exec 3>&-
 }
 
-# Taller gauge so the phase tree + sub-steps fit comfortably. Capped to
-# what the terminal can actually show; ui_init guarantees TERM_LINES >= 20.
-GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
-(( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
-(( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
+# Gauge height: use as much of the terminal as possible. The phase tree
+# with sub-items plus the info header plus the current-step message needs
+# the vertical space, and dialog clips from the bottom (which is exactly
+# where the message lives) when the box is too short. A 24-line terminal
+# leaves 1 row for the shell prompt; bigger terminals are capped at 30 to
+# avoid an absurdly tall box.
+GAUGE_HEIGHT=$(( TERM_LINES - 1 ))
+(( GAUGE_HEIGHT > 30 )) && GAUGE_HEIGHT=30
+(( GAUGE_HEIGHT < 20 )) && GAUGE_HEIGHT=20
 
 run_with_gauge "Installing Arch Linux" "$LOG_FILE" run_install
 
