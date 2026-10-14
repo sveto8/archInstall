@@ -454,6 +454,7 @@ exec 1>>"$LOG_FILE"
         local pct="$1" msg="$2"
         {
             printf 'XXX\n%d\n' "$pct"
+            _header_box
             _phase_prompt
             printf '%s\n' "$msg"
             printf 'XXX\n'
