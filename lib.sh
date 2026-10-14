@@ -210,25 +210,25 @@ _text_lines() {
 
 # ---------------- ASCII BANNER ----------------
 #
-# Returns the ASCII art banner as plain text (no terminal clearing, no
-# sleep). dlg() below prepends it to the text of every dialog, so the
-# banner is visible in every script that sources this library -- manager,
-# installer, post-install setup, DE install, app install -- without any
-# of those scripts having to know about it.
+# Returns the ASCII art banner as plain text. dlg() prepends it to the
+# text of every dialog, so the banner is visible in every script that
+# sources this library without any of those scripts having to know.
 #
-# Skipped when the dialog width is too small: the art is ~68 columns
-# wide, and BOX_W is the dialog's total width (border + padding take a
-# few columns). Anything under 72 makes each art line wrap onto two,
-# which pushes the actual dialog content off the bottom of the screen.
+# The widest line of the art is 68 characters. dialog's text area is
+# BOX_W minus its own borders/padding -- effectively BOX_W - 6. Below
+# BOX_W = 76 the longest line wraps onto a second row, which visually
+# "shatters" the art and pushes the real dialog content off the bottom
+# of the screen. In that case the banner is skipped entirely rather
+# than being shown broken.
 #
 # The final line is a LITERAL "\n\n" (backslash + n, twice), not real
-# newlines: bash's command substitution -- "$(_banner_text)" -- strips
-# trailing real newlines from the function's output, which would glue
-# the following dialog text directly onto "...by Sveto" with no gap.
-# dialog still renders the literal \n as a real newline, so the user
-# gets a visible blank line between the banner and the dialog body.
+# newlines: bash's command substitution -- "$(_banner_text)" -- always
+# strips trailing real newlines from a function's output, which would
+# glue the dialog's own text directly onto "...by Sveto". dialog
+# renders the literal \n as a real newline, so the user gets the blank
+# line between the banner and the dialog body.
 _banner_text() {
-    (( ${BOX_W:-0} >= 72 )) || return 0
+    (( ${BOX_W:-0} >= 76 )) || return 0
     cat <<'BANNER_EOF'
      /\            | |     |_   _|         | |      | | |
     /  \   _ __ ___| |__     | |  _ __  ___| |_ __ _| | | ___ _ __
