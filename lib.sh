@@ -220,6 +220,13 @@ _text_lines() {
 # wide, and BOX_W is the dialog's total width (border + padding take a
 # few columns). Anything under 72 makes each art line wrap onto two,
 # which pushes the actual dialog content off the bottom of the screen.
+#
+# The final line is a LITERAL "\n\n" (backslash + n, twice), not real
+# newlines: bash's command substitution -- "$(_banner_text)" -- strips
+# trailing real newlines from the function's output, which would glue
+# the following dialog text directly onto "...by Sveto" with no gap.
+# dialog still renders the literal \n as a real newline, so the user
+# gets a visible blank line between the banner and the dialog body.
 _banner_text() {
     (( ${BOX_W:-0} >= 72 )) || return 0
     cat <<'BANNER_EOF'
@@ -230,8 +237,8 @@ _banner_text() {
  /_/    \_\_|  \___|_| |_| |_____|_| |_|___/\__\__,_|_|_|\___|_|
 
          Arch Linux Installation Manager by Sveto
-
 BANNER_EOF
+    printf '\\n\\n'
 }
 
 # Box geometry for a --menu/--checklist with <n> items: the list gets exactly
