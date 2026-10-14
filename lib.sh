@@ -210,24 +210,45 @@ _text_lines() {
 
 # ---------------- HEADER LINE ----------------
 #
-# Returns a single-line signature that dlg() prepends to the text of
-# every dialog, so it is visible in every script that sources this
-# library without any of those scripts having to know about it.
+# Returns a short signature, boxed with ASCII borders, that dlg()
+# prepends to the text of every dialog. Visible in every script that
+# sources this library without any of those scripts having to know.
 #
-# An ASCII art banner used to live here, but it wrapped ("shattered")
-# whenever the dialog's usable text area was narrower than the art,
-# which is impossible to predict reliably across dialog builds and
-# terminal sizes. A single line of text never wraps at any reasonable
-# terminal width, so the header is now just the signature.
+# Uses plain ASCII box characters (+, -, |) rather than Unicode box
+# drawing (┌─┐│└┘) on purpose: the ASCII set is in every console font
+# (including the minimal one the Arch ISO boots with) and every dialog
+# version renders it identically. Unicode box drawing looks prettier
+# but falls back to "?" on terminals whose font lacks the glyphs, which
+# is exactly the failure mode we are avoiding after the ASCII-art
+# banner experiment.
+#
+# If the box would not fit the dialog's usable text area, the header
+# drops to a single line of plain text instead -- a wrapped box looks
+# worse than no box.
 #
 # The final line is a LITERAL "\n\n" (backslash + n, twice), not real
 # newlines: bash's command substitution -- "$(_header_text)" -- strips
 # trailing real newlines from a function's output, which would glue the
-# dialog's own text directly onto the signature. dialog renders the
-# literal \n as a real newline, so the user gets a blank line between
-# the header and the dialog body.
+# dialog's own text directly onto the box. dialog renders the literal
+# \n as a real newline, so the user gets the blank line between the
+# header and the dialog body.
 _header_text() {
-    printf '  Arch Linux Installation Manager by Sveto\n'
+    local text="Arch Linux Installation Manager by Sveto"
+    local width=$(( ${#text} + 2 ))          # 1 space padding on each side
+    local max_width=$(( BOX_W - 8 ))         # dialog borders + indent
+
+    if (( width > max_width )); then
+        # Too narrow for the box -- plain text is the safe fallback.
+        printf ' %s\n' "$text"
+        printf '\\n\\n'
+        return
+    fi
+
+    local rule
+    rule="$(printf '%*s' "$width" '' | tr ' ' '-')"
+    printf ' +%s+\n' "$rule"
+    printf ' | %s |\n' "$text"
+    printf ' +%s+\n' "$rule"
     printf '\\n\\n'
 }
 
