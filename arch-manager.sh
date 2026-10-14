@@ -97,34 +97,6 @@ fix_ownership() {
 }
 fix_ownership
 
-# ---------------- ASCII BANNER ----------------
-#
-# Shown once at startup, before the first dialog. dialog takes over the
-# whole screen the moment it opens, so the banner can only live in the
-# terminal *before* that -- hence the clear + short sleep + clear
-# sequence: the user sees the ASCII art for a moment, then the menu
-# appears on a clean screen.
-#
-# The heredoc is quoted ('BANNER_EOF') so backslashes in the ASCII art
-# are preserved literally instead of being treated as escape sequences.
-# Trailing spaces in the art matter for alignment; if your editor trims
-# them on save, the "Arch" letters will look slightly off -- nothing
-# breaks, it just looks less polished.
-show_banner() {
-    clear
-    cat <<'BANNER_EOF'
-     /\            | |     |_   _|         | |      | | |
-    /  \   _ __ ___| |__     | |  _ __  ___| |_ __ _| | | ___ _ __
-   / /\ \ | '__/ __| '_ \    | | | '_ \/ __| __/ _` | | |/ _ \ '__|
-  / ____ \| | | (__| | | |  _| |_| | | \__ \ || (_| | | |  __/ |
- /_/    \_\_|  \___|_| |_| |_____|_| |_|___/\__\__,_|_|_|\___|_|
-
-            Arch Linux Installation Manager by Sveto
-BANNER_EOF
-    sleep 1.5
-    clear
-}
-
 # ---------------- STATE DETECTION ----------------
 
 # Prints the installed desktop environment (GNOME / KDE Plasma / XFCE),
@@ -344,7 +316,6 @@ install_remaining() {
 # ---------------- MAIN MENU ----------------
 
 main() {
-    show_banner
     ensure_dialog
     ui_init
 
