@@ -14,6 +14,11 @@ set -Eeuo pipefail
 # with an [N/A -- reason] prefix. dialog has no native "disabled" flag,
 # so selecting an N/A entry shows a short explanation instead of running
 # anything.
+#
+# On an installed system, the status line also shows the last install
+# configuration (user, DE, keymap, language, formats, timezone) read
+# from /root/arch-install-state.conf, which archInstall.sh writes at the
+# end of a successful install.
 # ============================================================
 
 # URL for the scripts repository. Override without editing the file:
@@ -119,8 +124,35 @@ status_text() {
     [[ -f /etc/snapper/configs/root ]] && snapper="yes"
     desktop="$(de_name || echo none)"
 
-    printf 'System status:\n  Arch: %s   Live ISO: %s   Root: %s\n  Btrfs: %s   Snapper: %s   Desktop: %s\n\nChoose an action:' \
-        "$arch" "$live" "$root" "$btrfs" "$snapper" "$desktop"
+    # Read the state file archInstall.sh wrote at the end of the last
+    # successful install. On a live ISO before installing, or on a
+    # system set up manually, this file does not exist -- the block is
+    # skipped and the manager behaves as before. On the installed
+    # system it shows the user what was chosen during the install:
+    # their username, DE, keymap, language, formats, timezone.
+    local config_block=""
+    if [[ -r /root/arch-install-state.conf ]]; then
+        # Values in the file are %q-quoted by archInstall.sh, so a plain
+        # `source` is safe even for names containing spaces. If source
+        # fails (corrupt file), fall through without a config block
+        # instead of aborting the whole manager under `set -e`.
+        local STATE_USER="" STATE_HOSTNAME="" STATE_DE="" STATE_KEYMAP=""
+        local STATE_LANG="" STATE_FORMATS="" STATE_TIMEZONE="" STATE_TIMESTAMP=""
+        if source /root/arch-install-state.conf 2>/dev/null; then
+            config_block="$(printf '\nLast install configuration:\n  User: %s   Host: %s   DE: %s\n  Keymap: %s   Language: %s   Formats: %s\n  Timezone: %s   Installed: %s' \
+                "${STATE_USER:-(unknown)}" \
+                "${STATE_HOSTNAME:-(unknown)}" \
+                "${STATE_DE:-(unknown)}" \
+                "${STATE_KEYMAP:-(unknown)}" \
+                "${STATE_LANG:-(unknown)}" \
+                "${STATE_FORMATS:-(unknown)}" \
+                "${STATE_TIMEZONE:-(unknown)}" \
+                "${STATE_TIMESTAMP:-(unknown)}")"
+        fi
+    fi
+
+    printf 'System status:\n  Arch: %s   Live ISO: %s   Root: %s\n  Btrfs: %s   Snapper: %s   Desktop: %s\n%s\n\nChoose an action:' \
+        "$arch" "$live" "$root" "$btrfs" "$snapper" "$desktop" "$config_block"
 }
 
 # ---------------- DOWNLOADING ----------------
