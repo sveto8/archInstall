@@ -35,8 +35,25 @@ info() {
 }
 warn() {
     WARN_LIST+=("$*")
+    # Functions run through run_with_gauge / run_in_box live in a subshell, so
+    # their warn calls can't extend the parent's WARN_LIST. When the caller
+    # sets WARN_FILE, every warning is ALSO appended there; after the run the
+    # caller reads it back with load_warn_file.
+    if [[ -n "${WARN_FILE:-}" ]]; then
+        printf '%s\n' "$*" >> "$WARN_FILE" 2>/dev/null || true
+    fi
     if [[ -t 1 ]]; then printf '\n\033[1;33m[!] %s\033[0m\n' "$*"
     else printf '\n[!] %s\n' "$*"; fi
+}
+
+# load_warn_file <file>  -- appends every line of <file> to WARN_LIST.
+load_warn_file() {
+    local f="${1:-}" line
+    [[ -n "$f" && -s "$f" ]] || return 0
+    while IFS= read -r line; do
+        if [[ -n "$line" ]]; then WARN_LIST+=("$line"); fi
+    done < "$f"
+    return 0
 }
 error() {
     if [[ -t 2 ]]; then printf '\033[1;31m[ERROR] %s\033[0m\n' "$*" >&2
