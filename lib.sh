@@ -208,41 +208,26 @@ _text_lines() {
         END { print n + 0 }'
 }
 
-# ---------------- ASCII BANNER ----------------
+# ---------------- HEADER LINE ----------------
 #
-# Returns the ASCII art banner as plain text. dlg() prepends it to the
-# text of every dialog, so the banner is visible in every script that
-# sources this library without any of those scripts having to know.
+# Returns a single-line signature that dlg() prepends to the text of
+# every dialog, so it is visible in every script that sources this
+# library without any of those scripts having to know about it.
 #
-# The widest line of the art is 68 characters. dialog's text area is
-# BOX_W minus its own borders/padding -- effectively BOX_W - 6. Below
-# BOX_W = 76 the longest line wraps onto a second row, which visually
-# "shatters" the art and pushes the real dialog content off the bottom
-# of the screen. In that case the banner is skipped entirely rather
-# than being shown broken.
+# An ASCII art banner used to live here, but it wrapped ("shattered")
+# whenever the dialog's usable text area was narrower than the art,
+# which is impossible to predict reliably across dialog builds and
+# terminal sizes. A single line of text never wraps at any reasonable
+# terminal width, so the header is now just the signature.
 #
 # The final line is a LITERAL "\n\n" (backslash + n, twice), not real
-# newlines: bash's command substitution -- "$(_banner_text)" -- always
-# strips trailing real newlines from a function's output, which would
-# glue the dialog's own text directly onto "...by Sveto". dialog
-# renders the literal \n as a real newline, so the user gets the blank
-# line between the banner and the dialog body.
-_banner_text() {
-    # Full banner only if it fits.
-    if (( ${BOX_W:-0} >= 76 )); then
-        cat <<'BANNER_EOF'
-     /\            | |     |_   _|         | |      | | |
-    /  \   _ __ ___| |__     | |  _ __  ___| |_ __ _| | | ___ _ __
-   / /\ \ | '__/ __| '_ \    | | | '_ \/ __| __/ _` | | |/ _ \ '__|
-  / ____ \| | | (__| | | |  _| |_| | | \__ \ || (_| | | |  __/ |
- /_/    \_\_|  \___|_| |_| |_____|_| |_|___/\__\__,_|_|_|\___|_|
-
-         Arch Linux Installation Manager by Sveto
-BANNER_EOF
-    # Narrow terminal: just the signature line, centred-ish.
-    elif (( ${BOX_W:-0} >= 50 )); then
-        printf '   Arch Linux Installation Manager by Sveto\n'
-    fi
+# newlines: bash's command substitution -- "$(_header_text)" -- strips
+# trailing real newlines from a function's output, which would glue the
+# dialog's own text directly onto the signature. dialog renders the
+# literal \n as a real newline, so the user gets a blank line between
+# the header and the dialog body.
+_header_text() {
+    printf '  Arch Linux Installation Manager by Sveto\n'
     printf '\\n\\n'
 }
 
