@@ -208,6 +208,32 @@ _text_lines() {
         END { print n + 0 }'
 }
 
+# ---------------- ASCII BANNER ----------------
+#
+# Returns the ASCII art banner as plain text (no terminal clearing, no
+# sleep). dlg() below prepends it to the text of every dialog, so the
+# banner is visible in every script that sources this library -- manager,
+# installer, post-install setup, DE install, app install -- without any
+# of those scripts having to know about it.
+#
+# Skipped when the dialog width is too small: the art is ~68 columns
+# wide, and BOX_W is the dialog's total width (border + padding take a
+# few columns). Anything under 72 makes each art line wrap onto two,
+# which pushes the actual dialog content off the bottom of the screen.
+_banner_text() {
+    (( ${BOX_W:-0} >= 72 )) || return 0
+    cat <<'BANNER_EOF'
+     /\            | |     |_   _|         | |      | | |
+    /  \   _ __ ___| |__     | |  _ __  ___| |_ __ _| | | ___ _ __
+   / /\ \ | '__/ __| '_ \    | | | '_ \/ __| __/ _` | | |/ _ \ '__|
+  / ____ \| | | (__| | | |  _| |_| | | \__ \ || (_| | | |  __/ |
+ /_/    \_\_|  \___|_| |_| |_____|_| |_|___/\__\__,_|_|_|\___|_|
+
+         Arch Linux Installation Manager by Sveto
+
+BANNER_EOF
+}
+
 # Box geometry for a --menu/--checklist with <n> items: the list gets exactly
 # as many rows as there are items (so everything is visible at once and the
 # box is no bigger than needed); only if that would not fit on the screen is
@@ -228,16 +254,41 @@ _menu_geometry() {
 # list-height arguments the caller passes (normally 0 0) are replaced with
 # values computed from the real item count -- passing 0 makes dialog show a
 # big empty box with only a row or two of the list visible.
+#
+# The ASCII banner (see _banner_text above) is prepended to the text of
+# every widget that has one, so it appears inside every dialog in every
+# script. --gauge, --programbox, --textbox and --infobox are excluded:
+# the first two have their own continuously-updated text, the third
+# takes a filename instead of a text argument, and the fourth is meant
+# to be a tiny corner popup.
 dlg() {
     local args=("$@") n=$# i kind="" per=2 count
+    local banner_widget=0
+
+    # Locate the widget keyword. The text argument, when present, is
+    # always the one immediately after it (index i+1).
     for ((i = 0; i < n; i++)); do
         case "${args[i]}" in
-            --menu|--checklist|--radiolist) kind="${args[i]}"; break ;;
+            --menu|--checklist|--radiolist|--msgbox|--yesno|--inputbox|--passwordbox)
+                kind="${args[i]}"
+                banner_widget=1
+                break
+                ;;
+            --textbox|--gauge|--programbox|--infobox)
+                kind="${args[i]}"
+                break
+                ;;
         esac
     done
-    if [[ -n "$kind" ]]; then
+
+    # Prepend the banner to the widget's text.
+    if (( banner_widget )); then
+        args[i+1]="$(_banner_text)${args[i+1]}"
+    fi
+
+    # Geometry for the list-style widgets (unchanged behaviour).
+    if [[ "$kind" == "--menu" || "$kind" == "--checklist" || "$kind" == "--radiolist" ]]; then
         [[ "$kind" == "--menu" ]] || per=3
-        # layout: <kind> TEXT HEIGHT WIDTH LIST-HEIGHT item...
         count=$(( (n - i - 5) / per ))
         _menu_geometry "${args[i+1]}" "$count"
         args[i+2]="$MENU_H"
