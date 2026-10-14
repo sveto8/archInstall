@@ -135,7 +135,9 @@ Questions, in this order:
    English or Croatian) and, independently, the **regional formats**
    (dates, numbers, currency, measurements, paper: `LC_TIME`,
    `LC_NUMERIC`, `LC_MONETARY`, `LC_MEASUREMENT`, `LC_PAPER` in
-   `/etc/locale.conf`; also handed to `installDE.sh` for GNOME/KDE)
+   `/etc/locale.conf`; also handed to `installDE.sh` for GNOME/KDE). The
+   formats menu offers "same as the language" plus Croatian, English US and
+   German; a locale is never listed twice, whichever language you chose
 3. **User, superuser, password — one after another:** username (empty =
    skip; validated: lowercase, digits, `_`/`-`, not `root`), *"should this
    user be a superuser (wheel + sudo)?"* (default Yes), then the password
@@ -189,7 +191,8 @@ Then, unattended:
    original `@` and Snapper rollbacks would target the wrong subvolume
 3. Ranks pacman mirrors with `reflector` (non-fatal if it fails — the
    disk is already formatted, so it just falls back to the default
-   mirrorlist)
+   mirrorlist). If `reflector` is missing on the ISO it is installed with
+   `pacman -Sy`: a stale package database makes a plain `-S` fail with 404s
 4. `pacstrap`s the base system: `base base-devel linux linux-firmware
    btrfs-progs cryptsetup grub efibootmgr sudo networkmanager
    wpa_supplicant vim git zram-generator dialog`, plus the microcode
@@ -242,7 +245,12 @@ confirmation) come first as dialogs; everything after the confirmation
 runs unattended with live output in a dialog box (log:
 `/root/setupAfterInstall.log`), and a final dialog offers a reboot
 (default No). Warnings from the layout checks are collected and shown in
-the summary instead of scrolling past.
+the summary instead of scrolling past. Warnings raised *during* the run
+(a theme that failed to download, LUKS discards not enabled, a missing
+timer, ...) are collected as well and listed in the closing dialog (the first
+six; the rest are in the log) — the run itself happens in a subshell, so
+they are passed back through a small temporary file (`WARN_FILE`, see
+`lib.sh`).
 
 1. Verifies the expected layout (Btrfs root, `/efi`, `/boot`,
    `/.snapshots` mounted, fstab entry for `/.snapshots` present)
@@ -375,7 +383,12 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    `lspci` needed): `mesa` always, `vulkan-radeon` for AMD,
    `vulkan-intel` + `intel-media-driver` for Intel. NVIDIA is *not*
    automated (open vs. proprietary module is your call) — a warning is
-   shown. Then the package list is checked against the sync databases:
+   shown. **Audio:** `pipewire`, `pipewire-pulse`, `pipewire-alsa` and
+   `wireplumber` are added for every desktop — the DE packages only depend on
+   the PulseAudio *client* library, not on a sound server, so KDE and XFCE
+   used to come up without sound (the PipeWire user sockets are enabled by
+   the packages themselves, nothing to switch on). Then the package list is
+   checked against the sync databases:
    a name that no longer exists is **skipped with a warning** instead of
    making `pacman -S` abort the whole transaction
 5. Shows a summary (user, DE, GPU, package list, skipped packages) and
@@ -389,13 +402,17 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    <color>`). A failed download or a missing `install.sh` in the archive warns and
    skips that theme rather than failing the script; the icon cache is
    refreshed afterwards so both themes show up immediately in
-   theme pickers
+   theme pickers. **All desktops:** the Catppuccin Mocha cursor theme
+   (`catppuccin-mocha-dark-cursors`) is downloaded from the latest release of
+   [catppuccin/cursors](https://github.com/catppuccin/cursors) (not from this
+   repo), unpacked with `bsdtar` into `/usr/share/icons/` and skipped if it is
+   already there; a failed download only warns
 8. Enables the matching display manager/greeter (`gdm.service` /
    `sddm.service` / `lightdm.service`)
 9. **GNOME only:** sets the dark color scheme
    (`org.gnome.desktop.interface color-scheme=prefer-dark` +
    `gtk-theme=Adwaita-dark` for older GTK3 apps, plus `accent-color=slate`
-   on GNOME 47+), directories-before-files in GTK file dialogs, an
+   on GNOME 47+), `clock-format=24h`, directories-before-files in GTK file dialogs, an
    always-visible "Log Out" entry in the GNOME shell menu, and the
    Reversal icon theme + dark cursor theme installed in step 7 — all as
    defaults for the target user, applied via a temporary
@@ -433,9 +450,17 @@ are best-effort, so a schema missing on one GNOME version cannot abort the
 rest. Testing the chroot path in a VM is the first thing to do after
 changing this part.
 
-**KDE:** the target user's `kdeglobals` (Breeze Dark) and
-`plasma-localerc` (regional formats + UI language, read from `LANG` in
-`/etc/locale.conf`) are written with the user's ownership.
+**KDE:** the target user's `kdeglobals` (Breeze Dark), `kcminputrc`
+(Catppuccin Mocha cursor) and `plasma-localerc` (regional formats + UI
+language, read from `LANG` in `/etc/locale.conf`) are written with the
+user's ownership — KDE ignores config files owned by root. Existing files
+are merged in place, not overwritten.
+
+**XFCE:** there is no way to preset settings through a session bus from a
+chroot, so they are written as the user's own xfconf channel files, which
+XFCE reads on first login: `xsettings.xml` (Adwaita-dark, Adwaita icons,
+Catppuccin Mocha cursor), `xfwm4.xml` and `xfce4-panel.xml` (a panel whose
+clock shows time then date, 24 h).
 
 You can re-run this later to install a different desktop environment or
 change from full to minimal (or vice versa) — it doesn't remove
@@ -456,10 +481,12 @@ cancels (nothing is installed on cancel).
 
 1. Refuses to run as root; asks for your `sudo` password **once**, then
    installs a short-lived `NOPASSWD` drop-in
-   (`/etc/sudoers.d/99-installer-timestamp`, mode 0440, validated with
-   `visudo -cf`, this user only) so that `yay`/`makepkg` — which call
-   `sudo` themselves — can never pop a password prompt over the dialog
-   during a long AUR build. The drop-in is removed on every normal exit
+   (`/etc/sudoers.d/99-installer-timestamp`, mode 0440, this user only) so that
+   `yay`/`makepkg` — which call `sudo` themselves — can never pop a password
+   prompt over the dialog during a long AUR build. The file is first written
+   as `99-installer-timestamp.staging` (sudo ignores names containing a dot),
+   validated there with `visudo -cf` and only then renamed into place, so a
+   syntax error can never leave sudo broken. The drop-in is removed on every normal exit
    path (success, error, Ctrl+C); only a `kill -9` would leave it behind
    (then delete it by hand). Installs `dialog` itself if it's missing
 2. **Optional packages checklist** — defaults shown below (Enter
@@ -476,10 +503,10 @@ cancels (nothing is installed on cancel).
 
 3. **Work programs** yes/no box — defaults to **No**. The box lists the
    exact packages so you know what you're agreeing to: `jdk11-openjdk`,
-   `meld`, `code` (open-source VS Code build), `remmina` from the repos,
-   plus `intellij-idea-community-edition` (JetBrains no longer ships a
-   separate Community build for newer releases, so this AUR package may be
-   outdated or gone — if so it just shows up under SKIPPED), `postman-bin`,
+   `meld`, `code` (open-source VS Code build), `remmina` and
+   `intellij-idea-community-edition` from the repos (the official `extra`
+   package; it may pull in a newer JDK as a dependency, which is harmless
+   because the work JDK is set as the default afterwards), plus `postman-bin`,
    `f5vpn-ng`
    (F5 BIG-IP APM VPN client — can occasionally need a library fix after
    a libxml2/webkit2gtk update), `ferdium-bin`, `snx-rs` (Check Point
@@ -488,7 +515,7 @@ cancels (nothing is installed on cancel).
 4. **Extra packages** input box (space-separated, blank to skip) —
    official-repo and AUR names both work. Only plain package names are
    accepted; anything starting with `-` (which pacman/yay would treat as
-   an option, e.g. `--overwrite`) is ignored with a message
+   an option, e.g. `--overwrite`) is ignored with a message; ESC aborts, as in every other dialog
 5. **Confirmation** box showing the final repo / AUR / extra lists;
    answering No (or `ESC`) at any dialog above aborts cleanly
 6. Installs unattended, with live output in a dialog box (also saved to
@@ -499,14 +526,17 @@ cancels (nothing is installed on cancel).
      are then listed as FAILED ("yay is not available") instead of the
      whole run stopping
    - always-installed base set — **Repo:** `terminator`, `guake`,
-     `qmmp`, `kolourpaint`, `mission-center`, `stow`, `eza`, `hplip` +
-     `cups` + `system-config-printer` (printer support); **AUR:**
-     `google-chrome`, `sublime-text-4`, `peazip`, `python-pyqt5` (needed
-     for `hp-setup`'s GUI)
+     `qmmp`, `kolourpaint`, `mission-center`, `stow`, `eza`, `peazip`,
+     `hplip` + `cups` + `system-config-printer` + `python-pyqt5` (printer
+     support; PyQt5 is needed for `hp-setup`'s GUI); **AUR:**
+     `google-chrome`, `sublime-text-4`
    - then whatever you picked above
 7. Every package — list-defined or typed in — is checked with
    `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
-   skipped with a warning instead of aborting the whole run. Genuine
+   skipped with a warning instead of aborting the whole run. A package
+   listed as "repo" that is no longer in the official repos (packages do
+   move between the two: `peazip` is in `extra` now but used to be AUR-only)
+   is handed to `yay` instead of being skipped. Genuine
    install failures (found, but errored) are collected and reported,
    not fatal to the rest of the run
 8. Sets the work JDK as the default JVM (`archlinux-java set`) if it was
@@ -612,24 +642,30 @@ than failing. **To add a theme: just drop a `.tar.xz` into
 contents; the `PLYMOUTH_THEMES` array in `setupAfterInstall.sh` is only
 the offline fallback.
 
-## Icon & cursor themes (GNOME only)
+## Icon & cursor themes
 
-`installDE.sh` downloads these from this repo whenever GNOME is chosen
-(any other DE skips this step entirely):
+`installDE.sh` installs two themes. They come from different places and apply
+to different desktops:
 
-| What            | Archive                                          | Source |
-|-----------------|---------------------------------------------------|--------|
-| Icon theme      | `icons/Reversal-icon-theme-master.tar.xz`         | [yeyushengfan258/Reversal-icon-theme](https://github.com/yeyushengfan258/Reversal-icon-theme) |
+| What | Where from | Installed for |
+|------|-----------|---------------|
+| Reversal icon theme | `icons/Reversal-icon-theme-master.tar.xz` **in this repo** ([upstream](https://github.com/yeyushengfan258/Reversal-icon-theme)) | GNOME only |
+| Catppuccin Mocha cursor (`catppuccin-mocha-dark-cursors`) | `releases/latest/download/…zip` of [catppuccin/cursors](https://github.com/catppuccin/cursors) — **not** in this repo | every desktop |
 
-Unlike the icon theme, the cursor archive is expected to be a
-ready-to-use cursor directory (no `install.sh`), so it's extracted
-directly into `/usr/share/icons/`. The icon archive, by contrast, ships
-its own `install.sh` and is run once per color variant to produce
-`yellow`/`orange`/`black`/`grey` icon sets. To update either: replace
-the corresponding archive in the repo (same filename/path) — no script
-changes needed unless you rename the archive or add more color
-variants (which would require editing the `for color in orange black
-grey` loop in `installDE.sh`).
+**Reversal.** The archive ships its own `install.sh`, which is run once per
+colour variant to produce the `yellow` (default), `orange`, `black` and `grey`
+icon sets. It is only applied through `gsettings`, which is GNOME-specific —
+that is why KDE and XFCE skip it. To update it replace the archive in the repo
+(same filename/path); no script change is needed unless you rename it or add
+variants (edit the `for color in orange black grey` loop in `installDE.sh`).
+
+**Catppuccin cursor.** The upstream release is a ready-to-use cursor
+directory (no `install.sh`), so it is extracted straight into
+`/usr/share/icons/` with `bsdtar` (skipped if it is already there; a failed
+download only warns and the desktop keeps its default cursor). It is applied
+with each desktop's own mechanism: `gsettings`/dconf for GNOME, `kcminputrc`
+for KDE, `xsettings.xml` for XFCE. The AUR package is not used because
+`installDE.sh` runs as root and `yay`/`makepkg` refuse to.
 
 ## `lib.sh` — shared helpers
 
@@ -637,7 +673,12 @@ Sourced by all five scripts so the dialog code lives in one place:
 
 - `log` / `info` / `warn` / `die` — coloured only when stdout is a real
   terminal, plain text inside a dialog box (dialog can't render ANSI
-  colours), so the same functions work in both
+  colours), so the same functions work in both. `warn` also appends to
+  `$WARN_FILE` when the caller has set it, and `load_warn_file <file>` reads
+  those lines back into `WARN_LIST` — needed because the functions run by
+  `run_with_gauge` / `run_in_box` live in a subshell and cannot extend the
+  parent's array (`setupAfterInstall.sh` and `installDE.sh` use this for their
+  closing dialogs)
 - `ensure_dialog` — installs `dialog` if missing (`pacman -Sy` on the live
   ISO, plain `pacman -S` on an installed system so it never does a partial
   upgrade)
@@ -757,9 +798,10 @@ can run in either order.
   XFCE's Wayland support is still experimental/unstable upstream (known
   issues include black screens on login with some GPU/driver
   combinations), so X11 is the stable, working choice there.
-- The Reversal icon theme and dark cursor theme are only installed and
-  applied for GNOME — for KDE and XFCE that step is skipped entirely,
-  since `gsettings` (the mechanism used to apply them) is GNOME-specific.
+- The Reversal icon theme is GNOME-only (it is applied via `gsettings`). The
+  Catppuccin Mocha cursor is installed for every desktop and applied with
+  each desktop's own mechanism (gsettings/dconf, `kcminputrc`,
+  `xsettings.xml`).
 - `arch-manager.sh` is a convenience wrapper, not a replacement for
   understanding what each script does — it just saves typing
   `curl`/`chmod`/filenames by hand. Nothing about the four numbered
@@ -787,3 +829,46 @@ can run in either order.
   stdin (`chpasswd`, `cryptsetup --key-file=-`) — never as command-line
   arguments, so they don't show up in the process list. They are kept in
   shell variables only until the install ends.
+- **Known limitation: `/boot` is outside Btrfs.** Snapper snapshots contain
+  `/usr/lib/modules` but not the kernel and initramfs in `/boot` (a separate
+  ext4 partition by design). After a rollback the kernel in `/boot` can be
+  newer than the modules in the restored root; if the system then fails to
+  load modules, boot the previous kernel/fallback or reinstall the `linux`
+  package from the rolled-back system. A pacman hook that copies `/boot` into
+  each snapshot is the usual remedy and is not part of these scripts.
+- **Known limitation: booting a snapshot from grub-btrfs.** Snapper's
+  snapshots are read-only, so a snapshot booted from the GRUB menu comes up
+  with a read-only root. grub-btrfs' optional `grub-btrfs-overlayfs` mkinitcpio
+  hook is the fix, but it is reported to be incompatible with the `systemd`
+  hook this setup uses, so it is deliberately not enabled. Treat snapshot
+  boots as a way to inspect and recover, then use a Snapper rollback.
+- **Dual boot (e.g. Windows 11 on a gaming PC).** Pick **local time** at the
+  hardware-clock question in `archInstall.sh` (Windows assumes the RTC is local
+  time) and leave the os-prober mode at **internal** in `setupAfterInstall.sh`.
+  The temporary read-only mount of the Windows ESP (`/mnt/win-esp`) used for
+  detection is released on every exit path, including a failed run.
+
+## Revision notes (bug-fix pass)
+
+Fixed in the scripts:
+
+- `archInstall.sh` — the *Regional formats* menu listed a tag twice when the
+  chosen language was `hr_HR` or `en_US`; `reflector` is now installed with
+  `pacman -Sy` on the live ISO (a plain `-S` fails on a stale database).
+- `setupAfterInstall.sh` — warnings raised during the run were lost (the run
+  is a subshell) and are now shown in the closing dialog; the temporary
+  Windows-ESP mount is unmounted even when the setup fails midway.
+- `installDE.sh` — added PipeWire (no sound on KDE/XFCE before); a pacman
+  failure now reports its exit code instead of the generic "Failed at line"
+  from the ERR trap; warnings from the install phase reach the final dialog.
+- `installApps.sh` — the sudoers drop-in is staged under a name sudo ignores
+  and validated *before* it becomes active (a syntax error could previously
+  leave sudo unusable, including for the cleanup that removes the file);
+  `peazip`, `python-pyqt5` and `intellij-idea-community-edition` moved to the
+  official-repo lists, with a `yay` fallback for packages that move between
+  the repos and the AUR; ESC at the "Extra packages" box now aborts as
+  documented; the drop-in uses `id -un` instead of `$USER`.
+- `lib.sh` — `WARN_FILE` / `load_warn_file` (see above).
+- `arch-manager.sh` — reviewed, no changes needed.
+
+All six scripts pass `bash -n` and `shellcheck`.
