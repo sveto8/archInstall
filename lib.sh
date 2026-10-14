@@ -208,41 +208,6 @@ _text_lines() {
         END { print n + 0 }'
 }
 
-# ---------------- HEADER BOX ----------------
-#
-# Internal: the signature box with REAL newlines. Used directly by the
-# --gauge code in the four install scripts (their frames go straight to
-# the gauge's stdin -- no command substitution -- so the literal "\n"
-# trailer that _header_text needs is not applicable here).
-_header_box() {
-    local text="Arch Linux Installation Manager by Sveto"
-    local width=$(( ${#text} + 2 ))
-    local max_width=$(( BOX_W - 8 ))
-    if (( width > max_width )); then
-        printf ' %s\n' "$text"
-        return
-    fi
-    local rule
-    rule="$(printf '%*s' "$width" '' | tr ' ' '-')"
-    printf ' +%s+\n' "$rule"
-    printf ' | %s |\n' "$text"
-    printf ' +%s+\n' "$rule"
-}
-
-# ---------------- HEADER LINE ----------------
-#
-# Returns the signature box (see _header_box above) plus a LITERAL "\n\n"
-# trailer that dlg() prepends to the text of every regular dialog
-# widget. The literal (backslash + n, twice), not real newlines, is
-# deliberate: bash's command substitution -- "$(_header_text)" -- strips
-# trailing real newlines from a function's output, which would glue the
-# dialog's own text directly onto the box. dialog renders the literal
-# \n as a real newline, so the user gets the blank line.
-_header_text() {
-    _header_box
-    printf '\\n\\n'
-}
-
 # Box geometry for a --menu/--checklist with <n> items: the list gets exactly
 # as many rows as there are items (so everything is visible at once and the
 # box is no bigger than needed); only if that would not fit on the screen is
