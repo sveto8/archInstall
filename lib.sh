@@ -251,13 +251,6 @@ _menu_geometry() {
 # list-height arguments the caller passes (normally 0 0) are replaced with
 # values computed from the real item count -- passing 0 makes dialog show a
 # big empty box with only a row or two of the list visible.
-#
-# The ASCII banner (see _banner_text above) is prepended to the text of
-# every widget that has one, so it appears inside every dialog in every
-# script. --gauge, --programbox, --textbox and --infobox are excluded:
-# the first two have their own continuously-updated text, the third
-# takes a filename instead of a text argument, and the fourth is meant
-# to be a tiny corner popup.
 dlg() {
     local args=("$@") n=$# i kind="" per=2 count
     local banner_widget=0
