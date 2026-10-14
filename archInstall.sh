@@ -190,16 +190,45 @@ elif grep -qi 'GenuineIntel' /proc/cpuinfo; then
     UCODE_PKG="intel-ucode"
 fi
 
+# ---------------- CONFIGURATION SUMMARY HELPER ----------------
+#
+# Builds a short, human-readable summary of everything selected so far.
+# Prepended to the text of each subsequent question so the user always
+# sees the current state while answering -- dialog cannot render a
+# separate side panel, so the "panel" lives inside each dialog's own
+# body. Fields that have not been reached yet show as "?".
+#
+# Uses `%s` plus real newlines; dialog renders both equally well in a
+# prompt, and _text_height already accounts for it when sizing the box.
+
+_state_summary() {
+    local disk="${DEVICE:-?}"
+    local host="${NEW_HOSTNAME:-?}"
+    local tz="${TIMEZONE:-?}"
+    local km="${KEYMAP_PRIMARY:-${KEYMAP:-?}}"
+    [[ -n "${KEYMAP_TOGGLE:-}" ]] && km="${km}/${KEYMAP_TOGGLE}"
+    local lang="${LOCALE:-?}"
+    local fmt="${FORMAT_LOCALE:-?}"
+    local usr="${NEW_USERNAME:-?}"
+    local de="${DE_LABEL:-?}"
+    [[ "$de" == "none (CLI only)" ]] && de="?"
+
+    printf 'Current selections:\n'
+    printf '  Disk=%s  Hostname=%s  Timezone=%s\n' "$disk" "$host" "$tz"
+    printf '  Keymap=%s  Language=%s  Formats=%s\n' "$km" "$lang" "$fmt"
+    printf '  User=%s  Desktop=%s\n\n' "$usr" "$de"
+}
+
 # ---------------- HOSTNAME / TIMEZONE / KEYMAP ----------------
 
 while true; do
-    ask_text NEW_HOSTNAME "Hostname" "Hostname of this machine (letters, digits and '-', max 63 characters).\n\nTip: use a different name on every machine (e.g. laptop / desktop)." "$NEW_HOSTNAME" || abort
+    ask_text NEW_HOSTNAME "Hostname" "$(_state_summary)Hostname of this machine (letters, digits and '-', max 63 characters).\n\nTip: use a different name on every machine (e.g. laptop / desktop)." "$NEW_HOSTNAME" || abort
     [[ "$NEW_HOSTNAME" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] && break
     msg_box "Invalid hostname" "'$NEW_HOSTNAME' is not a valid hostname."
 done
 
 while true; do
-    ask_text TIMEZONE "Timezone" "Timezone as Region/City (for example Europe/Zagreb):" "$TIMEZONE" || abort
+    ask_text TIMEZONE "Timezone" "$(_state_summary)Timezone as Region/City (for example Europe/Zagreb):" "$TIMEZONE" || abort
     [[ -n "$TIMEZONE" && "$TIMEZONE" != *..* && -f "/usr/share/zoneinfo/$TIMEZONE" ]] && break
     msg_box "Invalid timezone" "'$TIMEZONE' was not found in /usr/share/zoneinfo.\n\nExample: Europe/Zagreb (list: timedatectl list-timezones)."
 done
@@ -207,7 +236,7 @@ done
 _keymaps="$(localectl list-keymaps 2>/dev/null || true)"
 while true; do
     ask_text KEYMAP "Console keymap" \
-        "Console keymap(s). Use one name, or several separated by commas (or spaces).\n\nExamples:\n  us          -- US only\n  croat       -- Croatian only\n  us,croat    -- both; you will be asked which is PRIMARY\n\nList: localectl list-keymaps" \
+        "$(_state_summary)Console keymap(s). Use one name, or several separated by commas (or spaces).\n\nExamples:\n  us          -- US only\n  croat       -- Croatian only\n  us,croat    -- both; you will be asked which is PRIMARY\n\nList: localectl list-keymaps" \
         "$KEYMAP" || abort
 
     # Split the input on commas and/or whitespace, validate each name
@@ -242,7 +271,7 @@ while true; do
         for _k in "${_km_ok[@]}"; do _km_items+=("$_k" ""); done
         KEYMAP_PRIMARY="$(dlg_capture --title "Primary keymap" \
             --default-item "${_km_ok[-1]}" \
-            --menu "Which keymap should be the PRIMARY layout (active by default at boot)?" \
+            --menu "$(_state_summary)Which keymap should be the PRIMARY layout (active by default at boot)?" \
             0 "$BOX_W" 0 "${_km_items[@]}")" || abort
         KEYMAP_TOGGLE=""
         for _k in "${_km_ok[@]}"; do
@@ -263,7 +292,7 @@ done
 # ---------------- SYSTEM LANGUAGE (primary locale) ----------------
 
 LOCALE="$(dlg_capture --title "System language" --default-item "$LOCALE" \
-    --menu "Which language should the system use by default (LANG in /etc/locale.conf)?" \
+    --menu "$(_state_summary)Which language should the system use by default (LANG in /etc/locale.conf)?" \
     0 "$BOX_W" 0 \
     en_US.UTF-8 "English (United States)" \
     hr_HR.UTF-8 "Croatian (Hrvatska)")" || abort
@@ -281,7 +310,7 @@ LOCALES_STR="${LOCALES[*]}"
 # LC_PAPER in /etc/locale.conf. Both are written below.
 
 FORMAT_LOCALE="$(dlg_capture --title "Regional formats" --default-item "$LOCALE" \
-    --menu "How should dates, numbers, times and currency be formatted?\n\nThis is independent of the interface language." \
+    --menu "$(_state_summary)How should dates, numbers, times and currency be formatted?\n\nThis is independent of the interface language." \
     0 "$BOX_W" 0 \
     "$LOCALE"        "Same as the interface language (${LOCALE})" \
     hr_HR.UTF-8      "Croatian -- dd.mm.yyyy, 1.234,56, EUR" \
@@ -300,7 +329,7 @@ ROOT_PASS=""
 SET_ROOT_PASSWORD="no"
 
 while true; do
-    ask_text NEW_USERNAME "New user" "Username for the new regular user.\n\nLeave empty to skip (then only root will exist)." "" || abort
+    ask_text NEW_USERNAME "New user" "$(_state_summary)Username for the new regular user.\n\nLeave empty to skip (then only root will exist)." "" || abort
     if [[ -z "$NEW_USERNAME" ]]; then
         break
     fi
@@ -312,7 +341,7 @@ while true; do
 done
 
 if [[ -n "$NEW_USERNAME" ]]; then
-    if ask_yes "Superuser" "Should $NEW_USERNAME be a superuser?\n\n(added to the 'wheel' group, can use sudo)" yes; then
+    if ask_yes "Superuser" "$(_state_summary)Should $NEW_USERNAME be a superuser?\n\n(added to the 'wheel' group, can use sudo)" yes; then
         MAKE_SUDO="yes"
     fi
     ask_password USER_PASS "Password for $NEW_USERNAME" || abort
@@ -337,7 +366,7 @@ ask_password LUKS_PASS "LUKS passphrase" "$LUKS_INTRO" || abort
 # ---------------- HARDWARE CLOCK (RTC) ----------------
 
 RTC_MODE="$(dlg_capture --title "Hardware clock (RTC)" \
-    --menu "How should the hardware clock be stored?\n\nChoose 'local' if you dual-boot Windows (avoids touching the Windows registry)." \
+    --menu "$(_state_summary)How should the hardware clock be stored?\n\nChoose 'local' if you dual-boot Windows (avoids touching the Windows registry)." \
     0 "$BOX_W" 0 \
     utc   "UTC (Linux default, recommended for Linux-only machines)" \
     local "Local time (Windows-compatible, for dual-boot)")" || abort
@@ -348,7 +377,7 @@ ENABLE_WOL="no"
 WOL_IFACE=""
 WOL_NOTE=""
 
-if ask_yes "Wake-on-LAN" "Enable Wake-on-LAN (WOL)?\n\nThe wired network interface is detected automatically; 'ethtool' and a small systemd service are set up so the machine can be woken by a magic packet." no; then
+if ask_yes "Wake-on-LAN" "$(_state_summary)Enable Wake-on-LAN (WOL)?\n\nThe wired network interface is detected automatically; 'ethtool' and a small systemd service are set up so the machine can be woken by a magic packet." no; then
     WOL_CANDIDATES=()
     for ifc in /sys/class/net/*; do
         name="$(basename "$ifc")"
@@ -419,7 +448,7 @@ if [[ "${#WIFI_PSK_FILES[@]}" -gt 0 ]]; then
     for f in "${WIFI_PSK_FILES[@]}"; do
         WIFI_NAMES+=("$(iwd_ssid_from_file "$f")")
     done
-    if ask_yes "Wi-Fi" "Saved Wi-Fi network(s) on this live system:\n  ${WIFI_NAMES[*]}\n\nCopy them to the installed system so it is online after the first reboot?" yes; then
+    if ask_yes "Wi-Fi" "$(_state_summary)Saved Wi-Fi network(s) on this live system:\n  ${WIFI_NAMES[*]}\n\nCopy them to the installed system so it is online after the first reboot?" yes; then
         WIFI_CARRY="yes"
     fi
 fi
@@ -436,7 +465,7 @@ DE_LABEL="none (CLI only)"
 
 if [[ -n "$NEW_USERNAME" ]]; then
     DE_CHOICE="$(dlg_capture --title "Desktop environment" --default-item 0 \
-        --menu "Install a desktop environment now?\n\nIt is installed as the last step; if it fails the base system stays intact and you can run installDE.sh after reboot." \
+        --menu "$(_state_summary)Install a desktop environment now?\n\nIt is installed as the last step; if it fails the base system stays intact and you can run installDE.sh after reboot." \
         0 "$BOX_W" 0 \
         0 "None -- CLI only (install later with installDE.sh)" \
         1 "GNOME (Wayland)" \
@@ -445,15 +474,19 @@ if [[ -n "$NEW_USERNAME" ]]; then
     if [[ "$DE_CHOICE" == "0" ]]; then
         DE_CHOICE=""
     else
+        # Set DE_LABEL early (without mode) so the Package set menu can
+        # show which DE was chosen. The mode is appended after the menu
+        # returns and DE_MODE is known.
+        case "$DE_CHOICE" in
+            1) DE_LABEL="GNOME" ;;
+            2) DE_LABEL="KDE Plasma" ;;
+            3) DE_LABEL="XFCE" ;;
+        esac
         DE_MODE="$(dlg_capture --title "Package set" \
-            --menu "Full or minimal package set?" 0 "$BOX_W" 0 \
+            --menu "$(_state_summary)Full or minimal package set?" 0 "$BOX_W" 0 \
             full    "Full -- complete desktop with its usual applications" \
             minimal "Minimal -- just the desktop and the essentials")" || abort
-        case "$DE_CHOICE" in
-            1) DE_LABEL="GNOME ($DE_MODE)" ;;
-            2) DE_LABEL="KDE Plasma ($DE_MODE)" ;;
-            3) DE_LABEL="XFCE ($DE_MODE)" ;;
-        esac
+        DE_LABEL="$DE_LABEL ($DE_MODE)"
     fi
 fi
 
@@ -541,18 +574,22 @@ local -a CUR_ITEMS=()
 local CUR_IDX=0
 local WIN=5
 
-# Info header shown above the phase tree on every gauge frame. The
-# values are captured here, once, at the very start of the install
-# -- they cannot change during the run, and this is exactly what
-# the user picked in the questions above. It replaces what used to
-# be a separate informational area that dialog cannot draw next to
-# a full-screen gauge.
+# Info header shown above the phase tree on every gauge frame. Captured
+# once, here, at the very start of the install -- the values cannot
+# change during the run, and they summarize exactly what the user chose
+# in the questions above. Replaces what would otherwise be a separate
+# informational area, which dialog cannot draw next to a full-screen
+# gauge.
 local _info_header_1 _info_header_2
 _info_header_1="USER: ${NEW_USERNAME:-(root)}   DE: ${DE_LABEL}   KEYMAP: ${KEYMAP_PRIMARY}${KEYMAP_TOGGLE:+/${KEYMAP_TOGGLE}}"
 _info_header_2="LANG: ${LOCALE}   FORMATS: ${FORMAT_LOCALE}"
-    
+
 _phase_prompt() {
     local i j n start end out=""
+    # Info header at the top of every gauge frame, above the phase tree.
+    out+="  ${_info_header_1}"$'\n'
+    out+="  ${_info_header_2}"$'\n'
+    out+="  $(printf '%*s' $(( BOX_W - 4 )) '' | tr ' ' '-')"$'\n'
     for ((i=0; i<${#PHASES[@]}; i++)); do
         # Draw the "progress marker" line just before the currently
         # running phase. Everything ABOVE the line is done; the current
@@ -1126,6 +1163,25 @@ done
 chmod +x /mnt/archInstall/*.sh /mnt/archInstall/scripts/*.sh 2>/dev/null || true
 
 cp -f "$LOG_FILE" /mnt/root/archInstall.log 2>/dev/null || true
+
+# Write a small state file that arch-manager.sh reads on subsequent runs
+# to show what was chosen during this install. It goes into the new
+# system's /root/ so it survives the reboot; a copy also goes to the
+# live ISO's /root/ in case the user runs the manager again before
+# rebooting. Values are shell-quoted with %q so `source` handles names
+# containing spaces (e.g. "GNOME (full)") or shell metacharacters.
+{
+    printf 'STATE_USER=%q\n'      "${NEW_USERNAME:-(root)}"
+    printf 'STATE_HOSTNAME=%q\n'  "${NEW_HOSTNAME}"
+    printf 'STATE_DE=%q\n'        "${DE_LABEL}"
+    printf 'STATE_KEYMAP=%q\n'    "${KEYMAP_PRIMARY}${KEYMAP_TOGGLE:+/${KEYMAP_TOGGLE}}"
+    printf 'STATE_LANG=%q\n'      "${LOCALE}"
+    printf 'STATE_FORMATS=%q\n'   "${FORMAT_LOCALE}"
+    printf 'STATE_TIMEZONE=%q\n'  "${TIMEZONE}"
+    printf 'STATE_TIMESTAMP=%q\n' "$(date '+%Y-%m-%d %H:%M')"
+} > /mnt/root/arch-install-state.conf
+cp -f /mnt/root/arch-install-state.conf /root/arch-install-state.conf 2>/dev/null || true
+
 log "Base install complete."
 advance
 
