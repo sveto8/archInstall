@@ -238,7 +238,7 @@ _banner_text() {
 
          Arch Linux Installation Manager by Sveto
 BANNER_EOF
-    printf '\\n\\n'
+    printf '\\n\\n\\n'
 }
 
 # Box geometry for a --menu/--checklist with <n> items: the list gets exactly
