@@ -320,13 +320,25 @@ LOCALES_STR="${LOCALES[*]}"
 # achieved through LC_TIME, LC_NUMERIC, LC_MONETARY, LC_MEASUREMENT and
 # LC_PAPER in /etc/locale.conf. Both are written below.
 
+# The first entry is "same as the interface language". The explicit entries
+# below it skip whichever locale equals $LOCALE -- otherwise that tag would
+# appear twice in the menu (e.g. hr_HR.UTF-8 chosen as the language).
+_fmt_tags=(hr_HR.UTF-8 en_US.UTF-8 de_DE.UTF-8)
+_fmt_desc=(
+    "Croatian -- dd.mm.yyyy, 1.234,56, EUR"
+    'English US -- mm/dd/yyyy, 1,234.56, $'
+    "German -- dd.mm.yyyy, 1.234,56, EUR"
+)
+FORMAT_ITEMS=("$LOCALE" "Same as the interface language (${LOCALE})")
+for _i in "${!_fmt_tags[@]}"; do
+    if [[ "${_fmt_tags[_i]}" != "$LOCALE" ]]; then
+        FORMAT_ITEMS+=("${_fmt_tags[_i]}" "${_fmt_desc[_i]}")
+    fi
+done
+
 FORMAT_LOCALE="$(dlg_capture --title "Regional formats" --default-item "$LOCALE" \
     --menu "$(_state_summary)How should dates, numbers, times and currency be formatted?\n\nThis is independent of the interface language." \
-    0 "$BOX_W" 0 \
-    "$LOCALE"        "Same as the interface language (${LOCALE})" \
-    hr_HR.UTF-8      "Croatian -- dd.mm.yyyy, 1.234,56, EUR" \
-    en_US.UTF-8      "English US -- mm/dd/yyyy, 1,234.56, \$" \
-    de_DE.UTF-8      "German -- dd.mm.yyyy, 1.234,56, EUR")" || abort
+    0 "$BOX_W" 0 "${FORMAT_ITEMS[@]}")" || abort
 
 in_array "$FORMAT_LOCALE" "${LOCALES[@]}" || LOCALES+=("$FORMAT_LOCALE")
 LOCALES_STR="${LOCALES[*]}"
@@ -600,14 +612,7 @@ _phase_prompt() {
     # Info header at the top of every gauge frame, above the phase tree.
     out+="  ${_info_header_1}"$'\n'
     out+="  ${_info_header_2}"$'\n'
-    # Separator below the info header. Width is BOX_W - 8, NOT BOX_W - 4:
-    # a separator that reaches too close to the dialog's content width
-    # (BOX_W - 2, after borders and padding) wraps onto a second line on
-    # some terminals, pushing the phase tree down by one row and clipping
-    # the last line of the prompt -- which is where the current-step
-    # message lives. BOX_W - 8 matches the phase separator below and
-    # always stays on one line.
-    out+="  $(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
+    out+="  $(printf '%*s' $(( BOX_W - 4 )) '' | tr ' ' '-')"$'\n'
     for ((i=0; i<${#PHASES[@]}; i++)); do
         # Draw the "progress marker" line just before the currently
         # running phase. Everything ABOVE the line is done; the current
@@ -744,7 +749,9 @@ gauge_msg 19 "Optimizing pacman mirrorlist with reflector..."
 log "Optimizing pacman mirrorlist with reflector..."
 REFLECTOR_AVAILABLE=1
 if ! command -v reflector >/dev/null 2>&1; then
-    pacman -S --needed --noconfirm reflector || REFLECTOR_AVAILABLE=0
+    # -Sy: the live ISO's package database may be stale or empty, and a plain
+    # -S then fails with 404s. A refresh is harmless on the throw-away ISO.
+    pacman -Sy --needed --noconfirm reflector || REFLECTOR_AVAILABLE=0
 fi
 if [[ "$REFLECTOR_AVAILABLE" -eq 1 ]]; then
     cp /etc/pacman.d/mirrorlist /etc/pacman.d/mirrorlist.bak 2>/dev/null || true
@@ -1209,15 +1216,11 @@ exec 1>&3
 exec 3>&-
 }
 
-# Gauge height: use as much of the terminal as possible. The phase tree
-# with sub-items plus the info header plus the current-step message needs
-# the vertical space, and dialog clips from the bottom (which is exactly
-# where the message lives) when the box is too short. A 24-line terminal
-# leaves 1 row for the shell prompt; bigger terminals are capped at 30 to
-# avoid an absurdly tall box.
-GAUGE_HEIGHT=$(( TERM_LINES - 1 ))
-(( GAUGE_HEIGHT > 30 )) && GAUGE_HEIGHT=30
-(( GAUGE_HEIGHT < 20 )) && GAUGE_HEIGHT=20
+# Taller gauge so the phase tree + sub-steps fit comfortably. Capped to
+# what the terminal can actually show; ui_init guarantees TERM_LINES >= 20.
+GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
+(( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
+(( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
 
 run_with_gauge "Installing Arch Linux" "$LOG_FILE" run_install
 
