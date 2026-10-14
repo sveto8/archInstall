@@ -228,8 +228,9 @@ _text_lines() {
 # renders the literal \n as a real newline, so the user gets the blank
 # line between the banner and the dialog body.
 _banner_text() {
-    (( ${BOX_W:-0} >= 76 )) || return 0
-    cat <<'BANNER_EOF'
+    # Full banner only if it fits.
+    if (( ${BOX_W:-0} >= 76 )); then
+        cat <<'BANNER_EOF'
      /\            | |     |_   _|         | |      | | |
     /  \   _ __ ___| |__     | |  _ __  ___| |_ __ _| | | ___ _ __
    / /\ \ | '__/ __| '_ \    | | | '_ \/ __| __/ _` | | |/ _ \ '__|
@@ -238,7 +239,11 @@ _banner_text() {
 
          Arch Linux Installation Manager by Sveto
 BANNER_EOF
-    printf '\\n\\n\\n'
+    # Narrow terminal: just the signature line, centred-ish.
+    elif (( ${BOX_W:-0} >= 50 )); then
+        printf '   Arch Linux Installation Manager by Sveto\n'
+    fi
+    printf '\\n\\n'
 }
 
 # Box geometry for a --menu/--checklist with <n> items: the list gets exactly
