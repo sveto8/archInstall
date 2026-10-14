@@ -198,9 +198,12 @@ fi
 # separate side panel, so the "panel" lives inside each dialog's own
 # body. Fields that have not been reached yet show as "?".
 #
-# Uses `%s` plus real newlines; dialog renders both equally well in a
-# prompt, and _text_height already accounts for it when sizing the box.
-
+# The final line is deliberately ended with a LITERAL "\n" (backslash
+# and n as two characters), not a real newline: bash's command
+# substitution -- "$(_state_summary)" -- always strips trailing real
+# newlines, which would glue the question text directly to "Desktop=?"
+# with no gap. dialog still renders the literal \n as a newline, so the
+# user gets a visible separator.
 _state_summary() {
     local disk="${DEVICE:-?}"
     local host="${NEW_HOSTNAME:-?}"
@@ -216,7 +219,15 @@ _state_summary() {
     printf 'Current selections:\n'
     printf '  Disk=%s  Hostname=%s  Timezone=%s\n' "$disk" "$host" "$tz"
     printf '  Keymap=%s  Language=%s  Formats=%s\n' "$km" "$lang" "$fmt"
-    printf '  User=%s  Desktop=%s\n\n' "$usr" "$de"
+    printf '  User=%s  Desktop=%s\n' "$usr" "$de"
+
+    # Horizontal rule, sized to the dialog width (BOX_W is set by
+    # ui_init and stays constant for the whole session).
+    printf '  %*s\n' $(( BOX_W - 6 )) '' | tr ' ' '-'
+
+    # Literal "\n" -- see the comment above the function for why this is
+    # not a real newline here.
+    printf '\\n'
 }
 
 # ---------------- HOSTNAME / TIMEZONE / KEYMAP ----------------
