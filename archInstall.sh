@@ -612,7 +612,7 @@ _phase_prompt() {
     # Info header at the top of every gauge frame, above the phase tree.
     out+="  ${_info_header_1}"$'\n'
     out+="  ${_info_header_2}"$'\n'
-    out+="  $(printf '%*s' $(( BOX_W - 4 )) '' | tr ' ' '-')"$'\n'
+    out+="  $(printf '%*s' $(( BOX_W - 8 )) '' | tr ' ' '-')"$'\n'
     for ((i=0; i<${#PHASES[@]}; i++)); do
         # Draw the "progress marker" line just before the currently
         # running phase. Everything ABOVE the line is done; the current
@@ -1218,9 +1218,9 @@ exec 3>&-
 
 # Taller gauge so the phase tree + sub-steps fit comfortably. Capped to
 # what the terminal can actually show; ui_init guarantees TERM_LINES >= 20.
-GAUGE_HEIGHT=$(( TERM_LINES - 2 ))
-(( GAUGE_HEIGHT > 22 )) && GAUGE_HEIGHT=22
-(( GAUGE_HEIGHT < 12 )) && GAUGE_HEIGHT=12
+GAUGE_HEIGHT=$(( TERM_LINES - 1 ))
+(( GAUGE_HEIGHT > 30 )) && GAUGE_HEIGHT=30
+(( GAUGE_HEIGHT < 20 )) && GAUGE_HEIGHT=20
 
 run_with_gauge "Installing Arch Linux" "$LOG_FILE" run_install
 
