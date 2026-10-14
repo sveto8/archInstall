@@ -230,32 +230,14 @@ _menu_geometry() {
 # big empty box with only a row or two of the list visible.
 dlg() {
     local args=("$@") n=$# i kind="" per=2 count
-    local banner_widget=0
-
-    # Locate the widget keyword. The text argument, when present, is
-    # always the one immediately after it (index i+1).
     for ((i = 0; i < n; i++)); do
         case "${args[i]}" in
-            --menu|--checklist|--radiolist|--msgbox|--yesno|--inputbox|--passwordbox)
-                kind="${args[i]}"
-                banner_widget=1
-                break
-                ;;
-            --textbox|--gauge|--programbox|--infobox)
-                kind="${args[i]}"
-                break
-                ;;
+            --menu|--checklist|--radiolist) kind="${args[i]}"; break ;;
         esac
     done
-
-    # The ASCII banner (see _banner_text above) is prepended to the text of
-    if (( banner_widget )); then
-        args[i+1]="$(_header_text)${args[i+1]}"
-    fi
-
-    # Geometry for the list-style widgets (unchanged behaviour).
-    if [[ "$kind" == "--menu" || "$kind" == "--checklist" || "$kind" == "--radiolist" ]]; then
+    if [[ -n "$kind" ]]; then
         [[ "$kind" == "--menu" ]] || per=3
+        # layout: <kind> TEXT HEIGHT WIDTH LIST-HEIGHT item...
         count=$(( (n - i - 5) / per ))
         _menu_geometry "${args[i+1]}" "$count"
         args[i+2]="$MENU_H"
