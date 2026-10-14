@@ -278,9 +278,9 @@ dlg() {
         esac
     done
 
-    # Prepend the banner to the widget's text.
+    # Prepend the header line to the widget's text.
     if (( banner_widget )); then
-        args[i+1]="$(_banner_text)${args[i+1]}"
+        args[i+1]="$(_header_text)${args[i+1]}"
     fi
 
     # Geometry for the list-style widgets (unchanged behaviour).
