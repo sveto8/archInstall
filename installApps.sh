@@ -122,23 +122,29 @@ log "Checking sudo access (you will be asked for your password once)..."
 sudo -v || die "sudo access is required."
 
 # --- install the drop-in (uses the timestamp just created; no prompt)
+#
+# The file is first staged as "<name>.staging": sudo ignores files in
+# /etc/sudoers.d whose name contains a '.', so a broken staging file can
+# never lock sudo. It is validated there with visudo and only then renamed
+# into its active name. (Installing first and validating afterwards would
+# leave a broken sudoers file active -- and sudo itself would then refuse to
+# run the command that cleans it up.)
 if [[ ! -e "$SUDOERS_DROPIN" ]]; then
     _dropin_tmp="$(mktemp)"
     {
         printf 'Defaults timestamp_timeout=120\n'
         printf 'Defaults timestamp_type=global\n'
-        printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$USER"
+        printf '%s ALL=(ALL) NOPASSWD: ALL\n' "$(id -un)"
     } > "$_dropin_tmp"
 
-    # `install -m 0440 -o root -g root` sets mode and ownership
-    # atomically. visudo -cf validates the syntax before the file is
-    # trusted by sudo.
-    if sudo install -m 0440 -o root -g root "$_dropin_tmp" "$SUDOERS_DROPIN" 2>/dev/null \
-       && sudo visudo -cf "$SUDOERS_DROPIN" >/dev/null 2>&1; then
+    # `install -m 0440 -o root -g root` sets mode and ownership atomically.
+    if sudo install -m 0440 -o root -g root "$_dropin_tmp" "${SUDOERS_DROPIN}.staging" 2>/dev/null \
+       && sudo visudo -cf "${SUDOERS_DROPIN}.staging" >/dev/null 2>&1 \
+       && sudo mv -f "${SUDOERS_DROPIN}.staging" "$SUDOERS_DROPIN" 2>/dev/null; then
         SUDOERS_DROPIN_CREATED=1
         info "Passwordless sudo enabled for this script (removed on exit)."
     else
-        sudo rm -f "$SUDOERS_DROPIN" 2>/dev/null || true
+        sudo rm -f "${SUDOERS_DROPIN}.staging" "$SUDOERS_DROPIN" 2>/dev/null || true
         warn "Could not install sudoers drop-in -- sudo may ask for a password again."
     fi
     rm -f "$_dropin_tmp"
@@ -177,17 +183,21 @@ REPO_PACKAGES=(
     cups                                # printing system
     system-config-printer               # GUI printer management
     eza
+    peazip                              # official repo (extra); used to be AUR-only
+    python-pyqt5                        # for hp-setup's GUI
 )
 
 AUR_PACKAGES=(
     google-chrome
     sublime-text-4
-    peazip
-    python-pyqt5                        # for hp-setup
 )
 
 # JDK used for work. Package + the name `archlinux-java` knows it by: change
 # both here (e.g. jdk17-openjdk / java-17-openjdk) and nothing else.
+# NOTE: the IntelliJ package may pull in a NEWER JDK as a dependency (it
+# ships its own JetBrains runtime, but the package metadata can still list
+# one). That is harmless: after all installs this script runs
+# `archlinux-java set $JAVA_ENV`, so plain `java` stays on this version.
 JAVA_PKG="jdk11-openjdk"
 JAVA_ENV="java-11-openjdk"
 
@@ -197,10 +207,10 @@ WORK_REPO=(
     meld
     code                                # open-source VS Code
     remmina
+    intellij-idea-community-edition     # official repo (extra)
 )
 
 WORK_AUR=(
-    intellij-idea-community-edition
     postman-bin
     f5vpn-ng                            # F5 VPN client
     ferdium-bin                         # Ferdium messaging client
@@ -274,7 +284,7 @@ fi
 
 EXTRA_INPUT="$(dlg_capture --title "Extra packages" \
     --inputbox "Any extra packages to add? (space-separated, blank to skip)\n\nOfficial-repo and AUR names both work." \
-    11 "$BOX_W")" || EXTRA_INPUT=""
+    11 "$BOX_W")" || abort
 
 # Only plain package names are accepted: a token starting with "-" would be
 # taken by pacman/yay as an OPTION (e.g. --overwrite), not as a package.
@@ -324,8 +334,12 @@ package_exists() {
 install_repo() {
     local pkg="$1"
     if ! pacman -Si "$pkg" >/dev/null 2>&1; then
-        warn "$pkg not found in official repos -- skipping."
-        echo "$pkg" >> "$SKIPPED_FILE"
+        # Packages move between the official repos and the AUR over time
+        # (peazip did). Instead of
+        # skipping, let install_aur() look for it -- it reports "not found"
+        # itself when the name exists nowhere.
+        info "$pkg is not in the official repos -- trying the AUR instead."
+        install_aur "$pkg"
         return 0
     fi
     if ! sudo -n pacman -S --needed --noconfirm --noprogressbar "$pkg"; then
