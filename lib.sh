@@ -208,47 +208,38 @@ _text_lines() {
         END { print n + 0 }'
 }
 
-# ---------------- HEADER LINE ----------------
+# ---------------- HEADER BOX ----------------
 #
-# Returns a short signature, boxed with ASCII borders, that dlg()
-# prepends to the text of every dialog. Visible in every script that
-# sources this library without any of those scripts having to know.
-#
-# Uses plain ASCII box characters (+, -, |) rather than Unicode box
-# drawing (┌─┐│└┘) on purpose: the ASCII set is in every console font
-# (including the minimal one the Arch ISO boots with) and every dialog
-# version renders it identically. Unicode box drawing looks prettier
-# but falls back to "?" on terminals whose font lacks the glyphs, which
-# is exactly the failure mode we are avoiding after the ASCII-art
-# banner experiment.
-#
-# If the box would not fit the dialog's usable text area, the header
-# drops to a single line of plain text instead -- a wrapped box looks
-# worse than no box.
-#
-# The final line is a LITERAL "\n\n" (backslash + n, twice), not real
-# newlines: bash's command substitution -- "$(_header_text)" -- strips
-# trailing real newlines from a function's output, which would glue the
-# dialog's own text directly onto the box. dialog renders the literal
-# \n as a real newline, so the user gets the blank line between the
-# header and the dialog body.
-_header_text() {
+# Internal: the signature box with REAL newlines. Used directly by the
+# --gauge code in the four install scripts (their frames go straight to
+# the gauge's stdin -- no command substitution -- so the literal "\n"
+# trailer that _header_text needs is not applicable here).
+_header_box() {
     local text="Arch Linux Installation Manager by Sveto"
-    local width=$(( ${#text} + 2 ))          # 1 space padding on each side
-    local max_width=$(( BOX_W - 8 ))         # dialog borders + indent
-
+    local width=$(( ${#text} + 2 ))
+    local max_width=$(( BOX_W - 8 ))
     if (( width > max_width )); then
-        # Too narrow for the box -- plain text is the safe fallback.
         printf ' %s\n' "$text"
-        printf '\\n\\n'
         return
     fi
-
     local rule
     rule="$(printf '%*s' "$width" '' | tr ' ' '-')"
     printf ' +%s+\n' "$rule"
     printf ' | %s |\n' "$text"
     printf ' +%s+\n' "$rule"
+}
+
+# ---------------- HEADER LINE ----------------
+#
+# Returns the signature box (see _header_box above) plus a LITERAL "\n\n"
+# trailer that dlg() prepends to the text of every regular dialog
+# widget. The literal (backslash + n, twice), not real newlines, is
+# deliberate: bash's command substitution -- "$(_header_text)" -- strips
+# trailing real newlines from a function's output, which would glue the
+# dialog's own text directly onto the box. dialog renders the literal
+# \n as a real newline, so the user gets the blank line.
+_header_text() {
+    _header_box
     printf '\\n\\n'
 }
 
