@@ -480,7 +480,8 @@ if [[ -n "$PLYMOUTH_SELECTED" ]]; then
 else
     printf '%s\n' "  * Plymouth: skipped (no theme selected)"
 fi
-printf '%s\n' "  * GRUB + grub-btrfs"
+printf '%s\n' "  * GRUB + grub-btrfs (daemon only)"
+printf '%s\n' "  * Bootable, writable snapshots with their own kernel (kernel archive)"
 printf '%s\n' "  * GRUB remembers last-booted entry (GRUB_DEFAULT=saved)"
 printf '%s\n' "  * Snapper for / only"
 printf '%s\n' "  * snap-pac pre/post pacman snapshots"
@@ -885,7 +886,8 @@ advance
 set_phase 4
 set_items \
     "Edit HOOKS in mkinitcpio.conf" \
-    "Rebuild initramfs (mkinitcpio -P)"
+    "Rebuild initramfs (mkinitcpio -P)" \
+    "Bootable snapshots (kernel archive)"
 
 gauge_msg 50 "Configuring mkinitcpio..."
 log "Configuring mkinitcpio..."
@@ -909,6 +911,383 @@ advance
 gauge_msg 54 "Rebuilding initramfs..."
 log "Rebuilding initramfs..."
 mkinitcpio -P
+advance
+
+# ---------------- SNAPSHOT BOOT SAFETY ----------------
+#
+# Goal: after a bad update, pick an older snapshot in GRUB and simply keep
+# working in it. Two things stand in the way and are solved here:
+#   1. Snapper snapshots are read-only  -> the generated GRUB entries make
+#      the snapshots they list writable.
+#   2. /boot is outside Btrfs, so a snapshot would boot with the CURRENT
+#      kernel (mismatched modules, or the very kernel that broke things)
+#      -> a kernel + initramfs copy is archived per kernel version and
+#      each snapshot's entry uses the copy that matches its own modules.
+
+gauge_msg 58 "Setting up bootable snapshots (kernel archive)..."
+log "Setting up bootable snapshots (kernel archive, writable snapshots)..."
+
+install -d -m 0755 /usr/local/sbin /etc/pacman.d/hooks /etc/grub.d
+
+cat > /usr/local/sbin/arch-kernel-archive <<'KARCH_EOF'
+#!/usr/bin/env bash
+# ============================================================
+# arch-kernel-archive
+#
+# /boot is a separate ext4 partition, so Snapper snapshots do not contain
+# the kernel -- only its modules (/usr/lib/modules/<kver>). Booting an old
+# snapshot with a NEWER kernel from /boot therefore mismatches kernel and
+# modules (and if the update that broke things was the kernel itself, the
+# snapshot would boot the broken kernel).
+#
+# This script keeps /boot/kernel-archive/<kver>/{vmlinuz,initramfs.img} for
+# every kernel version that the running system or any snapshot still has
+# modules for. /etc/grub.d/42_snapshot-kernels uses those copies to build
+# one boot entry per snapshot with the matching kernel.
+#
+# Called by the pacman hook 99-kernel-archive.hook after every kernel /
+# initramfs change (the 99- prefix makes it run AFTER mkinitcpio's own hook).
+#
+#   arch-kernel-archive [archive]   archive current kernels, then prune
+#   arch-kernel-archive prune       only remove copies nothing refers to
+# ============================================================
+set -euo pipefail
+
+ARCHIVE_DIR="${KARCH_ARCHIVE_DIR:-/boot/kernel-archive}"
+MODULES_DIR="${KARCH_MODULES_DIR:-/usr/lib/modules}"
+BOOT_DIR="${KARCH_BOOT_DIR:-/boot}"
+SNAP_DIR="${KARCH_SNAP_DIR:-/.snapshots}"
+
+say() { printf 'kernel-archive: %s\n' "$*" >&2; }
+
+archive_one() {
+    local mdir="$1" kver base dest img tmp
+    kver="$(basename "$mdir")"
+    [[ -f "$mdir/vmlinuz" && -f "$mdir/pkgbase" ]] || return 0
+    base="$(<"$mdir/pkgbase")"
+    dest="$ARCHIVE_DIR/$kver"
+    mkdir -p "$dest"
+
+    if ! cmp -s "$mdir/vmlinuz" "$dest/vmlinuz"; then
+        install -m 0644 "$mdir/vmlinuz" "$dest/vmlinuz.new"
+        mv -f "$dest/vmlinuz.new" "$dest/vmlinuz"
+    fi
+
+    # Prefer the initramfs mkinitcpio just built in /boot -- but only when
+    # the kernel next to it really is this version. Otherwise build one.
+    img="$BOOT_DIR/initramfs-$base.img"
+    tmp="$dest/initramfs.img.new"
+    if [[ -f "$img" && -f "$BOOT_DIR/vmlinuz-$base" ]] \
+       && cmp -s "$BOOT_DIR/vmlinuz-$base" "$mdir/vmlinuz"; then
+        install -m 0644 "$img" "$tmp"
+    elif command -v mkinitcpio >/dev/null 2>&1 \
+         && mkinitcpio -k "$kver" -g "$tmp" >/dev/null 2>&1; then
+        chmod 0644 "$tmp"
+    else
+        rm -f "$tmp"
+        say "could not obtain an initramfs for $kver -- not archived"
+        rm -rf -- "$dest"
+        return 0
+    fi
+    mv -f "$tmp" "$dest/initramfs.img"
+    say "archived $kver ($base)"
+}
+
+prune() {
+    [[ -d "$ARCHIVE_DIR" && -d "$SNAP_DIR" ]] || return 0
+    # An unmounted /.snapshots is an empty directory: pruning against it
+    # would delete every archived kernel. Only prune when it is really there.
+    if [[ -z "${KARCH_TEST:-}" ]] && ! mountpoint -q "$SNAP_DIR"; then
+        say "$SNAP_DIR is not mounted -- not pruning"
+        return 0
+    fi
+    local -A keep=()
+    local d k running
+    running="$(uname -r)"
+    keep["$running"]=1
+    for d in "$MODULES_DIR"/*/ "$SNAP_DIR"/*/snapshot/usr/lib/modules/*/; do
+        [[ -d "$d" ]] || continue
+        d="${d%/}"
+        keep["${d##*/}"]=1
+    done
+    for d in "$ARCHIVE_DIR"/*/; do
+        [[ -d "$d" ]] || continue
+        d="${d%/}"
+        k="${d##*/}"
+        if [[ -z "${keep[$k]:-}" ]]; then
+            say "pruning unused $k"
+            rm -rf -- "$d"
+        fi
+    done
+}
+
+case "${1:-archive}" in
+    archive)
+        for m in "$MODULES_DIR"/*/; do
+            [[ -d "$m" ]] || continue
+            archive_one "${m%/}"
+        done
+        prune
+        ;;
+    prune) prune ;;
+    *) echo "Usage: $0 [archive|prune]" >&2; exit 2 ;;
+esac
+KARCH_EOF
+cat > /usr/local/sbin/arch-snapshot-promote <<'PROMOTE_EOF'
+#!/usr/bin/env bash
+# ============================================================
+# arch-snapshot-promote
+#
+# Run this while booted from a snapshot (GRUB -> "Arch Linux snapshots (own
+# kernel)") when you want to KEEP working in it: the snapshot becomes the new
+# normal root (@), the old @ is renamed to @.broken-<date> (kept, so nothing
+# is lost), and the kernel in /boot is set to the one matching this snapshot.
+# Afterwards just reboot into the normal first GRUB entry.
+#
+#   sudo arch-snapshot-promote [--yes]
+# ============================================================
+set -euo pipefail
+
+CONF=/etc/arch-snapshot.conf
+ROOT_SUBVOL="@"
+# shellcheck source=/dev/null
+if [[ -r "$CONF" ]]; then . "$CONF"; fi
+
+die() { printf 'arch-snapshot-promote: %s\n' "$*" >&2; exit 1; }
+
+[[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"
+
+ASSUME_YES=0
+if [[ "${1:-}" == "--yes" ]]; then ASSUME_YES=1; fi
+
+cur_subvol="$(findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^subvol=//p' | head -n1)"
+cur_subvol="${cur_subvol#/}"
+[[ -n "$cur_subvol" ]] || die "cannot tell which subvolume / is mounted from."
+if [[ "$cur_subvol" == "$ROOT_SUBVOL" ]]; then
+    die "you are on the normal root ($ROOT_SUBVOL) -- nothing to promote. Boot a snapshot from GRUB first."
+fi
+
+kver="$(uname -r)"
+[[ -f "/usr/lib/modules/$kver/vmlinuz" && -f "/usr/lib/modules/$kver/pkgbase" ]] \
+    || die "no kernel image for the running kernel ($kver) in /usr/lib/modules."
+base="$(<"/usr/lib/modules/$kver/pkgbase")"
+
+dev="$(findmnt -no SOURCE / | sed 's/\[.*//')"
+[[ -b "$dev" ]] || die "cannot determine the Btrfs device ($dev)."
+
+stamp="$(date +%Y%m%d-%H%M%S)"
+echo "Running from : $cur_subvol  (kernel $kver)"
+echo "Old root     : $ROOT_SUBVOL  ->  ${ROOT_SUBVOL}.broken-$stamp  (kept)"
+echo "New root     : copy of $cur_subvol  ->  $ROOT_SUBVOL"
+echo "Kernel       : /boot/vmlinuz-$base and its initramfs are reset to $kver"
+if (( ! ASSUME_YES )); then
+    read -r -p "Proceed? [y/N] " ans
+    [[ "$ans" == [yY]* ]] || die "aborted."
+fi
+
+top=/run/arch-snapshot-top
+mkdir -p "$top"
+mount -o subvolid=5 "$dev" "$top"
+trap 'umount "$top" 2>/dev/null || true; rmdir "$top" 2>/dev/null || true' EXIT
+
+[[ -d "$top/$ROOT_SUBVOL" ]]  || die "$ROOT_SUBVOL not found on the Btrfs top level."
+[[ -d "$top/$cur_subvol" ]]   || die "$cur_subvol not found on the Btrfs top level."
+
+mv "$top/$ROOT_SUBVOL" "$top/${ROOT_SUBVOL}.broken-$stamp"
+btrfs subvolume snapshot "$top/$cur_subvol" "$top/$ROOT_SUBVOL" >/dev/null
+
+# The kernel in /boot is probably newer than this snapshot's modules.
+install -m 0644 "/usr/lib/modules/$kver/vmlinuz" "/boot/vmlinuz-$base"
+if command -v mkinitcpio >/dev/null 2>&1; then
+    mkinitcpio -p "$base"
+else
+    echo "mkinitcpio not found -- rebuild the initramfs manually." >&2
+fi
+
+cat <<MSG
+
+Done. Reboot and choose the normal first GRUB entry.
+The previous root is kept as ${ROOT_SUBVOL}.broken-$stamp. Once everything
+works, free the space with (from a normal boot):
+  sudo mount -o subvolid=5 $dev /mnt
+  sudo btrfs subvolume delete /mnt/${ROOT_SUBVOL}.broken-$stamp
+  sudo umount /mnt
+MSG
+PROMOTE_EOF
+cat > /etc/grub.d/42_snapshot-kernels <<'SNAPK_EOF'
+#!/usr/bin/env bash
+# ============================================================
+# /etc/grub.d/42_snapshot-kernels
+#
+# One GRUB entry per Snapper snapshot, booting the snapshot's root with the
+# kernel + initramfs archived for exactly that snapshot (see
+# arch-kernel-archive). Because /boot is outside Btrfs, grub-btrfs' own entries
+# can only use the CURRENT kernel; these use the matching one.
+#
+# Snapshots that get an entry are switched to read-write, so the system
+# booted from one behaves normally (changes stay in that snapshot).
+#
+# Never fails grub-mkconfig: on any problem it prints nothing, and the
+# generated block is syntax-checked with grub-script-check first (a broken
+# block would otherwise make EVERY later grub-mkconfig run abort).
+# ============================================================
+set -u
+
+SNAP_DIR="${SNAPK_SNAP_DIR:-/.snapshots}"
+ARCHIVE_DIR="${SNAPK_ARCHIVE_DIR:-/boot/kernel-archive}"
+BOOT_MOUNT="${SNAPK_BOOT_MOUNT:-/boot}"
+MAX_ENTRIES="${SNAPK_MAX_ENTRIES:-30}"
+GRUB_PROBE="${SNAPK_GRUB_PROBE:-grub-probe}"
+SCRIPT_CHECK="${SNAPK_SCRIPT_CHECK:-grub-script-check}"
+BTRFS="${SNAPK_BTRFS:-btrfs}"
+SUBMENU_TITLE="${GRUB_SNAPK_SUBMENU:-Arch Linux snapshots (own kernel)}"
+
+note() { printf '42_snapshot-kernels: %s\n' "$*" >&2; }
+
+[[ -d "$SNAP_DIR" && -d "$ARCHIVE_DIR" ]] || exit 0
+if [[ -z "${SNAPK_TEST:-}" ]] && ! mountpoint -q "$BOOT_MOUNT"; then
+    note "$BOOT_MOUNT is not a separate partition -- skipping"
+    exit 0
+fi
+
+boot_uuid="$("$GRUB_PROBE" --target=fs_uuid "$ARCHIVE_DIR" 2>/dev/null)" || boot_uuid=""
+if [[ -z "$boot_uuid" ]]; then
+    note "could not determine the /boot filesystem UUID -- skipping"
+    exit 0
+fi
+rel_dir="${ARCHIVE_DIR#"$BOOT_MOUNT"}"
+
+snap_subvol="${SNAPK_SNAP_SUBVOL:-}"
+if [[ -z "$snap_subvol" ]]; then
+    snap_subvol="$(findmnt -no OPTIONS "$SNAP_DIR" 2>/dev/null | tr ',' '\n' | sed -n 's/^subvol=//p' | head -n1)"
+    snap_subvol="${snap_subvol#/}"
+fi
+if [[ -z "$snap_subvol" ]]; then
+    note "$SNAP_DIR is not a mounted subvolume -- skipping"
+    exit 0
+fi
+
+# Kernel command line: the system's own, minus anything that selects the root
+# subvolume (that part is per snapshot).
+cmdline_raw="${GRUB_CMDLINE_LINUX:-} ${GRUB_CMDLINE_LINUX_DEFAULT:-}"
+cmdline=""
+set -f
+for tok in $cmdline_raw; do
+    case "$tok" in
+        rootflags=*|ro|rw) ;;
+        *) cmdline+=" $tok" ;;
+    esac
+done
+set +f
+cmdline="$(printf '%s' "$cmdline" | tr -d "'\"\$\`\\\\;&|<>(){}")"
+if [[ " $cmdline " != *" root="* ]]; then
+    root_dev="$(findmnt -no SOURCE / 2>/dev/null | sed 's/\[.*//')"
+    [[ -n "$root_dev" ]] || exit 0
+    cmdline+=" root=$root_dev"
+fi
+cmdline="${cmdline# }"
+
+out=""
+count=0
+while read -r n; do
+    (( count >= MAX_ENTRIES )) && break
+    snap="$SNAP_DIR/$n/snapshot"
+    [[ -d "$snap/usr/lib/modules" ]] || continue
+
+    info="$SNAP_DIR/$n/info.xml"
+    date_s=""; type_s=""; desc_s=""
+    if [[ -r "$info" ]]; then
+        date_s="$(sed -n 's:.*<date>\(.*\)</date>.*:\1:p' "$info" | head -n1 | cut -c1-16)"
+        type_s="$(sed -n 's:.*<type>\(.*\)</type>.*:\1:p' "$info" | head -n1)"
+        desc_s="$(sed -n 's:.*<description>\(.*\)</description>.*:\1:p' "$info" | head -n1 | tr -cd 'A-Za-z0-9 _.:#()+/,=-' | cut -c1-40)"
+    fi
+
+    for mdir in "$snap"/usr/lib/modules/*/; do
+        [[ -d "$mdir" ]] || continue
+        kver="$(basename "$mdir")"
+        [[ -f "$mdir/pkgbase" ]] || continue
+        [[ "$kver" =~ ^[A-Za-z0-9._+-]+$ ]] || continue
+        if [[ ! -f "$ARCHIVE_DIR/$kver/vmlinuz" || ! -f "$ARCHIVE_DIR/$kver/initramfs.img" ]]; then
+            note "snapshot #$n: no archived kernel for $kver -- no entry"
+            continue
+        fi
+
+        # Make the snapshot writable so the booted system works normally.
+        if [[ "$("$BTRFS" property get -ts "$snap" ro 2>/dev/null)" == "ro=true" ]]; then
+            "$BTRFS" property set -ts "$snap" ro false 2>/dev/null \
+                || note "snapshot #$n could not be made writable"
+        fi
+
+        title="Snapshot #$n ${date_s} [${type_s:-?}] ${desc_s} (kernel $kver)"
+        title="$(printf '%s' "$title" | tr -s ' ')"
+        out+="    menuentry '${title}' --class arch --class gnu-linux --class gnu --class os {
+        insmod part_gpt
+        insmod ext2
+        search --no-floppy --fs-uuid --set=root ${boot_uuid}
+        echo 'Loading Linux ${kver} from snapshot #${n}...'
+        linux ${rel_dir}/${kver}/vmlinuz ${cmdline} rootflags=subvol=${snap_subvol}/${n}/snapshot rw
+        echo 'Loading initial ramdisk...'
+        initrd ${rel_dir}/${kver}/initramfs.img
+    }
+"
+        count=$(( count + 1 ))
+    done
+done < <(find "$SNAP_DIR" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null | grep -E '^[0-9]+$' | sort -rn)
+
+[[ -n "$out" ]] || exit 0
+
+block="submenu '${SUBMENU_TITLE}' --class arch --class gnu-linux --class gnu --class os {
+${out}}
+"
+
+tmp="$(mktemp)"
+printf '%s' "$block" > "$tmp"
+if "$SCRIPT_CHECK" "$tmp" >/dev/null 2>&1; then
+    printf '%s' "$block"
+else
+    note "generated menu failed grub-script-check -- printing nothing"
+fi
+rm -f "$tmp"
+exit 0
+SNAPK_EOF
+chmod 0755 /usr/local/sbin/arch-kernel-archive \
+           /usr/local/sbin/arch-snapshot-promote \
+           /etc/grub.d/42_snapshot-kernels
+
+# Runs after mkinitcpio's own hook (90-mkinitcpio-install), so the initramfs
+# it copies is the freshly built one.
+cat > /etc/pacman.d/hooks/99-kernel-archive.hook <<'HOOK_EOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Path
+Target = usr/lib/modules/*/vmlinuz
+Target = usr/lib/initcpio/*
+
+[Action]
+Description = Archiving kernel + initramfs for snapshot boot entries...
+When = PostTransaction
+Exec = /usr/local/sbin/arch-kernel-archive archive
+HOOK_EOF
+
+# The normal root subvolume's name, for arch-snapshot-promote.
+printf 'ROOT_SUBVOL=%q\n' "$ROOT_SUBVOL" > /etc/arch-snapshot.conf
+
+# grub-btrfs would add a second snapshot menu whose entries use the CURRENT
+# kernel -- exactly what must not happen. Turn its menu off (its daemon,
+# which regenerates grub.cfg when snapshots change, keeps running).
+GRUB_BTRFS_CONF="/etc/default/grub-btrfs/config"
+if [[ -f "$GRUB_BTRFS_CONF" ]] && grep -qE '^#?[[:space:]]*GRUB_BTRFS_DISABLE=' "$GRUB_BTRFS_CONF"; then
+    sed -i -E 's/^#?[[:space:]]*GRUB_BTRFS_DISABLE=.*/GRUB_BTRFS_DISABLE="true"/' "$GRUB_BTRFS_CONF"
+else
+    warn "Could not switch off grub-btrfs' own menu (no GRUB_BTRFS_DISABLE in $GRUB_BTRFS_CONF). GRUB will show two snapshot menus -- use 'Arch Linux snapshots (own kernel)'."
+fi
+
+# First archive: the kernel that is installed right now (initramfs was just rebuilt).
+if ! /usr/local/sbin/arch-kernel-archive archive; then
+    warn "arch-kernel-archive failed -- snapshots will have no own-kernel boot entries until it succeeds (run it as root to see why)."
+fi
 advance
 
 # ---------------- GRUB INSTALL ----------------
@@ -1232,12 +1611,15 @@ echo "     - $TIMELINE_LIMIT_MONTHLY monthly snapshots"
 echo
 echo "5. Pacman transactions are handled by snap-pac."
 echo
-echo "6. GRUB will contain grub-btrfs snapshot entries when snapshots"
-echo "   are detected."
+echo "6. GRUB gets a submenu 'Arch Linux snapshots (own kernel)'. Each"
+echo "   entry boots a snapshot with the kernel that belongs to it, and"
+echo "   the snapshot is writable, so you can simply keep working in it."
 echo
-echo "7. If something breaks, DO NOT immediately delete the snapshot."
-echo "   First boot a known-good snapshot from GRUB, verify the system,"
-echo "   then perform a Snapper rollback if needed."
+echo "7. If an update breaks the system: reboot, pick the last good"
+echo "   snapshot in that submenu and work normally. To make it your"
+echo "   permanent system, run (while booted from it):"
+echo "     sudo arch-snapshot-promote"
+echo "   then reboot into the normal first entry."
 echo
 echo "8. Before reboot, inspect:"
 echo "     lsblk -f"
