@@ -634,7 +634,7 @@ Two things normally stand in the way, and `setupAfterInstall.sh` handles both:
 | `/etc/pacman.d/hooks/99-kernel-archive.hook` | Runs it after every kernel/initramfs change. The `99-` prefix makes it run *after* mkinitcpio's own hook, so the initramfs it copies is the new one. |
 | `/etc/grub.d/42_snapshot-kernels` | Run by `grub-mkconfig`: builds the submenu, one entry per snapshot (newest first, at most 30), and makes those snapshots writable. The generated block is checked with `grub-script-check` first and dropped if invalid, so it can never make `grub-mkconfig` fail. |
 | `/etc/pacman.d/hooks/zzz-grub-refresh.hook` + `/usr/local/sbin/arch-grub-refresh` | After **every** pacman transaction, regenerates `grub.cfg` so the new snap-pac `[pre]`/`[post]` snapshots show up in the menu immediately (the `zzz-` prefix sorts after snap-pac's own `zz-snap-pac-post`). The new config is built in a temp file, stripped of "EFI BootNext" entries, and only replaces the live one if `grub-mkconfig` succeeded and an existing Windows entry survived (os-prober can lose it when the Windows ESP is not reachable). It always exits 0, so it can never fail an update. Costs a few seconds per transaction. |
-| `/usr/local/sbin/arch-snapshot-promote` | Makes the snapshot you are booted from the permanent root (see below). |
+| `/usr/local/sbin/arch-snapshot-promote` | Two modes (see below): plain = make the snapshot you are booted from the permanent root; `--kernel-only` = after a Btrfs Assistant restore, put the matching kernel back into `/boot`. |
 | `/etc/arch-snapshot.conf` | Name of the normal root subvolume (`ROOT_SUBVOL=@`), read by the promote tool. |
 
 `grub-btrfs` stays installed — its **daemon** regenerates `grub.cfg` whenever a
@@ -674,6 +674,26 @@ you will see two snapshot menus; use the one called *(own kernel)*.
    into `/boot` (`vmlinuz-<pkgbase>`, then `mkinitcpio -p <pkgbase>`), and
    tells you how to delete the old `@.broken-*` later. Then reboot into the
    normal first GRUB entry.
+
+### Restoring with Btrfs Assistant instead
+
+Btrfs Assistant's **Restore** does the same root swap as `arch-snapshot-promote`
+(for the `@` / `@snapshots` layout used here) but only touches Btrfs, never
+`/boot` — and `/boot` holds the kernel. If the kernel was updated since the
+snapshot, the restored system would boot the newer kernel with older modules.
+So after the restore and **before rebooting**, run:
+
+```bash
+sudo arch-snapshot-promote --kernel-only
+```
+
+It mounts the Btrfs top level, reads which kernel the (restored) `@` needs from
+its `/usr/lib/modules`, and copies the matching kernel and initramfs from
+`/boot/kernel-archive` into `/boot`; no snapshot number is needed. It does
+nothing when `/boot` already matches, and it refuses (changing nothing) if the
+needed kernel was never archived. The *fallback* initramfs is not archived, so
+after the reboot run `sudo mkinitcpio -P` once to rebuild it. Use
+`sudo arch-snapshot-promote --help` for a short reminder.
 
 If you want to keep working in a snapshot for longer than Snapper's retention
 allows, protect it first so cleanup cannot delete it:
