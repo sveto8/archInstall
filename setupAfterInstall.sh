@@ -1187,6 +1187,16 @@ if [[ " $cmdline " != *" root="* ]]; then
 fi
 cmdline="${cmdline# }"
 
+# Same behaviour as the normal entries from 10_linux: with GRUB_DEFAULT=saved
+# and GRUB_SAVEDEFAULT=true every chosen entry becomes the default for the
+# next boot -- so a snapshot you booted is booted again next time, until you
+# pick the normal entry once.
+savedef=""
+if [[ "${GRUB_DEFAULT:-}" == "saved" && "${GRUB_SAVEDEFAULT:-}" == "true" ]]; then
+    savedef="        savedefault
+"
+fi
+
 out=""
 count=0
 while read -r n; do
@@ -1221,7 +1231,7 @@ while read -r n; do
         title="Snapshot #$n ${date_s} [${type_s:-?}] ${desc_s} (kernel $kver)"
         title="$(printf '%s' "$title" | tr -s ' ')"
         out+="    menuentry '${title}' --class arch --class gnu-linux --class gnu --class os {
-        insmod part_gpt
+${savedef}        insmod part_gpt
         insmod ext2
         search --no-floppy --fs-uuid --set=root ${boot_uuid}
         echo 'Loading Linux ${kver} from snapshot #${n}...'
