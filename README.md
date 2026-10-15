@@ -188,7 +188,7 @@ Then, unattended:
    non-rotational). `genfstab`'s numeric `subvolid=` pins are removed from
    `/etc/fstab` (only `subvol=/<name>` stays) — with a `subvolid` in the
    `/` entry, a snapshot booted from grub-btrfs would be overlaid by the
-   original `@` and Snapper rollbacks would target the wrong subvolume
+   original `@` and the root subvolume the kernel command line selects would be ignored
 3. Ranks pacman mirrors with `reflector` (non-fatal if it fails — the
    disk is already formatted, so it just falls back to the default
    mirrorlist). If `reflector` is missing on the ISO it is installed with
@@ -319,7 +319,9 @@ they are passed back through a small temporary file (`WARN_FILE`, see
 11. Rewrites `mkinitcpio.conf` HOOKS to the systemd + `sd-encrypt` set
     (+ `plymouth` when a theme was chosen) inside a marked
     `# >>> arch-setup HOOKS` block — a re-run replaces the block instead of
-    stacking comments — and rebuilds the initramfs
+    stacking comments — and rebuilds the initramfs. Right after that it installs
+    the snapshot boot tooling and archives the freshly built kernel +
+    initramfs (see [Booting a snapshot after a bad update](#booting-a-snapshot-after-a-bad-update))
 12. Rewrites the GRUB kernel cmdline (`rd.luks.name=`, `root=`,
     `rootflags=subvol=…`, `quiet`, `splash` only with Plymouth, …). The
     mapper name and the root subvolume are **read from the running system**
@@ -599,6 +601,97 @@ Details:
 - The "is this Arch?" status check matches `ID=arch` exactly (derivatives
   such as CachyOS, which only set `ID_LIKE=arch`, show *Arch: no*)
 
+## Booting a snapshot after a bad update
+
+The goal: an update breaks the system or it no longer boots → reboot, pick the
+last good snapshot in GRUB, and **keep working in it as a normal system** until
+the broken package is fixed upstream.
+
+```
+GRUB  →  Arch Linux snapshots (own kernel)  →  Snapshot #42 [post] pacman -Syu (kernel 6.x.y)
+```
+
+Two things normally stand in the way, and `setupAfterInstall.sh` handles both:
+
+1. **Snapper snapshots are read-only.** A read-only root cannot boot to a
+   usable system (`/var`, `/etc` need to be written). The generated GRUB
+   entries therefore switch every snapshot they list to read-write
+   (`btrfs property set -ts … ro false`). Changes you make while booted from a
+   snapshot stay in that snapshot.
+2. **`/boot` is a separate ext4 partition, outside Btrfs.** A snapshot holds the
+   kernel *modules* (`/usr/lib/modules/<kver>`) but not the kernel, so it would
+   boot with the newest kernel from `/boot` — mismatched modules, or the very
+   kernel that broke the system. To avoid that, every kernel version that the
+   system or any snapshot still has modules for is archived in
+   `/boot/kernel-archive/<kver>/{vmlinuz,initramfs.img}`, and each snapshot's
+   GRUB entry uses the archived kernel that matches *its own* modules.
+
+### What gets installed
+
+| Path | Purpose |
+|------|---------|
+| `/usr/local/sbin/arch-kernel-archive` | Copies the installed kernel + initramfs to `/boot/kernel-archive/<kver>/` and prunes copies no snapshot refers to any more. |
+| `/etc/pacman.d/hooks/99-kernel-archive.hook` | Runs it after every kernel/initramfs change. The `99-` prefix makes it run *after* mkinitcpio's own hook, so the initramfs it copies is the new one. |
+| `/etc/grub.d/42_snapshot-kernels` | Run by `grub-mkconfig`: builds the submenu, one entry per snapshot (newest first, at most 30), and makes those snapshots writable. The generated block is checked with `grub-script-check` first and dropped if invalid, so it can never make `grub-mkconfig` fail. |
+| `/usr/local/sbin/arch-snapshot-promote` | Makes the snapshot you are booted from the permanent root (see below). |
+| `/etc/arch-snapshot.conf` | Name of the normal root subvolume (`ROOT_SUBVOL=@`), read by the promote tool. |
+
+`grub-btrfs` stays installed — its **daemon** regenerates `grub.cfg` whenever a
+snapshot is created or deleted — but its own menu is switched off
+(`GRUB_BTRFS_DISABLE="true"`), because its entries can only use the current
+kernel. If your `grub-btrfs` has no such option the setup warns about it and
+you will see two snapshot menus; use the one called *(own kernel)*.
+
+### Using it
+
+1. **Something broke.** Reboot (or power-cycle if it hangs during boot).
+2. In GRUB choose **Arch Linux snapshots (own kernel)** and the last snapshot
+   from before the bad update. The entry shows date, type, description and
+   kernel version; `snap-pac` snapshots are labelled `[pre]` / `[post]` with
+   the pacman command. A `[pre]` snapshot is the state *before* that
+   transaction.
+3. Work normally. Don't run the update that broke things. `/home` is a separate
+   subvolume, so your files are the same as in the normal system.
+4. **When the fix is available**, either boot the normal first entry and
+   update, or — if you decided to stay in the snapshot for good — run, while
+   booted from it:
+
+   ```bash
+   sudo arch-snapshot-promote
+   ```
+
+   It renames the current `@` to `@.broken-<date>` (nothing is deleted),
+   copies the snapshot you are in to a new `@`, puts the matching kernel back
+   into `/boot` (`vmlinuz-<pkgbase>`, then `mkinitcpio -p <pkgbase>`), and
+   tells you how to delete the old `@.broken-*` later. Then reboot into the
+   normal first GRUB entry.
+
+If you want to keep working in a snapshot for longer than Snapper's retention
+allows, protect it first so cleanup cannot delete it:
+`sudo snapper -c root modify -c "" <number>`.
+
+### Things to know
+
+- **All snapshots with an entry become writable.** They are still ordinary
+  Snapper snapshots; the difference is only that they can be mounted
+  read-write. Don't modify snapshots you want to keep pristine.
+- **Disk use in `/boot`:** roughly 15 MB for a kernel plus 30–60 MB for an
+  initramfs per archived version; with Snapper's default retention that is
+  well within the 4 GiB `/boot`.
+- **Snapshots older than the setup** (made before `arch-kernel-archive` first
+  ran) have no archived kernel and therefore no entry; the script says so on
+  stderr during `grub-mkconfig`.
+- **Same fstab for every snapshot.** It works because `archInstall.sh` strips
+  `subvolid=` from fstab, leaving only `subvol=/@…`; the kernel command line
+  (`rootflags=subvol=@snapshots/<N>/snapshot`) selects the root subvolume.
+- **`snapper rollback` does not work with this layout** — it changes the
+  default subvolume, but the kernel command line pins `subvol=@`, so the
+  rollback would be silently ignored. Use `arch-snapshot-promote`.
+- The GRUB entries and tools were exercised in isolation (a fake snapshot
+  tree with stubbed `btrfs`/`grub-probe`); they have **not** been run on a real
+  Arch + LUKS + GRUB system. Try the whole flow once in a VM before relying on
+  it: break something, boot an entry, run `arch-snapshot-promote`.
+
 ## GRUB themes
 
 `setupAfterInstall.sh` downloads the selected theme from
@@ -829,19 +922,6 @@ can run in either order.
   stdin (`chpasswd`, `cryptsetup --key-file=-`) — never as command-line
   arguments, so they don't show up in the process list. They are kept in
   shell variables only until the install ends.
-- **Known limitation: `/boot` is outside Btrfs.** Snapper snapshots contain
-  `/usr/lib/modules` but not the kernel and initramfs in `/boot` (a separate
-  ext4 partition by design). After a rollback the kernel in `/boot` can be
-  newer than the modules in the restored root; if the system then fails to
-  load modules, boot the previous kernel/fallback or reinstall the `linux`
-  package from the rolled-back system. A pacman hook that copies `/boot` into
-  each snapshot is the usual remedy and is not part of these scripts.
-- **Known limitation: booting a snapshot from grub-btrfs.** Snapper's
-  snapshots are read-only, so a snapshot booted from the GRUB menu comes up
-  with a read-only root. grub-btrfs' optional `grub-btrfs-overlayfs` mkinitcpio
-  hook is the fix, but it is reported to be incompatible with the `systemd`
-  hook this setup uses, so it is deliberately not enabled. Treat snapshot
-  boots as a way to inspect and recover, then use a Snapper rollback.
 - **Dual boot (e.g. Windows 11 on a gaming PC).** Pick **local time** at the
   hardware-clock question in `archInstall.sh` (Windows assumes the RTC is local
   time) and leave the os-prober mode at **internal** in `setupAfterInstall.sh`.
@@ -849,6 +929,12 @@ can run in either order.
   detection is released on every exit path, including a failed run.
 
 ## Revision notes (bug-fix pass)
+
+New in this pass: **bootable, writable snapshots with matching kernels** —
+see [Booting a snapshot after a bad update](#booting-a-snapshot-after-a-bad-update)
+(`arch-kernel-archive`, the `99-kernel-archive` pacman hook, the
+`42_snapshot-kernels` GRUB generator and `arch-snapshot-promote`, all installed
+by `setupAfterInstall.sh`).
 
 Fixed in the scripts:
 
