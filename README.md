@@ -651,9 +651,17 @@ you will see two snapshot menus; use the one called *(own kernel)*.
    kernel version; `snap-pac` snapshots are labelled `[pre]` / `[post]` with
    the pacman command. A `[pre]` snapshot is the state *before* that
    transaction.
-3. Work normally. Don't run the update that broke things. `/home` is a separate
+3. **GRUB remembers your choice**, exactly like it does for the normal entry
+   (`GRUB_DEFAULT=saved` + `GRUB_SAVEDEFAULT=true`, which `setupAfterInstall.sh`
+   sets; the snapshot entries carry `savedefault` as well). The snapshot you
+   booted is therefore the default at the next boot, with no menu needed. To go
+   back to the normal system, pick the normal first entry once. Note that GRUB
+   saves the choice when you *select* the entry, not after the boot succeeded —
+   if a snapshot fails to boot, choose another entry manually. If the saved
+   snapshot is later deleted by Snapper, GRUB falls back to the first entry.
+4. Work normally. Don't run the update that broke things. `/home` is a separate
    subvolume, so your files are the same as in the normal system.
-4. **When the fix is available**, either boot the normal first entry and
+5. **When the fix is available**, either boot the normal first entry and
    update, or — if you decided to stay in the snapshot for good — run, while
    booted from it:
 
