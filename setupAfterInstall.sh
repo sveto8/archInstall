@@ -1038,13 +1038,20 @@ cat > /usr/local/sbin/arch-snapshot-promote <<'PROMOTE_EOF'
 # ============================================================
 # arch-snapshot-promote
 #
-# Run this while booted from a snapshot (GRUB -> "Arch Linux snapshots (own
-# kernel)") when you want to KEEP working in it: the snapshot becomes the new
-# normal root (@), the old @ is renamed to @.broken-<date> (kept, so nothing
-# is lost), and the kernel in /boot is set to the one matching this snapshot.
-# Afterwards just reboot into the normal first GRUB entry.
+# /boot is outside Btrfs, so a restored root and the kernel in /boot can
+# disagree. This tool handles both ways of going back to an older state:
 #
 #   sudo arch-snapshot-promote [--yes]
+#       Run while booted from a snapshot (GRUB -> "Arch Linux snapshots (own
+#       kernel)"). The snapshot becomes the new normal root (@), the old @ is
+#       renamed to @.broken-<date> (kept, nothing is deleted) and /boot gets
+#       the kernel that matches this snapshot. Then reboot into the normal
+#       first GRUB entry.
+#
+#   sudo arch-snapshot-promote --kernel-only [--yes]
+#       Run AFTER a restore done with another tool (Btrfs Assistant "Restore")
+#       and BEFORE rebooting. It reads which kernel the restored @ needs and
+#       puts that kernel + initramfs from /boot/kernel-archive into /boot.
 # ============================================================
 set -euo pipefail
 
@@ -1053,18 +1060,104 @@ ROOT_SUBVOL="@"
 # shellcheck source=/dev/null
 if [[ -r "$CONF" ]]; then . "$CONF"; fi
 
+BOOT_DIR="${APS_BOOT_DIR:-/boot}"
+ARCHIVE_DIR="${APS_ARCHIVE_DIR:-$BOOT_DIR/kernel-archive}"
+
 die() { printf 'arch-snapshot-promote: %s\n' "$*" >&2; exit 1; }
 
-[[ $EUID -eq 0 ]] || exec sudo -- "$0" "$@"
-
 ASSUME_YES=0
-if [[ "${1:-}" == "--yes" ]]; then ASSUME_YES=1; fi
+KERNEL_ONLY=0
+for arg in "$@"; do
+    case "$arg" in
+        --yes)         ASSUME_YES=1 ;;
+        --kernel-only) KERNEL_ONLY=1 ;;
+        -h|--help)     sed -n "3,21p" "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *)             die "unknown option: $arg (try --help)" ;;
+    esac
+done
 
+if [[ $EUID -ne 0 && -z "${APS_TEST:-}" ]]; then exec sudo -- "$0" "$@"; fi
+
+confirm() {
+    if (( ! ASSUME_YES )); then
+        read -r -p "Proceed? [y/N] " ans
+        [[ "$ans" == [yY]* ]] || die "aborted."
+    fi
+}
+
+dev="$(findmnt -no SOURCE / 2>/dev/null | sed 's/\[.*//')" || dev=""
+top=/run/arch-snapshot-top
+mounted_top=0
+cleanup() {
+    if (( mounted_top )); then
+        umount "$top" 2>/dev/null || true
+        rmdir "$top" 2>/dev/null || true
+    fi
+}
+trap cleanup EXIT
+
+mount_top() {
+    if [[ -n "${APS_TOP_DIR:-}" ]]; then top="$APS_TOP_DIR"; return 0; fi
+    [[ -b "$dev" ]] || die "cannot determine the Btrfs device ($dev)."
+    mkdir -p "$top"
+    mount -o subvolid=5 "$dev" "$top"
+    mounted_top=1
+}
+
+# ---------------------------------------------------------------
+# --kernel-only: put the kernel the (restored) @ needs into /boot
+# ---------------------------------------------------------------
+if (( KERNEL_ONLY )); then
+    mount_top
+    target="$top/$ROOT_SUBVOL"
+    [[ -d "$target/usr/lib/modules" ]] || die "$ROOT_SUBVOL on the Btrfs top level has no /usr/lib/modules -- is the root subvolume really called '$ROOT_SUBVOL'?"
+
+    found=0
+    plan=()
+    for m in "$target"/usr/lib/modules/*/; do
+        [[ -d "$m" && -f "$m/pkgbase" ]] || continue
+        kver="$(basename "$m")"
+        base="$(<"$m/pkgbase")"
+        [[ -f "$ARCHIVE_DIR/$kver/vmlinuz" && -f "$ARCHIVE_DIR/$kver/initramfs.img" ]] \
+            || die "no archived kernel for $kver in $ARCHIVE_DIR. The restored system's modules are for a kernel that was never archived, so it cannot be put back automatically."
+        found=1
+        if cmp -s "$ARCHIVE_DIR/$kver/vmlinuz" "$BOOT_DIR/vmlinuz-$base"; then
+            echo "Kernel $kver ($base): /boot already matches."
+        else
+            echo "Kernel $kver ($base): /boot/vmlinuz-$base and initramfs-$base.img will be replaced."
+            plan+=("$kver:$base")
+        fi
+    done
+    (( found )) || die "no kernel modules found in the restored $ROOT_SUBVOL."
+    if (( ${#plan[@]} == 0 )); then
+        echo "Nothing to do."
+        exit 0
+    fi
+    confirm
+    for item in "${plan[@]}"; do
+        kver="${item%%:*}"
+        base="${item#*:}"
+        install -m 0644 "$ARCHIVE_DIR/$kver/vmlinuz"       "$BOOT_DIR/vmlinuz-$base"
+        install -m 0644 "$ARCHIVE_DIR/$kver/initramfs.img" "$BOOT_DIR/initramfs-$base.img"
+        echo "Restored kernel $kver in $BOOT_DIR."
+    done
+    cat <<MSG
+
+Done. You can reboot now.
+The *fallback* initramfs in /boot still belongs to the old kernel; after the
+reboot run:  sudo mkinitcpio -P
+MSG
+    exit 0
+fi
+
+# ---------------------------------------------------------------
+# default mode: promote the snapshot we are booted from
+# ---------------------------------------------------------------
 cur_subvol="$(findmnt -no OPTIONS / | tr ',' '\n' | sed -n 's/^subvol=//p' | head -n1)"
 cur_subvol="${cur_subvol#/}"
 [[ -n "$cur_subvol" ]] || die "cannot tell which subvolume / is mounted from."
 if [[ "$cur_subvol" == "$ROOT_SUBVOL" ]]; then
-    die "you are on the normal root ($ROOT_SUBVOL) -- nothing to promote. Boot a snapshot from GRUB first."
+    die "you are on the normal root ($ROOT_SUBVOL) -- nothing to promote. Boot a snapshot from GRUB first (or use --kernel-only after a Btrfs Assistant restore)."
 fi
 
 kver="$(uname -r)"
@@ -1072,24 +1165,14 @@ kver="$(uname -r)"
     || die "no kernel image for the running kernel ($kver) in /usr/lib/modules."
 base="$(<"/usr/lib/modules/$kver/pkgbase")"
 
-dev="$(findmnt -no SOURCE / | sed 's/\[.*//')"
-[[ -b "$dev" ]] || die "cannot determine the Btrfs device ($dev)."
-
 stamp="$(date +%Y%m%d-%H%M%S)"
 echo "Running from : $cur_subvol  (kernel $kver)"
 echo "Old root     : $ROOT_SUBVOL  ->  ${ROOT_SUBVOL}.broken-$stamp  (kept)"
 echo "New root     : copy of $cur_subvol  ->  $ROOT_SUBVOL"
 echo "Kernel       : /boot/vmlinuz-$base and its initramfs are reset to $kver"
-if (( ! ASSUME_YES )); then
-    read -r -p "Proceed? [y/N] " ans
-    [[ "$ans" == [yY]* ]] || die "aborted."
-fi
+confirm
 
-top=/run/arch-snapshot-top
-mkdir -p "$top"
-mount -o subvolid=5 "$dev" "$top"
-trap 'umount "$top" 2>/dev/null || true; rmdir "$top" 2>/dev/null || true' EXIT
-
+mount_top
 [[ -d "$top/$ROOT_SUBVOL" ]]  || die "$ROOT_SUBVOL not found on the Btrfs top level."
 [[ -d "$top/$cur_subvol" ]]   || die "$cur_subvol not found on the Btrfs top level."
 
@@ -1097,7 +1180,7 @@ mv "$top/$ROOT_SUBVOL" "$top/${ROOT_SUBVOL}.broken-$stamp"
 btrfs subvolume snapshot "$top/$cur_subvol" "$top/$ROOT_SUBVOL" >/dev/null
 
 # The kernel in /boot is probably newer than this snapshot's modules.
-install -m 0644 "/usr/lib/modules/$kver/vmlinuz" "/boot/vmlinuz-$base"
+install -m 0644 "/usr/lib/modules/$kver/vmlinuz" "$BOOT_DIR/vmlinuz-$base"
 if command -v mkinitcpio >/dev/null 2>&1; then
     mkinitcpio -p "$base"
 else
@@ -1707,6 +1790,9 @@ echo "   snapshot in that submenu and work normally. To make it your"
 echo "   permanent system, run (while booted from it):"
 echo "     sudo arch-snapshot-promote"
 echo "   then reboot into the normal first entry."
+echo "   Restoring with Btrfs Assistant instead? Before rebooting run:"
+echo "     sudo arch-snapshot-promote --kernel-only"
+echo "   so /boot gets the kernel that belongs to the restored system."
 echo
 echo "8. Before reboot, inspect:"
 echo "     lsblk -f"
