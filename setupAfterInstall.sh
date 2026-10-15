@@ -1250,8 +1250,68 @@ fi
 rm -f "$tmp"
 exit 0
 SNAPK_EOF
+cat > /usr/local/sbin/arch-grub-refresh <<'GREFRESH_EOF'
+#!/usr/bin/env bash
+# ============================================================
+# arch-grub-refresh
+#
+# Regenerates /boot/grub/grub.cfg so the snapshot menu is current. Run by the
+# pacman hook zzz-grub-refresh.hook after every transaction -- the "zzz-"
+# prefix puts it after snap-pac's own zz-snap-pac-post, so the [post] snapshot
+# of the transaction is already in the list.
+#
+# Safe by design: grub.cfg is built in a temp file, stripped of "EFI BootNext"
+# entries (as setupAfterInstall.sh does), and only replaces the live file when
+# grub-mkconfig succeeded and the Windows entry (if there was one) survived.
+# Always exits 0 -- a failure here must never fail a pacman transaction.
+# ============================================================
+set -uo pipefail
+
+CFG="${AGR_CFG:-/boot/grub/grub.cfg}"
+MKCONFIG="${AGR_MKCONFIG:-grub-mkconfig}"
+
+say() { printf 'arch-grub-refresh: %s\n' "$*" >&2; }
+
+tmp="$(mktemp)" || exit 0
+raw="$(mktemp)" || exit 0
+trap 'rm -f "$tmp" "$raw"' EXIT
+
+if ! "$MKCONFIG" -o "$raw" >/dev/null 2>&1; then
+    say "grub-mkconfig failed -- keeping the existing grub.cfg"
+    exit 0
+fi
+
+awk '
+    /^[[:space:]]*menuentry .*\(EFI BootNext\)/ {
+        skip = 1; depth = 0
+        n = gsub(/\{/, "{"); depth += n
+        n = gsub(/\}/, "}"); depth -= n
+        if (depth <= 0) skip = 0
+        next
+    }
+    skip {
+        n = gsub(/\{/, "{"); depth += n
+        n = gsub(/\}/, "}"); depth -= n
+        if (depth <= 0) skip = 0
+        next
+    }
+    { print }
+' "$raw" > "$tmp"
+
+# os-prober needs the Windows ESP reachable; if it was not, the Windows entry
+# would silently vanish. Keep the old config in that case.
+if [[ -f "$CFG" ]] && grep -q 'Windows Boot Manager' "$CFG" \
+   && ! grep -q 'Windows Boot Manager' "$tmp"; then
+    say "the new config lost the Windows entry (ESP not detected?) -- keeping the existing grub.cfg"
+    exit 0
+fi
+
+install -m 0644 "$tmp" "$CFG" || say "could not write $CFG"
+exit 0
+GREFRESH_EOF
 chmod 0755 /usr/local/sbin/arch-kernel-archive \
            /usr/local/sbin/arch-snapshot-promote \
+           /usr/local/sbin/arch-grub-refresh \
            /etc/grub.d/42_snapshot-kernels
 
 # Runs after mkinitcpio's own hook (90-mkinitcpio-install), so the initramfs
@@ -1270,6 +1330,23 @@ Description = Archiving kernel + initramfs for snapshot boot entries...
 When = PostTransaction
 Exec = /usr/local/sbin/arch-kernel-archive archive
 HOOK_EOF
+
+# After every pacman transaction: refresh grub.cfg so the snapshot menu lists
+# the new snap-pac [pre]/[post] pair right away. "zzz-" sorts after snap-pac's
+# own zz-snap-pac-post hook, so the [post] snapshot already exists by then.
+cat > /etc/pacman.d/hooks/zzz-grub-refresh.hook <<'HOOK2_EOF'
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Operation = Remove
+Type = Package
+Target = *
+
+[Action]
+Description = Refreshing the GRUB snapshot menu...
+When = PostTransaction
+Exec = /usr/local/sbin/arch-grub-refresh
+HOOK2_EOF
 
 # The normal root subvolume's name, for arch-snapshot-promote.
 printf 'ROOT_SUBVOL=%q\n' "$ROOT_SUBVOL" > /etc/arch-snapshot.conf
