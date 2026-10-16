@@ -16,6 +16,12 @@ set -o errtrace
 # Official-repo packages are installed with plain pacman; anything
 # not in the official repos goes through yay (AUR). yay is only
 # bootstrapped (via pacman + makepkg) to handle that AUR subset.
+#
+# Every "bundle" (work, printer, office, multimedia, system) is a
+# CHECKLIST of individual packages rather than a single yes/no for the
+# whole group, so the user can pick just the one or two packages they
+# actually need from a larger set. The tag of each entry is simply the
+# package (or unit) name -- no bundle prefix.
 # ============================================================
 
 BACKTITLE="Arch Linux: application install"
@@ -169,12 +175,13 @@ ui_init
 # REPO_PACKAGES -> plain pacman (official repos)
 # AUR_PACKAGES  -> yay (not in official repos)
 #
-# Optional packages are chosen in the dialogs below.
+# The base sets below are the ones that get installed unconditionally.
+# Everything else is offered in checklists further down, package by
+# package, so the user can pick individual items from a "bundle" rather
+# than accepting the whole thing or none of it.
 
 # Base packages (always installed)
 REPO_PACKAGES=(
-    fprintd                             # fingerprint daemon (login, sudo, polkit) - laptop only
-    imagemagick                         # image conversion tools; listed with fprintd on the Arch wiki
     terminator                          # terminal emulator with split panes
     guake                               # drop-down terminal (toggle with F12)
     qmmp                                # lightweight audio player (Winamp-style)
@@ -212,80 +219,21 @@ FPRINT_PAM_LINE="auth      sufficient   pam_fprintd.so timeout=${FPRINT_TIMEOUT}
 # Name service switch file edited for nss-mdns (printer group only).
 NSS_FILE="/etc/nsswitch.conf"
 
-# Work-related packages (optional, asked separately)
-WORK_REPO=(
-    "$JAVA_PKG"
-    meld                                # visual diff and merge tool
-    code                                # open-source VS Code
-    remmina                             # remote desktop client (RDP, VNC, SSH)
-    intellij-idea-community-edition     # official repo (extra)
-    dbeaver                             # universal database client
-)
-
-WORK_AUR=(
-    postman-bin                         # Postman API client (AUR)
-    f5vpn-ng                            # F5 VPN client
-    ferdium-bin                         # Ferdium messaging client
-    snx-rs                              # VPN
-)
-
-# Printer and scanner support (optional, asked separately)
-PRINTER_REPO=(
-    hplip                               # HP printer support
-    cups                                # printing system
-    system-config-printer               # GUI printer management
-    python-pyqt5                        # for hp-setup's GUI
-    avahi                               # mDNS/DNS-SD daemon (network printer discovery)
-    nss-mdns                            # resolve .local hostnames via avahi
-    cups-pdf                            # virtual printer: print to PDF
-    simple-scan                         # simple scanning GUI (pulls in sane)
-)
-
-# Office helpers: Croatian spellcheck/UI and fonts (optional, asked separately)
-OFFICE_REPO=(
-    hunspell-hr                         # Croatian spellcheck dictionary
-    libreoffice-still-hr                # Croatian LibreOffice UI (pulls in libreoffice-still)
-    ttf-liberation                      # metric-compatible Arial/Times/Courier replacements
-    noto-fonts-emoji                    # emoji font
-    ttf-jetbrains-mono-nerd             # monospace font with icons for terminal and IDE
-)
-
-OFFICE_AUR=(
-    ttf-ms-fonts                        # Microsoft core fonts (Arial, Times New Roman, ...)
-)
-
-# Multimedia and everyday utilities (optional, asked separately)
-MEDIA_REPO=(
-    vlc                                 # video player
-    mpv                                 # lightweight video player
-    ffmpeg                              # audio/video conversion tools
-    flatpak                             # Flatpak runtime and CLI
-    fastfetch                           # system info in the terminal
-    ncdu                                # disk usage analyzer (ncurses)
-)
-
-MEDIA_AUR=(
-    localsend-bin                       # AirDrop-like file transfer (prebuilt; the source build needs flutter-engine)
-)
-
-# System maintenance (optional, asked separately)
-SYSTEM_REPO=(
-    fwupd                               # firmware updates (LVFS)
-    ntfs-3g                             # read/write NTFS (Windows partitions)
-)
-# fstrim.timer is a systemd unit, not a package: enabled in the post-install phase.
+# Set to 1 by the system-maintenance checklist if the fstrim.timer item
+# is selected; used later to decide whether to enable the timer.
+ENABLE_FSTRIM=0
 
 # ---------------- DIALOG: OPTIONAL PACKAGES ----------------
 #
-# Defaults: everything ON except the office suites (LibreOffice, WPS,
-# OnlyOffice), which are OFF; LACT / CoolerControl depend on the hardware
-# (see below). nautilus-admin-gtk4 is a Nautilus-specific
-# AUR package ("Open as Administrator" in the context menu), so it is
-# only offered when gnome-shell is detected.
+# The "main" checklist. Defaults: LACT / CoolerControl / fingerprint
+# depend on the hardware (see below); office suites are OFF by default.
+# nautilus-admin-gtk4 is a Nautilus-specific AUR package ("Open as
+# Administrator" in the context menu), so it is only offered when
+# gnome-shell is detected.
 
 NAUTILUS_ITEM=()
 if pacman -Qq gnome-shell >/dev/null 2>&1; then
-    NAUTILUS_ITEM=(nautilus-admin "Nautilus 'Open as Administrator' (AUR)" on)
+    NAUTILUS_ITEM=(nautilus-admin-gtk4 "Nautilus 'Open as Administrator' (AUR)" on)
 fi
 
 # Hardware-dependent defaults: LACT only makes sense with an AMD GPU, and
@@ -303,24 +251,24 @@ if is_laptop; then FPRINT_STATE="on"; FPRINT_NOTE=""; fi
 
 CHOICES="$(dlg_capture --title "Optional packages" --separate-output \
     --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel." 0 "$BOX_W" 0 \
-    lact           "Lact - AMD GPU control/overclock (pacman)${LACT_NOTE}" "$LACT_STATE" \
-    coolercontrol  "CoolerControl - fan/cooling control (AUR)${COOLER_NOTE}" "$COOLER_STATE" \
-    fprint-pam     "Fingerprint for sudo - PAM, ${FPRINT_TIMEOUT}s timeout, then password${FPRINT_NOTE}" "$FPRINT_STATE" \
+    lact                "Lact - AMD GPU control/overclock (pacman)${LACT_NOTE}" "$LACT_STATE" \
+    coolercontrol-bin   "CoolerControl - fan/cooling control (AUR)${COOLER_NOTE}" "$COOLER_STATE" \
+    fprint-pam          "Fingerprint for sudo - PAM, ${FPRINT_TIMEOUT}s timeout, then password${FPRINT_NOTE}" "$FPRINT_STATE" \
     "${NAUTILUS_ITEM[@]}" \
-    libreoffice    "LibreOffice still (pacman)" off \
-    wps            "WPS Office + fonts (AUR)" off \
-    onlyoffice     "OnlyOffice (AUR)" off)" || abort
+    libreoffice-still   "LibreOffice still (pacman)" off \
+    wps                 "WPS Office + fonts (AUR)" off \
+    onlyoffice-bin      "OnlyOffice (AUR)" off)" || abort
 
 ENABLE_FPRINT_PAM=0
 while IFS= read -r tag; do
     case "$tag" in
-        fprint-pam)      ENABLE_FPRINT_PAM=1 ;;
-        lact)            REPO_PACKAGES+=(lact) ;;
-        coolercontrol)   AUR_PACKAGES+=(coolercontrol-bin) ;;
-        nautilus-admin)  AUR_PACKAGES+=(nautilus-admin-gtk4) ;;
-        libreoffice)     REPO_PACKAGES+=(libreoffice-still) ;;
-        wps)             AUR_PACKAGES+=(wps-office ttf-wps-fonts) ;;
-        onlyoffice)      AUR_PACKAGES+=(onlyoffice-bin) ;;
+        fprint-pam)         ENABLE_FPRINT_PAM=1 ;;
+        lact)               REPO_PACKAGES+=(lact) ;;
+        coolercontrol-bin)  AUR_PACKAGES+=(coolercontrol-bin) ;;
+        nautilus-admin-gtk4) AUR_PACKAGES+=(nautilus-admin-gtk4) ;;
+        libreoffice-still)  REPO_PACKAGES+=(libreoffice-still) ;;
+        wps)                AUR_PACKAGES+=(wps-office ttf-wps-fonts) ;;
+        onlyoffice-bin)     AUR_PACKAGES+=(onlyoffice-bin) ;;
     esac
 done <<< "$CHOICES"
 
@@ -328,89 +276,145 @@ if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
     in_array fprintd "${REPO_PACKAGES[@]}" || REPO_PACKAGES+=(fprintd)
 fi
 
-# ---------------- DIALOG: WORK PROGRAMS (default: No) ----------------
+# ---------------- DIALOG: WORK PROGRAMS ----------------
 #
-# Every package is listed on its own line so the whole list is visible
-# inside the dialog (a single long "foo bar baz" line used to be clipped).
+# Checklist instead of a single yes/no. Defaults are all OFF, matching the
+# old "whole bundle, default No" behaviour -- the user explicitly opts
+# into each tool they need. The tag of each entry is the package name
+# itself, so the case statement below is a plain name-for-name match.
 
-WORK_TEXT="Install the work-related programs?\n\n"
-WORK_TEXT+="Official repos (pacman):\n"
-for _p in "${WORK_REPO[@]}"; do
-    WORK_TEXT+="  - $_p\n"
-done
-WORK_TEXT+="\nAUR (yay):\n"
-for _p in "${WORK_AUR[@]}"; do
-    WORK_TEXT+="  - $_p\n"
-done
+WORK_CHOICES="$(dlg_capture --title "Work programs" --separate-output \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nEverything here is OFF by default. Enable only the tools you need.\n\nOfficial repos (pacman) and AUR (yay) both listed." 0 "$BOX_W" 0 \
+    jdk11-openjdk                    "Java Development Kit 11 (pacman)" off \
+    meld                             "visual diff and merge tool (pacman)" off \
+    code                             "open-source VS Code (pacman)" off \
+    remmina                          "remote desktop client RDP/VNC/SSH (pacman)" off \
+    intellij-idea-community-edition  "IntelliJ IDEA Community Edition (pacman)" off \
+    dbeaver                          "universal database client (pacman)" off \
+    postman-bin                      "Postman API client (AUR)" off \
+    f5vpn-ng                         "F5 VPN client (AUR)" off \
+    ferdium-bin                      "Ferdium messaging client (AUR)" off \
+    snx-rs                           "Check Point VPN client (AUR)" off)" || abort
 
-if ask_yes "Work programs" "$WORK_TEXT" no; then
-    REPO_PACKAGES+=("${WORK_REPO[@]}")
-    AUR_PACKAGES+=("${WORK_AUR[@]}")
-fi
+while IFS= read -r tag; do
+    case "$tag" in
+        jdk11-openjdk)                    REPO_PACKAGES+=("$JAVA_PKG") ;;
+        meld)                             REPO_PACKAGES+=(meld) ;;
+        code)                             REPO_PACKAGES+=(code) ;;
+        remmina)                          REPO_PACKAGES+=(remmina) ;;
+        intellij-idea-community-edition)  REPO_PACKAGES+=(intellij-idea-community-edition) ;;
+        dbeaver)                          REPO_PACKAGES+=(dbeaver) ;;
+        postman-bin)                      AUR_PACKAGES+=(postman-bin) ;;
+        f5vpn-ng)                         AUR_PACKAGES+=(f5vpn-ng) ;;
+        ferdium-bin)                      AUR_PACKAGES+=(ferdium-bin) ;;
+        snx-rs)                           AUR_PACKAGES+=(snx-rs) ;;
+    esac
+done <<< "$WORK_CHOICES"
 
-# ---------------- DIALOG: PRINTER AND SCANNER (default: Yes) ----------------
+# ---------------- DIALOG: PRINTER AND SCANNER ----------------
+#
+# Checklist with all items ON by default (matches the old default-Yes
+# bundle). The services (CUPS, Avahi) and the nsswitch.conf edit are
+# enabled later ONLY for the packages the user actually selected --
+# deselecting e.g. cups means the printer service is not started.
 
-PRINTER_TEXT="Install printer and scanner support?\n\n"
-PRINTER_TEXT+="Official repos (pacman):\n"
-for _p in "${PRINTER_REPO[@]}"; do
-    PRINTER_TEXT+="  - $_p\n"
-done
-PRINTER_TEXT+="\nCUPS and Avahi will also be enabled."
+PRINTER_CHOICES="$(dlg_capture --title "Printer and scanner" --separate-output \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default. Services (CUPS, Avahi, nss-mdns) are enabled only for the packages you keep selected." 0 "$BOX_W" 0 \
+    hplip                   "HP printer support (pacman)" on \
+    cups                    "printing system (pacman)" on \
+    system-config-printer   "GUI printer management (pacman)" on \
+    python-pyqt5            "Python Qt5 bindings, needed by hp-setup GUI (pacman)" on \
+    avahi                   "mDNS/DNS-SD daemon for network printer discovery (pacman)" on \
+    nss-mdns                "resolve .local hostnames via Avahi (pacman)" on \
+    cups-pdf                "virtual printer: print to PDF (pacman)" on \
+    simple-scan             "simple scanning GUI (pacman)" on)" || abort
 
-ENABLE_PRINTER=0
-if ask_yes "Printer and scanner" "$PRINTER_TEXT" yes; then
-    ENABLE_PRINTER=1
-    REPO_PACKAGES+=("${PRINTER_REPO[@]}")
-fi
+while IFS= read -r tag; do
+    case "$tag" in
+        hplip)                  REPO_PACKAGES+=(hplip) ;;
+        cups)                   REPO_PACKAGES+=(cups) ;;
+        system-config-printer)  REPO_PACKAGES+=(system-config-printer) ;;
+        python-pyqt5)           REPO_PACKAGES+=(python-pyqt5) ;;
+        avahi)                  REPO_PACKAGES+=(avahi) ;;
+        nss-mdns)               REPO_PACKAGES+=(nss-mdns) ;;
+        cups-pdf)               REPO_PACKAGES+=(cups-pdf) ;;
+        simple-scan)            REPO_PACKAGES+=(simple-scan) ;;
+    esac
+done <<< "$PRINTER_CHOICES"
 
-# ---------------- DIALOG: OFFICE HELPERS AND FONTS (default: Yes) ----------------
+# ---------------- DIALOG: OFFICE HELPERS AND FONTS ----------------
+#
+# Checklist with all items ON by default (matches the old default-Yes
+# bundle). Croatian spellcheck, Croatian LibreOffice UI, and a small
+# set of commonly wanted fonts.
 
-OFFICE_TEXT="Install Croatian office support and fonts?\n\n"
-OFFICE_TEXT+="Official repos (pacman):\n"
-for _p in "${OFFICE_REPO[@]}"; do
-    OFFICE_TEXT+="  - $_p\n"
-done
-OFFICE_TEXT+="\nAUR (yay):\n"
-for _p in "${OFFICE_AUR[@]}"; do
-    OFFICE_TEXT+="  - $_p\n"
-done
+OFFICE_CHOICES="$(dlg_capture --title "Office and fonts" --separate-output \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
+    hunspell-hr                "Croatian spellcheck dictionary (pacman)" on \
+    libreoffice-still-hr       "Croatian LibreOffice UI, pulls libreoffice-still (pacman)" on \
+    ttf-liberation             "metric-compatible Arial/Times/Courier (pacman)" on \
+    noto-fonts-emoji           "emoji font (pacman)" on \
+    ttf-jetbrains-mono-nerd    "monospace font with icons (pacman)" on \
+    ttf-ms-fonts               "Microsoft core fonts Arial/Times/... (AUR)" on)" || abort
 
-if ask_yes "Office and fonts" "$OFFICE_TEXT" yes; then
-    REPO_PACKAGES+=("${OFFICE_REPO[@]}")
-    AUR_PACKAGES+=("${OFFICE_AUR[@]}")
-fi
+while IFS= read -r tag; do
+    case "$tag" in
+        hunspell-hr)                REPO_PACKAGES+=(hunspell-hr) ;;
+        libreoffice-still-hr)       REPO_PACKAGES+=(libreoffice-still-hr) ;;
+        ttf-liberation)             REPO_PACKAGES+=(ttf-liberation) ;;
+        noto-fonts-emoji)           REPO_PACKAGES+=(noto-fonts-emoji) ;;
+        ttf-jetbrains-mono-nerd)    REPO_PACKAGES+=(ttf-jetbrains-mono-nerd) ;;
+        ttf-ms-fonts)               AUR_PACKAGES+=(ttf-ms-fonts) ;;
+    esac
+done <<< "$OFFICE_CHOICES"
 
-# ---------------- DIALOG: MULTIMEDIA AND UTILITIES (default: Yes) ----------------
+# ---------------- DIALOG: MULTIMEDIA AND UTILITIES ----------------
+#
+# Checklist with all items ON by default (matches the old default-Yes
+# bundle).
 
-MEDIA_TEXT="Install multimedia and everyday utilities?\n\n"
-MEDIA_TEXT+="Official repos (pacman):\n"
-for _p in "${MEDIA_REPO[@]}"; do
-    MEDIA_TEXT+="  - $_p\n"
-done
-MEDIA_TEXT+="\nAUR (yay):\n"
-for _p in "${MEDIA_AUR[@]}"; do
-    MEDIA_TEXT+="  - $_p\n"
-done
+MEDIA_CHOICES="$(dlg_capture --title "Multimedia and utilities" --separate-output \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
+    vlc             "video player (pacman)" on \
+    mpv             "lightweight video player (pacman)" on \
+    ffmpeg          "audio/video conversion tools (pacman)" on \
+    flatpak         "Flatpak runtime and CLI (pacman)" on \
+    fastfetch       "system info in the terminal (pacman)" on \
+    ncdu            "disk usage analyzer, ncurses (pacman)" on \
+    localsend-bin   "AirDrop-like file transfer (AUR)" on)" || abort
 
-if ask_yes "Multimedia and utilities" "$MEDIA_TEXT" yes; then
-    REPO_PACKAGES+=("${MEDIA_REPO[@]}")
-    AUR_PACKAGES+=("${MEDIA_AUR[@]}")
-fi
+while IFS= read -r tag; do
+    case "$tag" in
+        vlc)             REPO_PACKAGES+=(vlc) ;;
+        mpv)             REPO_PACKAGES+=(mpv) ;;
+        ffmpeg)          REPO_PACKAGES+=(ffmpeg) ;;
+        flatpak)         REPO_PACKAGES+=(flatpak) ;;
+        fastfetch)       REPO_PACKAGES+=(fastfetch) ;;
+        ncdu)            REPO_PACKAGES+=(ncdu) ;;
+        localsend-bin)   AUR_PACKAGES+=(localsend-bin) ;;
+    esac
+done <<< "$MEDIA_CHOICES"
 
-# ---------------- DIALOG: SYSTEM MAINTENANCE (default: Yes) ----------------
+# ---------------- DIALOG: SYSTEM MAINTENANCE ----------------
+#
+# Checklist with all items ON by default (matches the old default-Yes
+# bundle). The fstrim entry is a systemd UNIT, not a package, so its tag
+# is the unit name itself; it has its own toggle and enables the timer
+# later.
 
-ENABLE_FSTRIM=0
-SYSTEM_TEXT="Install system maintenance tools?\n\n"
-SYSTEM_TEXT+="Official repos (pacman):\n"
-for _p in "${SYSTEM_REPO[@]}"; do
-    SYSTEM_TEXT+="  - $_p\n"
-done
-SYSTEM_TEXT+="\nAlso enables the weekly SSD TRIM timer (fstrim.timer)."
+SYSTEM_CHOICES="$(dlg_capture --title "System maintenance" --separate-output \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
+    fwupd         "firmware updates via LVFS (pacman)" on \
+    ntfs-3g       "read/write NTFS Windows partitions (pacman)" on \
+    fstrim.timer  "weekly SSD TRIM (systemd unit, not a package)" on)" || abort
 
-if ask_yes "System maintenance" "$SYSTEM_TEXT" yes; then
-    REPO_PACKAGES+=("${SYSTEM_REPO[@]}")
-    ENABLE_FSTRIM=1
-fi
+while IFS= read -r tag; do
+    case "$tag" in
+        fwupd)         REPO_PACKAGES+=(fwupd) ;;
+        ntfs-3g)       REPO_PACKAGES+=(ntfs-3g) ;;
+        fstrim.timer)  ENABLE_FSTRIM=1 ;;
+    esac
+done <<< "$SYSTEM_CHOICES"
 
 # ---------------- DIALOG: EXTRA PACKAGES ----------------
 
@@ -467,9 +471,8 @@ install_repo() {
     local pkg="$1"
     if ! pacman -Si "$pkg" >/dev/null 2>&1; then
         # Packages move between the official repos and the AUR over time
-        # (peazip did). Instead of
-        # skipping, let install_aur() look for it -- it reports "not found"
-        # itself when the name exists nowhere.
+        # (peazip did). Instead of skipping, let install_aur() look for it
+        # -- it reports "not found" itself when the name exists nowhere.
         info "$pkg is not in the official repos -- trying the AUR instead."
         install_aur "$pkg"
         return 0
@@ -619,7 +622,7 @@ exec 1>>"$LOG_FILE"
     if ! sudo -n pacman -Sy --noconfirm >> "$log" 2>&1; then
         warn "pacman -Sy failed -- continuing with the existing databases." >> "$log"
     fi
-    
+
     if ! sudo -n pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1; then
         warn "Failed to install base-devel/git -- sudo timestamp may have expired." >> "$log"
         echo "base-devel git" >> "$FAILED_FILE"
@@ -703,35 +706,39 @@ exec 1>>"$LOG_FILE"
     fi
     CUR_IDX=1
 
-    # Printing: CUPS for the print queue, Avahi + nss-mdns so network
-    # printers are discovered and *.local names resolve. nss-mdns does
-    # nothing until "mdns_minimal [NOTFOUND=return]" is in the hosts line
-    # of /etc/nsswitch.conf (it goes before resolve/dns). The edit is done
-    # on a temp copy, verified, and the original is kept as a .bak.
-    if [[ "$ENABLE_PRINTER" -eq 1 ]]; then
-        gauge_msg 99 "Enabling CUPS and Avahi (printing)..."
+    # Printing: each service is enabled only if its PACKAGE was selected
+    # in the printer checklist. This way deselecting cups means no
+    # cups.service enable attempt, deselecting avahi means no
+    # avahi-daemon.service, and so on.
+    #
+    # nss-mdns does nothing until "mdns_minimal [NOTFOUND=return]" is in
+    # the hosts line of /etc/nsswitch.conf (it goes before resolve/dns).
+    # The edit is done on a temp copy, verified, and the original is kept
+    # as a .bak.
+    if pacman -Qq cups >/dev/null 2>&1; then
+        gauge_msg 99 "Enabling CUPS (printing)..."
         sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
             warn "Could not enable CUPS (sudo may have timed out)." >> "$log"
-        if pacman -Qq avahi >/dev/null 2>&1 && unit_exists avahi-daemon.service; then
-            sudo -n systemctl enable --now avahi-daemon.service >> "$log" 2>&1 || \
-                warn "Could not enable avahi-daemon.service." >> "$log"
-        fi
-        if pacman -Qq nss-mdns >/dev/null 2>&1 && [[ -f "$NSS_FILE" ]]; then
-            if grep -q 'mdns' "$NSS_FILE"; then
-                echo "mdns already present in $NSS_FILE -- left unchanged." >> "$log"
+    fi
+    if pacman -Qq avahi >/dev/null 2>&1 && unit_exists avahi-daemon.service; then
+        sudo -n systemctl enable --now avahi-daemon.service >> "$log" 2>&1 || \
+            warn "Could not enable avahi-daemon.service." >> "$log"
+    fi
+    if pacman -Qq nss-mdns >/dev/null 2>&1 && [[ -f "$NSS_FILE" ]]; then
+        if grep -q 'mdns' "$NSS_FILE"; then
+            echo "mdns already present in $NSS_FILE -- left unchanged." >> "$log"
+        else
+            _nss_tmp="$(mktemp)"
+            sed -E '/^hosts:/{/mdns/!{s/\bresolve\b/mdns_minimal [NOTFOUND=return] resolve/;t;s/\bdns\b/mdns_minimal [NOTFOUND=return] dns/}}' \
+                "$NSS_FILE" > "$_nss_tmp"
+            if grep -q 'mdns_minimal' "$_nss_tmp" \
+               && { [[ -e "${NSS_FILE}.bak-mdns" ]] || sudo -n cp "$NSS_FILE" "${NSS_FILE}.bak-mdns" >> "$log" 2>&1; } \
+               && sudo -n install -m 0644 -o root -g root "$_nss_tmp" "$NSS_FILE" >> "$log" 2>&1; then
+                echo "Added mdns_minimal to $NSS_FILE; backup: ${NSS_FILE}.bak-mdns" >> "$log"
             else
-                _nss_tmp="$(mktemp)"
-                sed -E '/^hosts:/{/mdns/!{s/\bresolve\b/mdns_minimal [NOTFOUND=return] resolve/;t;s/\bdns\b/mdns_minimal [NOTFOUND=return] dns/}}' \
-                    "$NSS_FILE" > "$_nss_tmp"
-                if grep -q 'mdns_minimal' "$_nss_tmp" \
-                   && { [[ -e "${NSS_FILE}.bak-mdns" ]] || sudo -n cp "$NSS_FILE" "${NSS_FILE}.bak-mdns" >> "$log" 2>&1; } \
-                   && sudo -n install -m 0644 -o root -g root "$_nss_tmp" "$NSS_FILE" >> "$log" 2>&1; then
-                    echo "Added mdns_minimal to $NSS_FILE; backup: ${NSS_FILE}.bak-mdns" >> "$log"
-                else
-                    warn "Could not update $NSS_FILE -- .local name resolution is unchanged." >> "$log"
-                fi
-                rm -f "$_nss_tmp"
+                warn "Could not update $NSS_FILE -- .local name resolution is unchanged." >> "$log"
             fi
+            rm -f "$_nss_tmp"
         fi
     fi
     CUR_IDX=2
@@ -785,7 +792,9 @@ exec 1>>"$LOG_FILE"
     fi
     CUR_IDX=4
 
-    # Weekly TRIM for SSD/NVMe drives (util-linux ships the unit).
+    # Weekly TRIM for SSD/NVMe drives (util-linux ships the unit). Only
+    # enabled if the user kept the system-maintenance "fstrim.timer" item
+    # selected.
     if [[ "$ENABLE_FSTRIM" -eq 1 ]]; then
         gauge_msg 99 "Enabling fstrim.timer (SSD TRIM)..."
         sudo -n systemctl enable --now fstrim.timer >> "$log" 2>&1 || \
@@ -851,11 +860,11 @@ RESULT+="\nManual steps still needed:\n"
 if in_array snx-rs "${AUR_PACKAGES[@]}"; then
     RESULT+="  - snx-rs: takes a while to build from source, this is expected.\n"
 fi
-if [[ "$ENABLE_PRINTER" -eq 1 ]]; then
+if in_array hplip "${REPO_PACKAGES[@]}"; then
     RESULT+="  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB.\n"
-    if grep -q 'mdns_minimal' "$NSS_FILE" 2>/dev/null; then
-        RESULT+="  - mDNS: nss-mdns was enabled in $NSS_FILE (backup: ${NSS_FILE}.bak-mdns). If you use systemd-resolved with its own mDNS, disable one of the two to avoid port 5353 conflicts.\n"
-    fi
+fi
+if pacman -Qq nss-mdns >/dev/null 2>&1 && grep -q 'mdns_minimal' "$NSS_FILE" 2>/dev/null; then
+    RESULT+="  - mDNS: nss-mdns was enabled in $NSS_FILE (backup: ${NSS_FILE}.bak-mdns). If you use systemd-resolved with its own mDNS, disable one of the two to avoid port 5353 conflicts.\n"
 fi
 if in_array flatpak "${REPO_PACKAGES[@]}"; then
     RESULT+="  - Flatpak: add Flathub with 'flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo' (then log out/in).\n"
