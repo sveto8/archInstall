@@ -527,11 +527,14 @@ cancels (nothing is installed on cancel).
      run **continues** with the official-repo packages; the AUR packages
      are then listed as FAILED ("yay is not available") instead of the
      whole run stopping
-   - always-installed base set — **Repo:** `terminator`, `guake`,
+   - always-installed base set — **Repo:** `fprintd` + `imagemagick`
+     (fingerprint support, see the note below), `terminator`, `guake`,
      `qmmp`, `kolourpaint`, `mission-center`, `stow`, `eza`, `peazip`,
      `hplip` + `cups` + `system-config-printer` + `python-pyqt5` (printer
      support; PyQt5 is needed for `hp-setup`'s GUI); **AUR:**
-     `google-chrome`, `sublime-text-4`
+     `google-chrome`, `sublime-text-4`. Every entry in the package arrays
+     at the top of the script carries a short inline comment saying what it
+     is for
    - then whatever you picked above
 7. Every package — list-defined or typed in — is checked with
    `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
@@ -551,6 +554,17 @@ cancels (nothing is installed on cancel).
 9. Final summary dialog: what was skipped/failed, and manual next steps
    (`hp-setup` for the actual printer; a note about `snx-rs` build time
    and `f5vpn-ng` library fixes, shown only if those were selected)
+
+**Fingerprint reader note:** `fprintd` and `imagemagick` are in the
+always-installed set, so they also land on a desktop that has no reader
+(harmless, just unused). They only help if the reader is supported by
+`libfprint` — check with `lsusb` against the
+[supported devices list](https://fprint.freedesktop.org/supported-devices.html).
+Enroll a finger afterwards with `fprintd-enroll` and test it with
+`fprintd-verify` (GNOME also offers it under Settings → Users). The
+fingerprint works for the login screen, `sudo` and polkit prompts, but it
+**cannot unlock the LUKS root** at boot (the initramfs has no fingerprint
+support), and on GDM the keyring is not unlocked by a fingerprint login.
 
 You can re-run `installApps.sh` any time later to add more software —
 it's idempotent (`--needed` skips already-installed packages) and shows
@@ -982,7 +996,9 @@ Fixed in the scripts:
   `peazip`, `python-pyqt5` and `intellij-idea-community-edition` moved to the
   official-repo lists, with a `yay` fallback for packages that move between
   the repos and the AUR; ESC at the "Extra packages" box now aborts as
-  documented; the drop-in uses `id -un` instead of `$USER`.
+  documented; the drop-in uses `id -un` instead of `$USER`; added `fprintd`
+  and `imagemagick` (fingerprint support) to the base set and an explanatory
+  comment to every entry of the package arrays.
 - `lib.sh` — `WARN_FILE` / `load_warn_file` (see above).
 - `arch-manager.sh` — reviewed, no changes needed.
 
