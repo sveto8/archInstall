@@ -225,10 +225,12 @@ NSS_FILE="/etc/nsswitch.conf"
 # is selected; used later to decide whether to enable the timer.
 ENABLE_FSTRIM=0
 
-# Set to 1 by the system-maintenance checklist if the ufw item is selected.
-# ufw is NOT enabled automatically by pacman -- a fresh install is
-# "Status: inactive". Selecting it here means "install and enable with
-# safe defaults, then open ports for the services I picked".
+# Set to 1 by the system-maintenance checklist if the ufw OR gufw item is
+# selected. ufw is NOT enabled automatically by pacman -- a fresh install
+# is "Status: inactive". Selecting either means "install ufw, enable it
+# with safe defaults, then open ports for the services I picked". gufw is
+# just a GUI frontend for the same ufw; it depends on ufw, so picking
+# gufw alone still installs ufw.
 ENABLE_UFW=0
 
 # ---------------- DIALOG: OPTIONAL PACKAGES ----------------
@@ -410,27 +412,34 @@ done <<< "$MEDIA_CHOICES"
 
 # ---------------- DIALOG: SYSTEM MAINTENANCE ----------------
 #
-# Checklist with all items ON by default (matches the old default-Yes
-# bundle). The fstrim entry is a systemd UNIT, not a package, so its tag
-# is the unit name itself; it has its own toggle and enables the timer
-# later. ufw is OFF by default because enabling a firewall is a real
-# change (it can break services the user did not think of); selecting it
-# means "install AND enable with safe defaults, then open the ports for
-# the services I selected".
+# Checklist with all items ON by default except ufw/gufw (matches the old
+# default-Yes bundle for the always-wanted items). The fstrim entry is a
+# systemd UNIT, not a package, so its tag is the unit name itself; it has
+# its own toggle and enables the timer later.
+#
+# ufw and gufw are OFF by default because enabling a firewall is a real
+# change (it can break services the user did not think of). Selecting
+# either one means "install ufw, enable it with safe defaults (deny
+# incoming, allow outgoing), then open ports for the services picked in
+# the other checklists". gufw is only a GUI frontend for ufw -- it
+# depends on ufw, so picking gufw alone still installs ufw; picking both
+# installs both. The firewall logic below treats them identically.
 
 SYSTEM_CHOICES="$(dlg_capture --title "System maintenance" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default except ufw.\n\nSelecting ufw will also ENABLE it (default deny incoming, allow outgoing) and open ports for the services you picked in the other lists." 0 "$BOX_W" 0 \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nTop three items ON by default.\n\nSelecting ufw OR gufw will also ENABLE the firewall (deny incoming, allow outgoing) and open ports for the services you picked in the other lists." 0 "$BOX_W" 0 \
     fwupd         "firmware updates via LVFS (pacman)" on \
     ntfs-3g       "read/write NTFS Windows partitions (pacman)" on \
     fstrim.timer  "weekly SSD TRIM (systemd unit, not a package)" on \
-    ufw           "Uncomplicated Firewall, enabled with safe defaults (pacman)" off)" || abort
+    ufw           "Uncomplicated Firewall, command-line only (pacman)" off \
+    gufw          "Graphical frontend for ufw, includes ufw (pacman)" off)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
         fwupd)         REPO_PACKAGES+=(fwupd) ;;
         ntfs-3g)       REPO_PACKAGES+=(ntfs-3g) ;;
         fstrim.timer)  ENABLE_FSTRIM=1 ;;
-        ufw)           REPO_PACKAGES+=(ufw); ENABLE_UFW=1 ;;
+        ufw)           REPO_PACKAGES+=(ufw);  ENABLE_UFW=1 ;;
+        gufw)          REPO_PACKAGES+=(gufw); ENABLE_UFW=1 ;;
     esac
 done <<< "$SYSTEM_CHOICES"
 
@@ -826,11 +835,14 @@ exec 1>>"$LOG_FILE"
     # firewalld, no iptables rules. On a stock system every port is
     # reachable and there is nothing to open.
     #
-    # When ufw is selected in the system-maintenance checklist it means
-    # the user wants a firewall. A fresh ufw install is "Status:
-    # inactive" and does nothing until "ufw enable" runs -- and if we
-    # enable it with the wrong default policy, it silently blocks
-    # everything. So:
+    # When ufw OR gufw is selected in the system-maintenance checklist,
+    # it means the user wants a firewall. gufw is only a GUI frontend for
+    # ufw; it depends on ufw, so selecting gufw alone still installs ufw.
+    # Both checkboxes set ENABLE_UFW and behave identically from here on.
+    #
+    # A fresh ufw install is "Status: inactive" and does nothing until
+    # "ufw enable" runs -- and if we enable it with the wrong default
+    # policy, it silently blocks everything. So:
     #
     #   1. Set safe defaults first (deny incoming, allow outgoing).
     #   2. Enable ufw (--force skips the "may disrupt existing ssh"
@@ -911,7 +923,7 @@ exec 1>>"$LOG_FILE"
         echo "firewalld-active" > "$FW_STATUS_FILE"
     else
         if [[ "$ENABLE_UFW" -eq 1 ]]; then
-            # The user asked for ufw, but the package did not end up
+            # The user asked for ufw/gufw, but the package did not end up
             # installed (e.g. install failed). Say so instead of silently
             # pretending the firewall is fine.
             echo "firewall: ufw was selected but is not installed." >> "$log"
@@ -1021,20 +1033,26 @@ case "$_fw_state" in
         pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1 && _fw_ports+=" GSConnect (1714-1764/udp+tcp),"
         pacman -Qq localsend-bin >/dev/null 2>&1 && _fw_ports+=" LocalSend (53317/udp+tcp),"
         RESULT+="${_fw_ports%,}\n"
+        if pacman -Qq gufw >/dev/null 2>&1; then
+            RESULT+="    GUI: run 'gufw' (or 'Firewall Configuration' from the app menu) to manage it.\n"
+        fi
         RESULT+="    Manage with: 'sudo ufw status verbose', 'sudo ufw allow <port>', 'sudo ufw disable'.\n"
         ;;
     ufw-active)
         RESULT+="  - Firewall: ufw was already active (not enabled by this script).\n"
         RESULT+="    Only port rules for your services were added; default policies were left alone.\n"
+        if pacman -Qq gufw >/dev/null 2>&1; then
+            RESULT+="    GUI: run 'gufw' (or 'Firewall Configuration' from the app menu) to manage it.\n"
+        fi
         ;;
     firewalld-active)
         RESULT+="  - Firewall: firewalld is active. Port rules for your services were added.\n"
         ;;
     ufw-missing)
-        RESULT+="  - Firewall: ufw was selected but did not end up installed (install failed -- see FAILED above). No firewall is active.\n"
+        RESULT+="  - Firewall: ufw/gufw was selected but did not end up installed (install failed -- see FAILED above). No firewall is active.\n"
         ;;
     *)
-        RESULT+="  - Firewall: none active (ufw not selected, no firewalld). All ports are reachable. To add one later: 'sudo pacman -S ufw && sudo ufw default deny incoming && sudo ufw default allow outgoing && sudo ufw enable'.\n"
+        RESULT+="  - Firewall: none active (ufw not selected, no firewalld). All ports are reachable. To add one later: 'sudo pacman -S ufw && sudo ufw default deny incoming && sudo ufw default allow outgoing && sudo ufw enable' (or install 'gufw' for the GUI).\n"
         ;;
 esac
 
