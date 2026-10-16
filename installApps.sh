@@ -203,6 +203,16 @@ AUR_PACKAGES=(
 JAVA_PKG="jdk11-openjdk"
 JAVA_ENV="java-11-openjdk"
 
+# Fingerprint login for sudo (optional checklist item below). Uses the
+# OFFICIAL pam_fprintd module from the fprintd package -- no AUR PAM module.
+# sudo asks for a fingerprint first and waits FPRINT_TIMEOUT seconds; after
+# that (or after a failed scan) it falls back to the normal password prompt.
+# GDM / the GNOME lock screen need no PAM change: they already offer the
+# fingerprint (and the password at the same time) once a finger is enrolled.
+FPRINT_TIMEOUT=3
+FPRINT_PAM_FILE="/etc/pam.d/sudo"
+FPRINT_PAM_LINE="auth      sufficient   pam_fprintd.so timeout=${FPRINT_TIMEOUT}"
+
 # Work-related packages (optional, asked separately)
 WORK_REPO=(
     "$JAVA_PKG"
@@ -241,18 +251,24 @@ LACT_STATE="off"; LACT_NOTE=" -- no AMD GPU detected"
 if [[ " $GPU_VENDORS " == *" amd "* ]]; then LACT_STATE="on"; LACT_NOTE=""; fi
 COOLER_STATE="on"; COOLER_NOTE=""
 if is_laptop; then COOLER_STATE="off"; COOLER_NOTE=" -- laptop detected"; fi
+# Fingerprint readers are a laptop thing here: ON for a laptop, OFF otherwise.
+FPRINT_STATE="off"; FPRINT_NOTE=" -- no laptop detected"
+if is_laptop; then FPRINT_STATE="on"; FPRINT_NOTE=""; fi
 
 CHOICES="$(dlg_capture --title "Optional packages" --separate-output \
     --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel." 0 "$BOX_W" 0 \
     lact           "Lact - AMD GPU control/overclock (pacman)${LACT_NOTE}" "$LACT_STATE" \
     coolercontrol  "CoolerControl - fan/cooling control (AUR)${COOLER_NOTE}" "$COOLER_STATE" \
+    fprint-pam     "Fingerprint for sudo - PAM, ${FPRINT_TIMEOUT}s timeout, then password${FPRINT_NOTE}" "$FPRINT_STATE" \
     "${NAUTILUS_ITEM[@]}" \
     libreoffice    "LibreOffice still (pacman)" off \
     wps            "WPS Office + fonts (AUR)" off \
     onlyoffice     "OnlyOffice (AUR)" off)" || abort
 
+ENABLE_FPRINT_PAM=0
 while IFS= read -r tag; do
     case "$tag" in
+        fprint-pam)      ENABLE_FPRINT_PAM=1 ;;
         lact)            REPO_PACKAGES+=(lact) ;;
         coolercontrol)   AUR_PACKAGES+=(coolercontrol-bin) ;;
         nautilus-admin)  AUR_PACKAGES+=(nautilus-admin-gtk4) ;;
@@ -261,6 +277,10 @@ while IFS= read -r tag; do
         onlyoffice)      AUR_PACKAGES+=(onlyoffice-bin) ;;
     esac
 done <<< "$CHOICES"
+
+if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
+    in_array fprintd "${REPO_PACKAGES[@]}" || REPO_PACKAGES+=(fprintd)
+fi
 
 # ---------------- DIALOG: WORK PROGRAMS (default: No) ----------------
 #
@@ -542,7 +562,7 @@ exec 1>>"$LOG_FILE"
 
     # ---- Phase 4: post-install tweaks ----
     CUR_PHASE=4
-    CUR_ITEMS=("Java default" "CUPS enable" "Hardware daemons")
+    CUR_ITEMS=("Java default" "CUPS enable" "Hardware daemons" "Fingerprint PAM")
     CUR_IDX=0
 
     if [[ -d "/usr/lib/jvm/${JAVA_ENV}" ]]; then
@@ -573,6 +593,40 @@ exec 1>>"$LOG_FILE"
         fi
     fi
     CUR_IDX=3
+
+    # Fingerprint for sudo. Only touched when the checklist item was chosen
+    # AND fprintd really got installed. The pam_fprintd line goes right
+    # under the "#%PAM-1.0" header (before the password rules), is added
+    # only once, and the original file is kept as a .bak. If the new file
+    # does not contain the line afterwards, the original is left alone.
+    # Nothing is changed when no finger is enrolled: pam_fprintd then just
+    # falls through to the password prompt.
+    if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
+        gauge_msg 99 "Configuring fingerprint for sudo (PAM)..."
+        if ! pacman -Qq fprintd >/dev/null 2>&1; then
+            warn "fprintd is not installed -- skipping the sudo fingerprint setup." >> "$log"
+        elif [[ ! -f "$FPRINT_PAM_FILE" ]]; then
+            warn "$FPRINT_PAM_FILE not found -- skipping the sudo fingerprint setup." >> "$log"
+        elif grep -q 'pam_fprintd' "$FPRINT_PAM_FILE"; then
+            echo "pam_fprintd already present in $FPRINT_PAM_FILE -- left unchanged." >> "$log"
+        else
+            _pam_tmp="$(mktemp)"
+            if head -n1 "$FPRINT_PAM_FILE" | grep -q '^#%PAM-1.0'; then
+                { head -n1 "$FPRINT_PAM_FILE"; printf '%s\n' "$FPRINT_PAM_LINE"; tail -n +2 "$FPRINT_PAM_FILE"; } > "$_pam_tmp"
+            else
+                { printf '%s\n' "$FPRINT_PAM_LINE"; cat "$FPRINT_PAM_FILE"; } > "$_pam_tmp"
+            fi
+            if grep -q 'pam_fprintd' "$_pam_tmp" \
+               && { [[ -e "${FPRINT_PAM_FILE}.bak-fprint" ]] || sudo -n cp "$FPRINT_PAM_FILE" "${FPRINT_PAM_FILE}.bak-fprint" >> "$log" 2>&1; } \
+               && sudo -n install -m 0644 -o root -g root "$_pam_tmp" "$FPRINT_PAM_FILE" >> "$log" 2>&1; then
+                echo "Added pam_fprintd (timeout=${FPRINT_TIMEOUT}) to $FPRINT_PAM_FILE; backup: ${FPRINT_PAM_FILE}.bak-fprint" >> "$log"
+            else
+                warn "Could not update $FPRINT_PAM_FILE (sudo may have timed out) -- sudo is unchanged." >> "$log"
+            fi
+            rm -f "$_pam_tmp"
+        fi
+    fi
+    CUR_IDX=4
 
     # ---- Phase 5: done ----
     CUR_PHASE=5
@@ -633,6 +687,13 @@ if in_array snx-rs "${AUR_PACKAGES[@]}"; then
     RESULT+="  - snx-rs: takes a while to build from source, this is expected.\n"
 fi
 RESULT+="  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB.\n"
+if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
+    if grep -q 'pam_fprintd' "$FPRINT_PAM_FILE" 2>/dev/null; then
+        RESULT+="  - Fingerprint: enroll a finger with 'fprintd-enroll' (test: 'fprintd-verify'). sudo then asks for it first, waits ${FPRINT_TIMEOUT}s, then asks for the password. Backup of the PAM file: ${FPRINT_PAM_FILE}.bak-fprint. Keep a second terminal with 'sudo -i' open while testing.\n"
+    else
+        RESULT+="  - Fingerprint: the sudo PAM change was NOT applied (see the log); sudo is unchanged and still uses the password only.\n"
+    fi
+fi
 if in_array f5vpn-ng "${AUR_PACKAGES[@]}"; then
     RESULT+="  - F5 VPN (f5vpn-ng): if it fails to build or launch, check the AUR comment page -- it tracks F5's client releases and occasionally needs a library fix (libxml2/webkit2gtk) after a system update.\n"
 fi
