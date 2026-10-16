@@ -181,12 +181,8 @@ REPO_PACKAGES=(
     kolourpaint                         # simple paint / image editor
     mission-center                      # system monitor (CPU, RAM, GPU, processes)
     stow                                # symlink manager, handy for dotfiles
-    hplip                               # HP printer support
-    cups                                # printing system
-    system-config-printer               # GUI printer management
     eza                                 # modern ls replacement
     peazip                              # official repo (extra); used to be AUR-only
-    python-pyqt5                        # for hp-setup's GUI
 )
 
 AUR_PACKAGES=(
@@ -213,6 +209,9 @@ FPRINT_TIMEOUT=3
 FPRINT_PAM_FILE="/etc/pam.d/sudo"
 FPRINT_PAM_LINE="auth      sufficient   pam_fprintd.so timeout=${FPRINT_TIMEOUT}"
 
+# Name service switch file edited for nss-mdns (printer group only).
+NSS_FILE="/etc/nsswitch.conf"
+
 # Work-related packages (optional, asked separately)
 WORK_REPO=(
     "$JAVA_PKG"
@@ -220,6 +219,7 @@ WORK_REPO=(
     code                                # open-source VS Code
     remmina                             # remote desktop client (RDP, VNC, SSH)
     intellij-idea-community-edition     # official repo (extra)
+    dbeaver                             # universal database client
 )
 
 WORK_AUR=(
@@ -228,6 +228,52 @@ WORK_AUR=(
     ferdium-bin                         # Ferdium messaging client
     snx-rs                              # VPN
 )
+
+# Printer and scanner support (optional, asked separately)
+PRINTER_REPO=(
+    hplip                               # HP printer support
+    cups                                # printing system
+    system-config-printer               # GUI printer management
+    python-pyqt5                        # for hp-setup's GUI
+    avahi                               # mDNS/DNS-SD daemon (network printer discovery)
+    nss-mdns                            # resolve .local hostnames via avahi
+    cups-pdf                            # virtual printer: print to PDF
+    simple-scan                         # simple scanning GUI (pulls in sane)
+)
+
+# Office helpers: Croatian spellcheck/UI and fonts (optional, asked separately)
+OFFICE_REPO=(
+    hunspell-hr                         # Croatian spellcheck dictionary
+    libreoffice-still-hr                # Croatian LibreOffice UI (pulls in libreoffice-still)
+    ttf-liberation                      # metric-compatible Arial/Times/Courier replacements
+    noto-fonts-emoji                    # emoji font
+    ttf-jetbrains-mono-nerd             # monospace font with icons for terminal and IDE
+)
+
+OFFICE_AUR=(
+    ttf-ms-fonts                        # Microsoft core fonts (Arial, Times New Roman, ...)
+)
+
+# Multimedia and everyday utilities (optional, asked separately)
+MEDIA_REPO=(
+    vlc                                 # video player
+    mpv                                 # lightweight video player
+    ffmpeg                              # audio/video conversion tools
+    flatpak                             # Flatpak runtime and CLI
+    fastfetch                           # system info in the terminal
+    ncdu                                # disk usage analyzer (ncurses)
+)
+
+MEDIA_AUR=(
+    localsend-bin                       # AirDrop-like file transfer (prebuilt; the source build needs flutter-engine)
+)
+
+# System maintenance (optional, asked separately)
+SYSTEM_REPO=(
+    fwupd                               # firmware updates (LVFS)
+    ntfs-3g                             # read/write NTFS (Windows partitions)
+)
+# fstrim.timer is a systemd unit, not a package: enabled in the post-install phase.
 
 # ---------------- DIALOG: OPTIONAL PACKAGES ----------------
 #
@@ -300,6 +346,70 @@ done
 if ask_yes "Work programs" "$WORK_TEXT" no; then
     REPO_PACKAGES+=("${WORK_REPO[@]}")
     AUR_PACKAGES+=("${WORK_AUR[@]}")
+fi
+
+# ---------------- DIALOG: PRINTER AND SCANNER (default: Yes) ----------------
+
+PRINTER_TEXT="Install printer and scanner support?\n\n"
+PRINTER_TEXT+="Official repos (pacman):\n"
+for _p in "${PRINTER_REPO[@]}"; do
+    PRINTER_TEXT+="  - $_p\n"
+done
+PRINTER_TEXT+="\nCUPS and Avahi will also be enabled."
+
+ENABLE_PRINTER=0
+if ask_yes "Printer and scanner" "$PRINTER_TEXT" yes; then
+    ENABLE_PRINTER=1
+    REPO_PACKAGES+=("${PRINTER_REPO[@]}")
+fi
+
+# ---------------- DIALOG: OFFICE HELPERS AND FONTS (default: Yes) ----------------
+
+OFFICE_TEXT="Install Croatian office support and fonts?\n\n"
+OFFICE_TEXT+="Official repos (pacman):\n"
+for _p in "${OFFICE_REPO[@]}"; do
+    OFFICE_TEXT+="  - $_p\n"
+done
+OFFICE_TEXT+="\nAUR (yay):\n"
+for _p in "${OFFICE_AUR[@]}"; do
+    OFFICE_TEXT+="  - $_p\n"
+done
+
+if ask_yes "Office and fonts" "$OFFICE_TEXT" yes; then
+    REPO_PACKAGES+=("${OFFICE_REPO[@]}")
+    AUR_PACKAGES+=("${OFFICE_AUR[@]}")
+fi
+
+# ---------------- DIALOG: MULTIMEDIA AND UTILITIES (default: Yes) ----------------
+
+MEDIA_TEXT="Install multimedia and everyday utilities?\n\n"
+MEDIA_TEXT+="Official repos (pacman):\n"
+for _p in "${MEDIA_REPO[@]}"; do
+    MEDIA_TEXT+="  - $_p\n"
+done
+MEDIA_TEXT+="\nAUR (yay):\n"
+for _p in "${MEDIA_AUR[@]}"; do
+    MEDIA_TEXT+="  - $_p\n"
+done
+
+if ask_yes "Multimedia and utilities" "$MEDIA_TEXT" yes; then
+    REPO_PACKAGES+=("${MEDIA_REPO[@]}")
+    AUR_PACKAGES+=("${MEDIA_AUR[@]}")
+fi
+
+# ---------------- DIALOG: SYSTEM MAINTENANCE (default: Yes) ----------------
+
+ENABLE_FSTRIM=0
+SYSTEM_TEXT="Install system maintenance tools?\n\n"
+SYSTEM_TEXT+="Official repos (pacman):\n"
+for _p in "${SYSTEM_REPO[@]}"; do
+    SYSTEM_TEXT+="  - $_p\n"
+done
+SYSTEM_TEXT+="\nAlso enables the weekly SSD TRIM timer (fstrim.timer)."
+
+if ask_yes "System maintenance" "$SYSTEM_TEXT" yes; then
+    REPO_PACKAGES+=("${SYSTEM_REPO[@]}")
+    ENABLE_FSTRIM=1
 fi
 
 # ---------------- DIALOG: EXTRA PACKAGES ----------------
@@ -562,7 +672,7 @@ exec 1>>"$LOG_FILE"
 
     # ---- Phase 4: post-install tweaks ----
     CUR_PHASE=4
-    CUR_ITEMS=("Java default" "CUPS enable" "Hardware daemons" "Fingerprint PAM")
+    CUR_ITEMS=("Java default" "Printing services" "Hardware daemons" "Fingerprint PAM" "SSD TRIM timer")
     CUR_IDX=0
 
     if [[ -d "/usr/lib/jvm/${JAVA_ENV}" ]]; then
@@ -574,9 +684,37 @@ exec 1>>"$LOG_FILE"
     fi
     CUR_IDX=1
 
-    gauge_msg 99 "Enabling CUPS (printing)..."
-    sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
-        warn "Could not enable CUPS (sudo may have timed out)." >> "$log"
+    # Printing: CUPS for the print queue, Avahi + nss-mdns so network
+    # printers are discovered and *.local names resolve. nss-mdns does
+    # nothing until "mdns_minimal [NOTFOUND=return]" is in the hosts line
+    # of /etc/nsswitch.conf (it goes before resolve/dns). The edit is done
+    # on a temp copy, verified, and the original is kept as a .bak.
+    if [[ "$ENABLE_PRINTER" -eq 1 ]]; then
+        gauge_msg 99 "Enabling CUPS and Avahi (printing)..."
+        sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
+            warn "Could not enable CUPS (sudo may have timed out)." >> "$log"
+        if pacman -Qq avahi >/dev/null 2>&1 && unit_exists avahi-daemon.service; then
+            sudo -n systemctl enable --now avahi-daemon.service >> "$log" 2>&1 || \
+                warn "Could not enable avahi-daemon.service." >> "$log"
+        fi
+        if pacman -Qq nss-mdns >/dev/null 2>&1 && [[ -f "$NSS_FILE" ]]; then
+            if grep -q 'mdns' "$NSS_FILE"; then
+                echo "mdns already present in $NSS_FILE -- left unchanged." >> "$log"
+            else
+                _nss_tmp="$(mktemp)"
+                sed -E '/^hosts:/{/mdns/!{s/\bresolve\b/mdns_minimal [NOTFOUND=return] resolve/;t;s/\bdns\b/mdns_minimal [NOTFOUND=return] dns/}}' \
+                    "$NSS_FILE" > "$_nss_tmp"
+                if grep -q 'mdns_minimal' "$_nss_tmp" \
+                   && { [[ -e "${NSS_FILE}.bak-mdns" ]] || sudo -n cp "$NSS_FILE" "${NSS_FILE}.bak-mdns" >> "$log" 2>&1; } \
+                   && sudo -n install -m 0644 -o root -g root "$_nss_tmp" "$NSS_FILE" >> "$log" 2>&1; then
+                    echo "Added mdns_minimal to $NSS_FILE; backup: ${NSS_FILE}.bak-mdns" >> "$log"
+                else
+                    warn "Could not update $NSS_FILE -- .local name resolution is unchanged." >> "$log"
+                fi
+                rm -f "$_nss_tmp"
+            fi
+        fi
+    fi
     CUR_IDX=2
 
     # LACT and CoolerControl are only GUIs: they talk to a root daemon that
@@ -627,6 +765,14 @@ exec 1>>"$LOG_FILE"
         fi
     fi
     CUR_IDX=4
+
+    # Weekly TRIM for SSD/NVMe drives (util-linux ships the unit).
+    if [[ "$ENABLE_FSTRIM" -eq 1 ]]; then
+        gauge_msg 99 "Enabling fstrim.timer (SSD TRIM)..."
+        sudo -n systemctl enable --now fstrim.timer >> "$log" 2>&1 || \
+            warn "Could not enable fstrim.timer (sudo may have timed out)." >> "$log"
+    fi
+    CUR_IDX=5
 
     # ---- Phase 5: done ----
     CUR_PHASE=5
@@ -686,7 +832,21 @@ RESULT+="\nManual steps still needed:\n"
 if in_array snx-rs "${AUR_PACKAGES[@]}"; then
     RESULT+="  - snx-rs: takes a while to build from source, this is expected.\n"
 fi
-RESULT+="  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB.\n"
+if [[ "$ENABLE_PRINTER" -eq 1 ]]; then
+    RESULT+="  - HP printer: run 'hp-setup' to detect/add your printer over the network or USB.\n"
+    if grep -q 'mdns_minimal' "$NSS_FILE" 2>/dev/null; then
+        RESULT+="  - mDNS: nss-mdns was enabled in $NSS_FILE (backup: ${NSS_FILE}.bak-mdns). If you use systemd-resolved with its own mDNS, disable one of the two to avoid port 5353 conflicts.\n"
+    fi
+fi
+if in_array flatpak "${REPO_PACKAGES[@]}"; then
+    RESULT+="  - Flatpak: add Flathub with 'flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo' (then log out/in).\n"
+fi
+if in_array fwupd "${REPO_PACKAGES[@]}"; then
+    RESULT+="  - Firmware: run 'fwupdmgr refresh && fwupdmgr get-updates' to check for firmware updates.\n"
+fi
+if in_array localsend-bin "${AUR_PACKAGES[@]}"; then
+    RESULT+="  - LocalSend: open TCP/UDP port 53317 if you use a firewall.\n"
+fi
 if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
     if grep -q 'pam_fprintd' "$FPRINT_PAM_FILE" 2>/dev/null; then
         RESULT+="  - Fingerprint: enroll a finger with 'fprintd-enroll' (test: 'fprintd-verify'). sudo then asks for it first, waits ${FPRINT_TIMEOUT}s, then asks for the password. Backup of the PAM file: ${FPRINT_PAM_FILE}.bak-fprint. Keep a second terminal with 'sudo -i' open while testing.\n"
