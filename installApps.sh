@@ -75,13 +75,14 @@ source "$SCRIPT_DIR/lib.sh"
 
 FAILED_FILE=""
 SKIPPED_FILE=""
+FW_STATUS_FILE=""
 SUDO_KEEPALIVE_PID=""
 
 cleanup() {
     if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
-    rm -f "$FAILED_FILE" "$SKIPPED_FILE"
+    rm -f "$FAILED_FILE" "$SKIPPED_FILE" "$FW_STATUS_FILE"
     # Remove the sudoers drop-in we created, so sudo's timestamp_timeout
     # goes back to the system default for the user's future sessions.
     if [[ "${SUDOERS_DROPIN_CREATED:-0}" == "1" ]]; then
@@ -165,6 +166,7 @@ ensure_dialog
 
 FAILED_FILE="$(mktemp)"
 SKIPPED_FILE="$(mktemp)"
+FW_STATUS_FILE="$(mktemp)"
 
 # ---------------- DIALOG SETUP ----------------
 
@@ -222,6 +224,12 @@ NSS_FILE="/etc/nsswitch.conf"
 # Set to 1 by the system-maintenance checklist if the fstrim.timer item
 # is selected; used later to decide whether to enable the timer.
 ENABLE_FSTRIM=0
+
+# Set to 1 by the system-maintenance checklist if the ufw item is selected.
+# ufw is NOT enabled automatically by pacman -- a fresh install is
+# "Status: inactive". Selecting it here means "install and enable with
+# safe defaults, then open ports for the services I picked".
+ENABLE_UFW=0
 
 # ---------------- DIALOG: OPTIONAL PACKAGES ----------------
 #
@@ -371,7 +379,10 @@ done <<< "$OFFICE_CHOICES"
 # ---------------- DIALOG: MULTIMEDIA AND UTILITIES ----------------
 #
 # Checklist with all items ON by default (matches the old default-Yes
-# bundle).
+# bundle). gnome-shell-extension-gsconnect is only useful on a GNOME
+# install (it is a GNOME Shell extension), but it is offered
+# unconditionally -- harmless if selected on a non-GNOME desktop, the
+# package is small and does nothing on its own.
 
 MEDIA_CHOICES="$(dlg_capture --title "Multimedia and utilities" --separate-output \
     --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
@@ -381,7 +392,8 @@ MEDIA_CHOICES="$(dlg_capture --title "Multimedia and utilities" --separate-outpu
     flatpak         "Flatpak runtime and CLI (pacman)" on \
     fastfetch       "system info in the terminal (pacman)" on \
     ncdu            "disk usage analyzer, ncurses (pacman)" on \
-    localsend-bin   "AirDrop-like file transfer (AUR)" on)" || abort
+    localsend-bin   "AirDrop-like file transfer (AUR)" on \
+    gnome-shell-extension-gsconnect "GSConnect - phone integration for GNOME Shell (AUR)" on)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
@@ -392,6 +404,7 @@ while IFS= read -r tag; do
         fastfetch)       REPO_PACKAGES+=(fastfetch) ;;
         ncdu)            REPO_PACKAGES+=(ncdu) ;;
         localsend-bin)   AUR_PACKAGES+=(localsend-bin) ;;
+        gnome-shell-extension-gsconnect) AUR_PACKAGES+=(gnome-shell-extension-gsconnect) ;;
     esac
 done <<< "$MEDIA_CHOICES"
 
@@ -400,19 +413,24 @@ done <<< "$MEDIA_CHOICES"
 # Checklist with all items ON by default (matches the old default-Yes
 # bundle). The fstrim entry is a systemd UNIT, not a package, so its tag
 # is the unit name itself; it has its own toggle and enables the timer
-# later.
+# later. ufw is OFF by default because enabling a firewall is a real
+# change (it can break services the user did not think of); selecting it
+# means "install AND enable with safe defaults, then open the ports for
+# the services I selected".
 
 SYSTEM_CHOICES="$(dlg_capture --title "System maintenance" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
+    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default except ufw.\n\nSelecting ufw will also ENABLE it (default deny incoming, allow outgoing) and open ports for the services you picked in the other lists." 0 "$BOX_W" 0 \
     fwupd         "firmware updates via LVFS (pacman)" on \
     ntfs-3g       "read/write NTFS Windows partitions (pacman)" on \
-    fstrim.timer  "weekly SSD TRIM (systemd unit, not a package)" on)" || abort
+    fstrim.timer  "weekly SSD TRIM (systemd unit, not a package)" on \
+    ufw           "Uncomplicated Firewall, enabled with safe defaults (pacman)" off)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
         fwupd)         REPO_PACKAGES+=(fwupd) ;;
         ntfs-3g)       REPO_PACKAGES+=(ntfs-3g) ;;
         fstrim.timer)  ENABLE_FSTRIM=1 ;;
+        ufw)           REPO_PACKAGES+=(ufw); ENABLE_UFW=1 ;;
     esac
 done <<< "$SYSTEM_CHOICES"
 
@@ -694,7 +712,7 @@ exec 1>>"$LOG_FILE"
 
     # ---- Phase 4: post-install tweaks ----
     CUR_PHASE=4
-    CUR_ITEMS=("Java default" "Printing services" "Hardware daemons" "Fingerprint PAM" "SSD TRIM timer")
+    CUR_ITEMS=("Java default" "Printing services" "Hardware daemons" "Fingerprint PAM" "SSD TRIM timer" "Firewall / ports")
     CUR_IDX=0
 
     if [[ -d "/usr/lib/jvm/${JAVA_ENV}" ]]; then
@@ -802,6 +820,109 @@ exec 1>>"$LOG_FILE"
     fi
     CUR_IDX=5
 
+    # ---------------- Firewall and service ports ----------------
+    #
+    # Arch Linux ships with NO firewall enabled by default -- no ufw, no
+    # firewalld, no iptables rules. On a stock system every port is
+    # reachable and there is nothing to open.
+    #
+    # When ufw is selected in the system-maintenance checklist it means
+    # the user wants a firewall. A fresh ufw install is "Status:
+    # inactive" and does nothing until "ufw enable" runs -- and if we
+    # enable it with the wrong default policy, it silently blocks
+    # everything. So:
+    #
+    #   1. Set safe defaults first (deny incoming, allow outgoing).
+    #   2. Enable ufw (--force skips the "may disrupt existing ssh"
+    #      prompt, which is meaningless in a non-interactive context).
+    #   3. Then open the ports the services we just installed need.
+    #
+    # If ufw is NOT selected but the user already has it active (from a
+    # previous run or manual setup), we do NOT touch its default
+    # policies -- we only add the port rules for our services, since
+    # that is an additive change.
+    #
+    # firewalld is treated the same way if it happens to be the active
+    # one. Raw nftables/iptables rulesets are deliberately left alone --
+    # guessing their structure is more likely to break things than help.
+    gauge_msg 99 "Configuring firewall (if any)..."
+
+    _fw=""
+
+    # --- Optionally enable ufw with safe defaults.
+    if [[ "$ENABLE_UFW" -eq 1 ]] && pacman -Qq ufw >/dev/null 2>&1; then
+        if ! sudo -n ufw status 2>/dev/null | grep -q '^Status: active'; then
+            echo "ufw: not active -- setting defaults and enabling." >> "$log"
+            sudo -n ufw default deny incoming  >> "$log" 2>&1 || warn "ufw: could not set incoming default." >> "$log"
+            sudo -n ufw default allow outgoing >> "$log" 2>&1 || warn "ufw: could not set outgoing default." >> "$log"
+            sudo -n ufw --force enable         >> "$log" 2>&1 || warn "ufw: could not enable." >> "$log"
+        else
+            echo "ufw: already active -- leaving default policies alone." >> "$log"
+        fi
+        _fw="ufw"
+    elif command -v ufw >/dev/null 2>&1 && sudo -n ufw status 2>/dev/null | grep -q '^Status: active'; then
+        _fw="ufw"
+    elif command -v firewall-cmd >/dev/null 2>&1 \
+         && sudo -n systemctl is-active --quiet firewalld 2>/dev/null; then
+        _fw="firewalld"
+    fi
+
+    # --- Open ports for the services that were actually installed.
+    #
+    # Each "ufw allow" / "firewall-cmd --add-port" is idempotent: running
+    # it twice is a no-op (ufw detects the duplicate, firewalld does too).
+    # The port list is derived from what was installed, not from what was
+    # selected, so a package that failed to install does not leave a
+    # dangling firewall rule behind.
+    if [[ "$_fw" == "ufw" ]]; then
+        if pacman -Qq cups >/dev/null 2>&1; then
+            sudo -n ufw allow 631/tcp  >> "$log" 2>&1 || true
+            sudo -n ufw allow 5353/udp >> "$log" 2>&1 || true
+        fi
+        if pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1; then
+            sudo -n ufw allow 1714:1764/udp >> "$log" 2>&1 || true
+            sudo -n ufw allow 1714:1764/tcp >> "$log" 2>&1 || true
+        fi
+        if pacman -Qq localsend-bin >/dev/null 2>&1; then
+            sudo -n ufw allow 53317/udp >> "$log" 2>&1 || true
+            sudo -n ufw allow 53317/tcp >> "$log" 2>&1 || true
+        fi
+        echo "firewall: ufw -- ports opened for installed services." >> "$log"
+        if [[ "$ENABLE_UFW" -eq 1 ]]; then
+            echo "ufw-enabled" > "$FW_STATUS_FILE"
+        else
+            echo "ufw-active" > "$FW_STATUS_FILE"
+        fi
+    elif [[ "$_fw" == "firewalld" ]]; then
+        if pacman -Qq cups >/dev/null 2>&1; then
+            sudo -n firewall-cmd --permanent --add-port=631/tcp  >> "$log" 2>&1 || true
+            sudo -n firewall-cmd --permanent --add-port=5353/udp >> "$log" 2>&1 || true
+        fi
+        if pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1; then
+            sudo -n firewall-cmd --permanent --add-port=1714-1764/udp >> "$log" 2>&1 || true
+            sudo -n firewall-cmd --permanent --add-port=1714-1764/tcp >> "$log" 2>&1 || true
+        fi
+        if pacman -Qq localsend-bin >/dev/null 2>&1; then
+            sudo -n firewall-cmd --permanent --add-port=53317/udp >> "$log" 2>&1 || true
+            sudo -n firewall-cmd --permanent --add-port=53317/tcp >> "$log" 2>&1 || true
+        fi
+        sudo -n firewall-cmd --reload >> "$log" 2>&1 || true
+        echo "firewall: firewalld -- ports opened for installed services." >> "$log"
+        echo "firewalld-active" > "$FW_STATUS_FILE"
+    else
+        if [[ "$ENABLE_UFW" -eq 1 ]]; then
+            # The user asked for ufw, but the package did not end up
+            # installed (e.g. install failed). Say so instead of silently
+            # pretending the firewall is fine.
+            echo "firewall: ufw was selected but is not installed." >> "$log"
+            echo "ufw-missing" > "$FW_STATUS_FILE"
+        else
+            echo "firewall: none active and ufw not selected -- nothing to do." >> "$log"
+            echo "none" > "$FW_STATUS_FILE"
+        fi
+    fi
+    CUR_IDX=6
+
     # ---- Phase 5: done ----
     CUR_PHASE=5
     CUR_ITEMS=()
@@ -873,7 +994,7 @@ if in_array fwupd "${REPO_PACKAGES[@]}"; then
     RESULT+="  - Firmware: run 'fwupdmgr refresh && fwupdmgr get-updates' to check for firmware updates.\n"
 fi
 if in_array localsend-bin "${AUR_PACKAGES[@]}"; then
-    RESULT+="  - LocalSend: open TCP/UDP port 53317 if you use a firewall.\n"
+    RESULT+="  - LocalSend: uses TCP/UDP port 53317 (opened automatically if a supported firewall is active).\n"
 fi
 if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
     if grep -q 'pam_fprintd' "$FPRINT_PAM_FILE" 2>/dev/null; then
@@ -885,6 +1006,38 @@ fi
 if in_array f5vpn-ng "${AUR_PACKAGES[@]}"; then
     RESULT+="  - F5 VPN (f5vpn-ng): if it fails to build or launch, check the AUR comment page -- it tracks F5's client releases and occasionally needs a library fix (libxml2/webkit2gtk) after a system update.\n"
 fi
+if pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1; then
+    RESULT+="  - GSConnect: enable the extension from the Extensions app or https://extensions.gnome.org. Uses TCP/UDP 1714-1764.\n"
+fi
+
+# Firewall status report, from the file the subshell wrote.
+_fw_state="$(cat "$FW_STATUS_FILE" 2>/dev/null || echo none)"
+case "$_fw_state" in
+    ufw-enabled)
+        RESULT+="  - Firewall: ufw was enabled with 'deny incoming / allow outgoing'.\n"
+        RESULT+="    Ports opened for the services you installed:"
+        _fw_ports=""
+        pacman -Qq cups >/dev/null 2>&1 && _fw_ports+=" CUPS (631/tcp, 5353/udp),"
+        pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1 && _fw_ports+=" GSConnect (1714-1764/udp+tcp),"
+        pacman -Qq localsend-bin >/dev/null 2>&1 && _fw_ports+=" LocalSend (53317/udp+tcp),"
+        RESULT+="${_fw_ports%,}\n"
+        RESULT+="    Manage with: 'sudo ufw status verbose', 'sudo ufw allow <port>', 'sudo ufw disable'.\n"
+        ;;
+    ufw-active)
+        RESULT+="  - Firewall: ufw was already active (not enabled by this script).\n"
+        RESULT+="    Only port rules for your services were added; default policies were left alone.\n"
+        ;;
+    firewalld-active)
+        RESULT+="  - Firewall: firewalld is active. Port rules for your services were added.\n"
+        ;;
+    ufw-missing)
+        RESULT+="  - Firewall: ufw was selected but did not end up installed (install failed -- see FAILED above). No firewall is active.\n"
+        ;;
+    *)
+        RESULT+="  - Firewall: none active (ufw not selected, no firewalld). All ports are reachable. To add one later: 'sudo pacman -S ufw && sudo ufw default deny incoming && sudo ufw default allow outgoing && sudo ufw enable'.\n"
+        ;;
+esac
+
 RESULT+="\nFull log: $LOG_FILE"
 
 msg_box "App install complete" "$RESULT"
