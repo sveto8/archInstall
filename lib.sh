@@ -278,18 +278,60 @@ ask_yes() {
         --yesno "$2" "$(_text_height "$2")" "$BOX_W"
 }
 
+# _wrap_text <text>
+#
+# Wraps the text so each line fits the dialog's usable content width
+# (BOX_W - 8: two border columns plus two padding columns on each side).
+# Wraps on word boundaries. The leading indentation of every source line
+# is preserved for its continuation lines, so bulleted lists stay
+# readable after wrapping instead of collapsing to column 0.
+#
+# dialog's --msgbox wraps text on its own, but --textbox (used below
+# for very tall messages, since --msgbox cannot scroll) does NOT -- it
+# truncates long lines at the right border. Pre-wrapping here makes the
+# text safe for either widget.
+_wrap_text() {
+    local w=$(( BOX_W - 8 ))
+    printf '%b' "$1" | awk -v w="$w" '
+        function getindent(s,   i, c) {
+            i = 0
+            while (i < length(s)) {
+                c = substr(s, i + 1, 1)
+                if (c == " " || c == "\t") i++
+                else break
+            }
+            return substr(s, 1, i)
+        }
+        {
+            line = $0
+            ind  = getindent(line)
+            indw = length(ind)
+            if (indw >= w) indw = 0
+            while (length(line) > w) {
+                cut = w
+                while (cut > indw && substr(line, cut, 1) != " ") cut--
+                if (cut <= indw) cut = w
+                print substr(line, 1, cut)
+                line = ind substr(line, cut + 1)
+            }
+            print line
+        }
+    '
+}
+
 # msg_box <title> <text>
 #
 # Shows a message. Two things this helper handles that a plain
 # `dlg --msgbox` does not:
 #
-#   1. Long texts. dialog's --msgbox has no scrollbar: if the text does
-#      not fit the available height, the extra lines are simply cut off
-#      and there is no way for the user to see them (the OK button is
-#      the only escape). When the text is taller than the terminal can
-#      show, this falls back to a --textbox (which scrolls with the
-#      arrow keys / PgUp / PgDn). The temp file the textbox reads is
-#      cleaned up afterwards.
+#   1. Long texts. dialog's --msgbox has no scrollbar: if the text is
+#      taller than the available screen, the extra lines are simply cut
+#      off and there is no way for the user to see them (the OK button
+#      is the only escape). When the wrapped text fits the screen, this
+#      uses --msgbox; when it does not, it falls back to --textbox,
+#      which the user can scroll with the arrow keys / PgUp / PgDn.
+#      The text is pre-wrapped in both cases, because --textbox does
+#      not wrap long lines itself and would clip them on the right.
 #
 #   2. Screen clearing. dialog's --clear flag only clears the area
 #      covered by the new widget, so leftovers from a previous dialog
@@ -298,20 +340,24 @@ ask_yes() {
 #      msg_box is drawn after it. Running `clear` before invoking
 #      dialog wipes the whole terminal and removes those remnants.
 msg_box() {
-    local title="$1" text="$2" h tmp
-    h=$(( $(_text_lines "$text") + 8 ))
-
+    local title="$1" text="$2" wrapped tmp h
     clear
+    wrapped="$(_wrap_text "$text")"
+    # +2 for the border rows, +2 for the padding dialog adds.
+    h=$(( $(printf '%s\n' "$wrapped" | wc -l) + 4 ))
+
     if (( h > TERM_LINES - 2 )); then
-        # Too tall for a msgbox -- use a scrollable textbox instead.
+        # Too tall for a --msgbox -- use a scrollable --textbox instead.
         tmp="$(mktemp)"
-        printf '%b\n' "$text" > "$tmp"
-        dlg --title "$title" \
-            --textbox "$tmp" "$LOG_H" "$LOG_W" || true
+        printf '%s\n' "$wrapped" > "$tmp"
+        dlg --title "$title" --textbox "$tmp" "$LOG_H" "$LOG_W" || true
         rm -f "$tmp"
     else
+        # Fits: use --msgbox with the ORIGINAL text (dialog will wrap it
+        # again, but --cr-wrap + --no-collapse handle the \n escapes and
+        # the box is sized to fit the whole thing anyway).
         dlg --title "$title" --no-collapse --cr-wrap \
-            --msgbox "$text" "$h" "$BOX_W" || true
+            --msgbox "$text" "$(_text_height "$text")" "$BOX_W" || true
     fi
 }
 
