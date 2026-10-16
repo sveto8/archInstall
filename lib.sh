@@ -279,9 +279,40 @@ ask_yes() {
 }
 
 # msg_box <title> <text>
+#
+# Shows a message. Two things this helper handles that a plain
+# `dlg --msgbox` does not:
+#
+#   1. Long texts. dialog's --msgbox has no scrollbar: if the text does
+#      not fit the available height, the extra lines are simply cut off
+#      and there is no way for the user to see them (the OK button is
+#      the only escape). When the text is taller than the terminal can
+#      show, this falls back to a --textbox (which scrolls with the
+#      arrow keys / PgUp / PgDn). The temp file the textbox reads is
+#      cleaned up afterwards.
+#
+#   2. Screen clearing. dialog's --clear flag only clears the area
+#      covered by the new widget, so leftovers from a previous dialog
+#      that was bigger can survive -- most noticeably the "NN%" shown
+#      on the right of a --gauge, which stays visible when a smaller
+#      msg_box is drawn after it. Running `clear` before invoking
+#      dialog wipes the whole terminal and removes those remnants.
 msg_box() {
-    dlg --clear --title "$1" --no-collapse --cr-wrap \
-        --msgbox "$2" "$(_text_height "$2")" "$BOX_W" || true
+    local title="$1" text="$2" h tmp
+    h=$(( $(_text_lines "$text") + 8 ))
+
+    clear
+    if (( h > TERM_LINES - 2 )); then
+        # Too tall for a msgbox -- use a scrollable textbox instead.
+        tmp="$(mktemp)"
+        printf '%b\n' "$text" > "$tmp"
+        dlg --title "$title" \
+            --textbox "$tmp" "$LOG_H" "$LOG_W" || true
+        rm -f "$tmp"
+    else
+        dlg --title "$title" --no-collapse --cr-wrap \
+            --msgbox "$text" "$h" "$BOX_W" || true
+    fi
 }
 
 # ask_text <varname> <title> <text> [initial]  -> returns 1 on cancel/ESC
