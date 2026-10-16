@@ -173,23 +173,25 @@ ui_init
 
 # Base packages (always installed)
 REPO_PACKAGES=(
-    terminator
-    guake
-    qmmp
-    kolourpaint
-    mission-center
-    stow
+    fprintd                             # fingerprint daemon (login, sudo, polkit) - laptop only
+    imagemagick                         # image conversion tools; listed with fprintd on the Arch wiki
+    terminator                          # terminal emulator with split panes
+    guake                               # drop-down terminal (toggle with F12)
+    qmmp                                # lightweight audio player (Winamp-style)
+    kolourpaint                         # simple paint / image editor
+    mission-center                      # system monitor (CPU, RAM, GPU, processes)
+    stow                                # symlink manager, handy for dotfiles
     hplip                               # HP printer support
     cups                                # printing system
     system-config-printer               # GUI printer management
-    eza
+    eza                                 # modern ls replacement
     peazip                              # official repo (extra); used to be AUR-only
     python-pyqt5                        # for hp-setup's GUI
 )
 
 AUR_PACKAGES=(
-    google-chrome
-    sublime-text-4
+    google-chrome                       # Google Chrome web browser
+    sublime-text-4                      # Sublime Text 4 editor
 )
 
 # JDK used for work. Package + the name `archlinux-java` knows it by: change
@@ -204,14 +206,14 @@ JAVA_ENV="java-11-openjdk"
 # Work-related packages (optional, asked separately)
 WORK_REPO=(
     "$JAVA_PKG"
-    meld
+    meld                                # visual diff and merge tool
     code                                # open-source VS Code
-    remmina
+    remmina                             # remote desktop client (RDP, VNC, SSH)
     intellij-idea-community-edition     # official repo (extra)
 )
 
 WORK_AUR=(
-    postman-bin
+    postman-bin                         # Postman API client (AUR)
     f5vpn-ng                            # F5 VPN client
     ferdium-bin                         # Ferdium messaging client
     snx-rs                              # VPN
