@@ -601,6 +601,25 @@ exec 1>>"$LOG_FILE"
     CUR_IDX=0
 
     gauge_msg $((current * 100 / total)) "Installing base-devel, git..."
+
+    # Refresh the pacman sync databases before installing anything.
+    #
+    # Without this, a stale local database can reference a package version
+    # the mirrors no longer carry -- Arch does not keep old package files
+    # once a new version is pushed, so pacman gets 404 on every mirror and
+    # the transaction fails with "failed to retrieve some files".
+    #
+    # Refreshing alone (without a full -Syu) is normally discouraged as a
+    # "partial upgrade", but here it is followed immediately by installing
+    # the packages the user selected, plus their dependencies, in the same
+    # run -- so nothing is left half-upgraded. This is the standard pattern
+    # for an installer that needs to fetch packages the local DB may not
+    # know about yet.
+    gauge_msg $((current * 100 / total)) "Refreshing package databases..."
+    if ! sudo -n pacman -Sy --noconfirm >> "$log" 2>&1; then
+        warn "pacman -Sy failed -- continuing with the existing databases." >> "$log"
+    fi
+    
     if ! sudo -n pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1; then
         warn "Failed to install base-devel/git -- sudo timestamp may have expired." >> "$log"
         echo "base-devel git" >> "$FAILED_FILE"
