@@ -500,6 +500,7 @@ cancels (nothing is installed on cancel).
    | CoolerControl (fan/cooling control) | `coolercontrol-bin` (AUR) | **on** on a desktop, **off** on a laptop (battery / DMI chassis type) |
    | Nautilus "Open as Administrator" | `nautilus-admin-gtk4` (AUR) | **on** — only listed if GNOME is detected |
    | LibreOffice | `libreoffice-still` (repo) | off |
+   | Fingerprint for sudo | PAM line `pam_fprintd.so timeout=3` in `/etc/pam.d/sudo` (official `fprintd` module, no AUR) | **on** on a laptop, **off** on a desktop |
    | WPS Office | `wps-office` + `ttf-wps-fonts` (AUR) | off |
    | OnlyOffice | `onlyoffice-bin` (AUR) | off |
 
@@ -557,7 +558,18 @@ cancels (nothing is installed on cancel).
 
 **Fingerprint reader note:** `fprintd` and `imagemagick` are in the
 always-installed set, so they also land on a desktop that has no reader
-(harmless, just unused). They only help if the reader is supported by
+(harmless, just unused). The optional checklist item *Fingerprint for sudo*
+adds `auth sufficient pam_fprintd.so timeout=3` right under the
+`#%PAM-1.0` header of `/etc/pam.d/sudo` (once only; the original is kept as
+`/etc/pam.d/sudo.bak-fprint`; `FPRINT_TIMEOUT` at the top of the script
+changes the 3 s). `sudo` then waits for a fingerprint for 3 seconds and
+afterwards asks for the password as usual — typing the password *while*
+it waits for the finger is not possible with the official module (that
+needs the AUR `pam-fprint-grosshack`, deliberately not used). GDM and the
+GNOME lock screen need no PAM change: once a finger is enrolled they accept
+the fingerprint and the typed password at the same time. If no finger is
+enrolled, `sudo` simply asks for the password. Keep a second terminal with
+`sudo -i` open while testing a PAM change. They only help if the reader is supported by
 `libfprint` — check with `lsusb` against the
 [supported devices list](https://fprint.freedesktop.org/supported-devices.html).
 Enroll a finger afterwards with `fprintd-enroll` and test it with
@@ -997,8 +1009,10 @@ Fixed in the scripts:
   official-repo lists, with a `yay` fallback for packages that move between
   the repos and the AUR; ESC at the "Extra packages" box now aborts as
   documented; the drop-in uses `id -un` instead of `$USER`; added `fprintd`
-  and `imagemagick` (fingerprint support) to the base set and an explanatory
-  comment to every entry of the package arrays.
+  and `imagemagick` (fingerprint support) to the base set, an optional
+  *Fingerprint for sudo* PAM step (3 s timeout, backup of the PAM file,
+  laptop default on) and an explanatory comment to every entry of the
+  package arrays.
 - `lib.sh` — `WARN_FILE` / `load_warn_file` (see above).
 - `arch-manager.sh` — reviewed, no changes needed.
 
