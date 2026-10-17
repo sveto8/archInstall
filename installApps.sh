@@ -369,6 +369,33 @@ while IFS= read -r tag; do
     esac
 done <<< "$WORK_CHOICES"
 
+# ---------------- DIALOG: VPN (NETWORKMANAGER) ----------------
+#
+# NetworkManager VPN plugins, so VPN connections can be created and
+# switched from the GNOME network menu / Settings (and nm-applet / the KDE
+# network widget). WireGuard needs no plugin -- NetworkManager supports it
+# natively -- only wireguard-tools for `wg` / `wg-quick`. openconnect covers
+# Cisco AnyConnect and also speaks the F5 protocol (check it against your
+# own server; f5vpn-ng in "Work programs" stays as the native fallback).
+# Check Point has no NetworkManager plugin: use snx-rs from "Work programs".
+# Defaults: the two most common ones ON, the legacy plugins OFF.
+
+VPN_CHOICES="$(checklist_pick "VPN (NetworkManager)" \
+    "Plugins that let you add VPN connections from the desktop network menu. WireGuard is supported natively; Check Point has no plugin (use snx-rs in Work programs)." \
+    wireguard-tools                "WireGuard tools wg / wg-quick; NetworkManager supports WireGuard itself (pacman)" on \
+    networkmanager-openconnect     "Cisco AnyConnect and F5 via openconnect (pacman)" on \
+    networkmanager-vpnc            "legacy Cisco IPsec (pacman)" off \
+    networkmanager-openvpn         "OpenVPN (pacman)" off)" || abort
+
+while IFS= read -r tag; do
+    case "$tag" in
+        wireguard-tools)                REPO_PACKAGES+=(wireguard-tools) ;;
+        networkmanager-openconnect)     REPO_PACKAGES+=(networkmanager-openconnect) ;;
+        networkmanager-vpnc)            REPO_PACKAGES+=(networkmanager-vpnc) ;;
+        networkmanager-openvpn)         REPO_PACKAGES+=(networkmanager-openvpn) ;;
+    esac
+done <<< "$VPN_CHOICES"
+
 # ---------------- DIALOG: PRINTER AND SCANNER ----------------
 #
 # Checklist with all items ON by default (matches the old default-Yes
@@ -1096,6 +1123,16 @@ else
 fi
 
 RESULT+="\nManual steps still needed:\n"
+_nm_vpn=0
+for _p in networkmanager-openconnect networkmanager-vpnc networkmanager-openvpn; do
+    if in_array "$_p" "${REPO_PACKAGES[@]}"; then _nm_vpn=1; fi
+done
+if [[ "$_nm_vpn" -eq 1 ]]; then
+    RESULT+="  - VPN plugins: log out and in (or 'sudo systemctl restart NetworkManager', which drops the network for a moment) so the desktop network settings offer the new VPN types.\n"
+fi
+if in_array wireguard-tools "${REPO_PACKAGES[@]}"; then
+    RESULT+="  - WireGuard: import a config with 'nmcli connection import type wireguard file <name>.conf' or in the desktop network settings (Add VPN -> Import from file).\n"
+fi
 if in_array snx-rs "${AUR_PACKAGES[@]}"; then
     RESULT+="  - snx-rs: takes a while to build from source, this is expected.\n"
 fi
