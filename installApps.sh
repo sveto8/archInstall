@@ -351,8 +351,7 @@ WORK_CHOICES="$(checklist_pick "Work programs" \
     dbeaver                          "universal database client (pacman)" off \
     postman-bin                      "Postman API client (AUR)" off \
     f5vpn-ng                         "F5 VPN client (AUR)" off \
-    ferdium-bin                      "Ferdium messaging client (AUR)" off \
-    snx-rs                           "Check Point VPN client (AUR)" off)" || abort
+    ferdium-bin                      "Ferdium messaging client (AUR)" off)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
@@ -365,11 +364,10 @@ while IFS= read -r tag; do
         postman-bin)                      AUR_PACKAGES+=(postman-bin) ;;
         f5vpn-ng)                         AUR_PACKAGES+=(f5vpn-ng) ;;
         ferdium-bin)                      AUR_PACKAGES+=(ferdium-bin) ;;
-        snx-rs)                           AUR_PACKAGES+=(snx-rs) ;;
     esac
 done <<< "$WORK_CHOICES"
 
-# ---------------- DIALOG: VPN (NETWORKMANAGER) ----------------
+# ---------------- DIALOG: VPN ----------------
 #
 # NetworkManager VPN plugins, so VPN connections can be created and
 # switched from the GNOME network menu / Settings (and nm-applet / the KDE
@@ -377,15 +375,17 @@ done <<< "$WORK_CHOICES"
 # natively -- only wireguard-tools for `wg` / `wg-quick`. openconnect covers
 # Cisco AnyConnect and also speaks the F5 protocol (check it against your
 # own server; f5vpn-ng in "Work programs" stays as the native fallback).
-# Check Point has no NetworkManager plugin: use snx-rs from "Work programs".
-# Defaults: the two most common ones ON, the legacy plugins OFF.
+# Check Point has no NetworkManager plugin, so its native client snx-rs
+# is listed here as well (it is NOT a NetworkManager plugin).
+# Defaults: the two most common plugins ON, the legacy plugins and snx-rs OFF.
 
-VPN_CHOICES="$(checklist_pick "VPN (NetworkManager)" \
-    "Plugins that let you add VPN connections from the desktop network menu. WireGuard is supported natively; Check Point has no plugin (use snx-rs in Work programs)." \
+VPN_CHOICES="$(checklist_pick "VPN" \
+    "NetworkManager plugins let you add VPN connections from the desktop network menu; WireGuard is supported natively. Check Point has no plugin, so snx-rs is its own client (slow Rust build)." \
     wireguard-tools                "WireGuard tools wg / wg-quick; NetworkManager supports WireGuard itself (pacman)" on \
     networkmanager-openconnect     "Cisco AnyConnect and F5 via openconnect (pacman)" on \
     networkmanager-vpnc            "legacy Cisco IPsec (pacman)" off \
-    networkmanager-openvpn         "OpenVPN (pacman)" off)" || abort
+    networkmanager-openvpn         "OpenVPN (pacman)" off \
+    snx-rs                         "Check Point VPN client, native, not a NetworkManager plugin (AUR)" off)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
@@ -393,6 +393,7 @@ while IFS= read -r tag; do
         networkmanager-openconnect)     REPO_PACKAGES+=(networkmanager-openconnect) ;;
         networkmanager-vpnc)            REPO_PACKAGES+=(networkmanager-vpnc) ;;
         networkmanager-openvpn)         REPO_PACKAGES+=(networkmanager-openvpn) ;;
+        snx-rs)                         AUR_PACKAGES+=(snx-rs) ;;
     esac
 done <<< "$VPN_CHOICES"
 
