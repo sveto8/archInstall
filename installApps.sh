@@ -343,15 +343,15 @@ fi
 
 WORK_CHOICES="$(checklist_pick "Work programs" \
     "Everything here is OFF by default. Enable only the tools you need.\n\nOfficial repos (pacman) and AUR (yay) both listed." \
-    "$JAVA_PKG"                      "work JDK, becomes the default java (pacman)" off \
-    meld                             "visual diff and merge tool (pacman)" off \
-    code                             "open-source VS Code (pacman)" off \
-    remmina                          "remote desktop client RDP/VNC/SSH (pacman)" off \
-    intellij-idea-community-edition  "IntelliJ IDEA Community Edition (pacman)" off \
-    dbeaver                          "universal database client (pacman)" off \
-    postman-bin                      "Postman API client (AUR)" off \
-    f5vpn-ng                         "F5 VPN client (AUR)" off \
-    ferdium-bin                      "Ferdium messaging client (AUR)" off)" || abort
+    "$JAVA_PKG"                      "work JDK, becomes the default java (pacman)" on \
+    meld                             "visual diff and merge tool (pacman)" on \
+    code                             "open-source VS Code (pacman)" on \
+    remmina                          "remote desktop client RDP/VNC/SSH (pacman)" on \
+    intellij-idea-community-edition  "IntelliJ IDEA Community Edition (pacman)" on \
+    dbeaver                          "universal database client (pacman)" on \
+    postman-bin                      "Postman API client (AUR)" on \
+    f5vpn-ng                         "F5 VPN client (AUR)" on \
+    ferdium-bin                      "Ferdium messaging client (AUR)" on)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
@@ -383,9 +383,9 @@ VPN_CHOICES="$(checklist_pick "VPN" \
     "NetworkManager plugins let you add VPN connections from the desktop network menu; WireGuard is supported natively. Check Point has no plugin, so snx-rs is its own client (slow Rust build)." \
     wireguard-tools                "WireGuard tools wg / wg-quick; NetworkManager supports WireGuard itself (pacman)" on \
     networkmanager-openconnect     "Cisco AnyConnect and F5 via openconnect (pacman)" on \
-    networkmanager-vpnc            "legacy Cisco IPsec (pacman)" off \
-    networkmanager-openvpn         "OpenVPN (pacman)" off \
-    snx-rs                         "Check Point VPN client, native, not a NetworkManager plugin (AUR)" off)" || abort
+    networkmanager-vpnc            "legacy Cisco IPsec (pacman)" on \
+    networkmanager-openvpn         "OpenVPN (pacman)" on \
+    snx-rs                         "Check Point VPN client, native, not a NetworkManager plugin (AUR)" on)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
