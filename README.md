@@ -165,7 +165,7 @@ Questions, in this order:
    exist, it offers to unmount them and close `cryptroot`
 2. **Hostname, timezone, console keymap(s), language, regional formats**
    — input boxes pre-filled with the defaults from the config block
-   (`monarch`, `Europe/Zagreb`, `us`) and validated (hostname syntax, the
+   (`hostname`, `Europe/Zagreb`, `us`) and validated (hostname syntax, the
    timezone must exist in `/usr/share/zoneinfo`, every keymap must be in
    `localectl list-keymaps`), so the same script gives each machine
    (laptop, desktop) its own name. Several keymaps can be given
