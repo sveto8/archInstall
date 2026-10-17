@@ -16,7 +16,7 @@ summary, and only then runs unattended with live output and a log file.
 | 0 | `archInstall.sh` | root, Arch ISO | Wipes one disk and sets up ESP + `/boot` + LUKS2 with Btrfs (`@`, `@home`, `@snapshots`). Installs the base system, GRUB, user, locale/keymap, zram; optional Wake-on-LAN, Wi-Fi carry-over and a desktop. |
 | 1 | `setupAfterInstall.sh` | root, first boot | Snapper + snap-pac + grub-btrfs, GRUB and Plymouth themes, os-prober for dual boot, and **bootable read-write snapshots** with matching kernels (pick one in GRUB after a bad update). |
 | 1.5 | `installDE.sh` | root | GNOME, KDE Plasma or XFCE (full/minimal) with GPU drivers, PipeWire, Bluetooth, dark theme, icon and cursor themes. |
-| 2 | `installApps.sh` | normal user | Builds `yay`, installs a base app set, then per-package checklists: optional (LACT, CoolerControl, sudo fingerprint, office suites), work, VPN (NetworkManager plugins), printer/scanner, office/fonts, multimedia, system maintenance (firmware, NTFS, SSD TRIM, optional `ufw` firewall) and a free-text box. Services, PAM, mDNS and firewall ports are touched only for what you picked. |
+| 2 | `installApps.sh` | normal user | Builds `yay`, installs a base app set, then per-package checklists: optional (LACT, CoolerControl, sudo fingerprint, office suites), work, VPN (NetworkManager plugins + Check Point client), printer/scanner, office/fonts, multimedia, system maintenance (firmware, NTFS, SSD TRIM, optional `ufw` firewall) and a free-text box. Services, PAM, mDNS and firewall ports are touched only for what you picked. |
 | - | `arch-manager.sh`, `lib.sh` | - | Optional menu that downloads and runs the scripts; shared dialog helpers (sourced, never run). |
 
 **Quick start** (on the Arch ISO, network up):
@@ -541,8 +541,8 @@ cancels (nothing is installed on cancel).
    | Dialog | Rows | Defaults |
    |--------|------|----------|
    | Optional packages | `lact`, `coolercontrol-bin`, fingerprint for sudo, `nautilus-admin-gtk4` (listed only on GNOME), `libreoffice-still`, `wps-office` + fonts, `onlyoffice-bin` | LACT **on** with an AMD GPU; CoolerControl **on** on a desktop; fingerprint **on** on a laptop; Nautilus **on**; office suites off |
-   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-community-edition`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin`, `snx-rs` | all **off** |
-   | VPN (NetworkManager) | `wireguard-tools`, `networkmanager-openconnect` (Cisco AnyConnect, F5), `networkmanager-vpnc` (legacy Cisco IPsec), `networkmanager-openvpn` | first two **on**, the other two off |
+   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-community-edition`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin` | all **off** |
+   | VPN | `wireguard-tools`, `networkmanager-openconnect` (Cisco AnyConnect, F5), `networkmanager-vpnc` (legacy Cisco IPsec), `networkmanager-openvpn`, `snx-rs` (Check Point, native client, no NetworkManager plugin) | first two **on**, the rest off |
    | Printer and scanner | `hplip`, `cups`, `system-config-printer`, `python-pyqt5`, `avahi`, `nss-mdns`, `cups-pdf`, `simple-scan` | all **on** |
    | Office and fonts | `hunspell-hr`, `libreoffice-still-hr`, `ttf-liberation`, `noto-fonts-emoji`, `ttf-jetbrains-mono-nerd`, `ttf-ms-fonts` | all **on** |
    | Multimedia and utilities | `vlc`, `mpv`, `ffmpeg`, `flatpak`, `fastfetch`, `ncdu`, `localsend-bin`, `gnome-shell-extension-gsconnect` | all **on** |
@@ -696,9 +696,8 @@ installed without asking (the build tools the script itself needs).
 | postman-bin | AUR | off | Postman API client |
 | f5vpn-ng | AUR | off | F5 VPN client |
 | ferdium-bin | AUR | off | Ferdium messaging client |
-| snx-rs | AUR | off | Check Point VPN client |
 
-#### VPN (NetworkManager) (checklist)
+#### VPN (checklist)
 
 | Package | Source | Default | Description |
 |---|---|---|---|
@@ -706,6 +705,7 @@ installed without asking (the build tools the script itself needs).
 | networkmanager-openconnect | pacman | on | Cisco AnyConnect and F5 via openconnect |
 | networkmanager-vpnc | pacman | off | legacy Cisco IPsec |
 | networkmanager-openvpn | pacman | off | OpenVPN |
+| snx-rs | AUR | off | Check Point VPN client, native, not a NetworkManager plugin |
 
 #### Printer and scanner (checklist)
 
@@ -1212,8 +1212,9 @@ Fixed in the scripts:
   can be created from the desktop network menu: `wireguard-tools` (WireGuard
   itself is native to NetworkManager) and `networkmanager-openconnect` (Cisco
   AnyConnect and F5) on by default, `networkmanager-vpnc` and
-  `networkmanager-openvpn` off. Check Point has no NetworkManager plugin and
-  stays with `snx-rs` in *Work programs*.
+  `networkmanager-openvpn` off. Check Point has no NetworkManager plugin, so
+  its native client `snx-rs` is listed in the same dialog (off by default) and
+  was moved there from *Work programs*.
 - `lib.sh` — `WARN_FILE` / `load_warn_file` (see above); `_text_lines` counts
   wrapped lines, `msg_box` / `ask_yes` scroll tall texts instead of cutting
   them off (a tall confirmation used to push the Yes/No buttons off the screen).
