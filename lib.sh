@@ -201,11 +201,12 @@ ui_init() {
 }
 
 # Number of screen lines a text needs at the current box width (counts \n
-# escapes / real newlines and estimates word wrapping).
+# escapes / real newlines). It counts the lines of the text AFTER word
+# wrapping (see _wrap_text below), not ceil(length / width): wrapping on word
+# boundaries needs more lines than that estimate, and a box sized from the
+# estimate silently cuts the last lines off (a --msgbox / --yesno cannot scroll).
 _text_lines() {
-    printf '%b' "$1" | awk -v w=$(( BOX_W - 6 )) '
-        { l = length($0); n += (l == 0) ? 1 : int((l + w - 1) / w) }
-        END { print n + 0 }'
+    _wrap_text "$1" | awk 'END { print NR + 0 }'
 }
 
 # Box geometry for a --menu/--checklist with <n> items: the list gets exactly
@@ -271,11 +272,20 @@ _text_height() {
 }
 
 # ask_yes <title> <text> [yes|no]   -> returns 0 for Yes. 3rd arg = default.
+#
+# A --yesno box cannot scroll: when the text is taller than the screen the
+# buttons would be pushed off it and the question could not be answered. In
+# that case the full text is shown first in a scrollable box (msg_box) and
+# only a short question is asked afterwards.
 ask_yes() {
-    local opts=()
+    local opts=() text="$2"
     [[ "${3:-yes}" == "no" ]] && opts+=(--defaultno)
+    if (( $(_text_lines "$text") + 8 > TERM_LINES - 2 )); then
+        msg_box "$1" "$text"
+        text="Continue? (the details were shown on the previous screen)"
+    fi
     dlg --title "$1" --no-collapse --cr-wrap "${opts[@]}" \
-        --yesno "$2" "$(_text_height "$2")" "$BOX_W"
+        --yesno "$text" "$(_text_height "$text")" "$BOX_W"
 }
 
 # _wrap_text <text>
@@ -340,17 +350,17 @@ _wrap_text() {
 #      msg_box is drawn after it. Running `clear` before invoking
 #      dialog wipes the whole terminal and removes those remnants.
 msg_box() {
-    local title="$1" text="$2" wrapped tmp h
+    local title="$1" text="$2" wrapped tmp
     clear
-    wrapped="$(_wrap_text "$text")"
-    # +2 for the border rows, +2 for the padding dialog adds.
-    h=$(( $(printf '%s\n' "$wrapped" | wc -l) + 4 ))
-
-    if (( h > TERM_LINES - 2 )); then
+    # Same test as _text_height: the wrapped text plus 8 rows of frame,
+    # padding and buttons must fit the screen, otherwise it would be cut off.
+    if (( $(_text_lines "$text") + 8 > TERM_LINES - 2 )); then
         # Too tall for a --msgbox -- use a scrollable --textbox instead.
+        wrapped="$(_wrap_text "$text")"
         tmp="$(mktemp)"
         printf '%s\n' "$wrapped" > "$tmp"
-        dlg --title "$title" --textbox "$tmp" "$LOG_H" "$LOG_W" || true
+        dlg --title "$title (UP/DOWN, PgUp/PgDn to scroll)" \
+            --textbox "$tmp" "$LOG_H" "$LOG_W" || true
         rm -f "$tmp"
     else
         # Fits: use --msgbox with the ORIGINAL text (dialog will wrap it
