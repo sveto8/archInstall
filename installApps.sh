@@ -336,13 +336,13 @@ fi
 
 # ---------------- DIALOG: WORK PROGRAMS ----------------
 #
-# Checklist instead of a single yes/no. Defaults are all OFF, matching the
-# old "whole bundle, default No" behaviour -- the user explicitly opts
-# into each tool they need. The tag of each entry is the package name
+# Checklist instead of a single yes/no. Defaults are all ON, so Enter
+# installs the whole work set; untick what this machine does not need
+# (e.g. on a personal machine). The tag of each entry is the package name
 # itself, so the case statement below is a plain name-for-name match.
 
 WORK_CHOICES="$(checklist_pick "Work programs" \
-    "Everything here is OFF by default. Enable only the tools you need.\n\nOfficial repos (pacman) and AUR (yay) both listed." \
+    "Everything here is ON by default. Untick the tools you do not need.\n\nOfficial repos (pacman) and AUR (yay) both listed." \
     "$JAVA_PKG"                      "work JDK, becomes the default java (pacman)" on \
     meld                             "visual diff and merge tool (pacman)" on \
     code                             "open-source VS Code (pacman)" on \
@@ -377,10 +377,10 @@ done <<< "$WORK_CHOICES"
 # own server; f5vpn-ng in "Work programs" stays as the native fallback).
 # Check Point has no NetworkManager plugin, so its native client snx-rs
 # is listed here as well (it is NOT a NetworkManager plugin).
-# Defaults: the two most common plugins ON, the legacy plugins and snx-rs OFF.
+# Defaults: everything ON; untick the clients you do not use.
 
 VPN_CHOICES="$(checklist_pick "VPN" \
-    "NetworkManager plugins let you add VPN connections from the desktop network menu; WireGuard is supported natively. Check Point has no plugin, so snx-rs is its own client (slow Rust build)." \
+    "All items ON by default; untick the clients you do not use.\n\nNetworkManager plugins let you add VPN connections from the desktop network menu; WireGuard is supported natively. Check Point has no plugin, so snx-rs is its own client (slow Rust build)." \
     wireguard-tools                "WireGuard tools wg / wg-quick; NetworkManager supports WireGuard itself (pacman)" on \
     networkmanager-openconnect     "Cisco AnyConnect and F5 via openconnect (pacman)" on \
     networkmanager-vpnc            "legacy Cisco IPsec (pacman)" on \
