@@ -541,8 +541,8 @@ cancels (nothing is installed on cancel).
    | Dialog | Rows | Defaults |
    |--------|------|----------|
    | Optional packages | `lact`, `coolercontrol-bin`, fingerprint for sudo, `nautilus-admin-gtk4` (listed only on GNOME), `libreoffice-still`, `wps-office` + fonts, `onlyoffice-bin` | LACT **on** with an AMD GPU; CoolerControl **on** on a desktop; fingerprint **on** on a laptop; Nautilus **on**; office suites off |
-   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-community-edition`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin` | all **off** |
-   | VPN | `wireguard-tools`, `networkmanager-openconnect` (Cisco AnyConnect, F5), `networkmanager-vpnc` (legacy Cisco IPsec), `networkmanager-openvpn`, `snx-rs` (Check Point, native client, no NetworkManager plugin) | first two **on**, the rest off |
+   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-community-edition`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin` | all **on** |
+   | VPN | `wireguard-tools`, `networkmanager-openconnect` (Cisco AnyConnect, F5), `networkmanager-vpnc` (legacy Cisco IPsec), `networkmanager-openvpn`, `snx-rs` (Check Point, native client, no NetworkManager plugin) | all **on** |
    | Printer and scanner | `hplip`, `cups`, `system-config-printer`, `python-pyqt5`, `avahi`, `nss-mdns`, `cups-pdf`, `simple-scan` | all **on** |
    | Office and fonts | `hunspell-hr`, `libreoffice-still-hr`, `ttf-liberation`, `noto-fonts-emoji`, `ttf-jetbrains-mono-nerd`, `ttf-ms-fonts` | all **on** |
    | Multimedia and utilities | `vlc`, `mpv`, `ffmpeg`, `flatpak`, `fastfetch`, `ncdu`, `localsend-bin`, `gnome-shell-extension-gsconnect` | all **on** |
@@ -687,15 +687,15 @@ installed without asking (the build tools the script itself needs).
 
 | Package | Source | Default | Description |
 |---|---|---|---|
-| jdk11-openjdk | pacman | off | work JDK, becomes the default java |
-| meld | pacman | off | visual diff and merge tool |
-| code | pacman | off | open-source VS Code |
-| remmina | pacman | off | remote desktop client RDP/VNC/SSH |
-| intellij-idea-community-edition | pacman | off | IntelliJ IDEA Community Edition |
-| dbeaver | pacman | off | universal database client |
-| postman-bin | AUR | off | Postman API client |
-| f5vpn-ng | AUR | off | F5 VPN client |
-| ferdium-bin | AUR | off | Ferdium messaging client |
+| jdk11-openjdk | pacman | on | work JDK, becomes the default java |
+| meld | pacman | on | visual diff and merge tool |
+| code | pacman | on | open-source VS Code |
+| remmina | pacman | on | remote desktop client RDP/VNC/SSH |
+| intellij-idea-community-edition | pacman | on | IntelliJ IDEA Community Edition |
+| dbeaver | pacman | on | universal database client |
+| postman-bin | AUR | on | Postman API client |
+| f5vpn-ng | AUR | on | F5 VPN client |
+| ferdium-bin | AUR | on | Ferdium messaging client |
 
 #### VPN (checklist)
 
@@ -703,9 +703,9 @@ installed without asking (the build tools the script itself needs).
 |---|---|---|---|
 | wireguard-tools | pacman | on | WireGuard tools wg / wg-quick; NetworkManager supports WireGuard itself |
 | networkmanager-openconnect | pacman | on | Cisco AnyConnect and F5 via openconnect |
-| networkmanager-vpnc | pacman | off | legacy Cisco IPsec |
-| networkmanager-openvpn | pacman | off | OpenVPN |
-| snx-rs | AUR | off | Check Point VPN client, native, not a NetworkManager plugin |
+| networkmanager-vpnc | pacman | on | legacy Cisco IPsec |
+| networkmanager-openvpn | pacman | on | OpenVPN |
+| snx-rs | AUR | on | Check Point VPN client, native, not a NetworkManager plugin |
 
 #### Printer and scanner (checklist)
 
@@ -1211,10 +1211,10 @@ Fixed in the scripts:
 - `installApps.sh` — new *VPN (NetworkManager)* checklist so VPN connections
   can be created from the desktop network menu: `wireguard-tools` (WireGuard
   itself is native to NetworkManager) and `networkmanager-openconnect` (Cisco
-  AnyConnect and F5) on by default, `networkmanager-vpnc` and
-  `networkmanager-openvpn` off. Check Point has no NetworkManager plugin, so
-  its native client `snx-rs` is listed in the same dialog (off by default) and
-  was moved there from *Work programs*.
+  AnyConnect and F5), `networkmanager-vpnc` and `networkmanager-openvpn`. Check
+  Point has no NetworkManager plugin, so its native client `snx-rs` is listed
+  in the same dialog (moved there from *Work programs*). The *Work programs*
+  and *VPN* checklists now start with every row ticked.
 - `lib.sh` — `WARN_FILE` / `load_warn_file` (see above); `_text_lines` counts
   wrapped lines, `msg_box` / `ask_yes` scroll tall texts instead of cutting
   them off (a tall confirmation used to push the Yes/No buttons off the screen).
