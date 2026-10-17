@@ -7,6 +7,46 @@ NOTE - This is a hobby project created primarily for my personal needs.
 
 # Arch Linux: LUKS2 + Btrfs + Snapper + DE + apps install scripts
 
+Dialog (ncurses) scripts that take a PC from an Arch ISO to an **encrypted, snapshotted
+desktop with my applications**. Every script asks all its questions first, shows one
+summary, and only then runs unattended with live output and a log file.
+
+| Step | Script | Run as | What it does |
+|---|---|---|---|
+| 0 | `archInstall.sh` | root, Arch ISO | Wipes one disk and sets up ESP + `/boot` + LUKS2 with Btrfs (`@`, `@home`, `@snapshots`). Installs the base system, GRUB, user, locale/keymap, zram; optional Wake-on-LAN, Wi-Fi carry-over and a desktop. |
+| 1 | `setupAfterInstall.sh` | root, first boot | Snapper + snap-pac + grub-btrfs, GRUB and Plymouth themes, os-prober for dual boot, and **bootable read-write snapshots** with matching kernels (pick one in GRUB after a bad update). |
+| 1.5 | `installDE.sh` | root | GNOME, KDE Plasma or XFCE (full/minimal) with GPU drivers, PipeWire, Bluetooth, dark theme, icon and cursor themes. |
+| 2 | `installApps.sh` | normal user | Builds `yay`, installs a base app set, then per-package checklists: optional (LACT, CoolerControl, sudo fingerprint, office suites), work, printer/scanner, office/fonts, multimedia, system maintenance (firmware, NTFS, SSD TRIM, optional `ufw` firewall) and a free-text box. Services, PAM, mDNS and firewall ports are touched only for what you picked. |
+| - | `arch-manager.sh`, `lib.sh` | - | Optional menu that downloads and runs the scripts; shared dialog helpers (sourced, never run). |
+
+**Quick start** (on the Arch ISO, network up):
+
+```bash
+curl -O https://raw.githubusercontent.com/sveto8/archInstall/main/arch-manager.sh
+chmod +x arch-manager.sh && ./arch-manager.sh
+```
+
+**Order:** 0 → reboot → 1 and 1.5 (either order) → 2. Layout: `/efi` (FAT32), `/boot` (ext4),
+LUKS2 → Btrfs; only `/` is snapshotted, `/home` is not.
+
+**Safety:** nothing on disk changes before the typed `WIPE` (script 0) or the summary
+confirmation (others). Edited system files get a backup, scripts can be re-run, and long
+texts or lists scroll instead of being cut off. Hobby project, tested only on my own
+machines (AMD desktop, Intel laptop) -- try it in a VM first.
+
+---
+
+## Detailed documentation
+
+Contents: [Getting the scripts](#getting-the-scripts-onto-the-arch-iso) ·
+[1. archInstall](#1-archinstallsh--from-the-arch-iso) ·
+[2. setupAfterInstall](#2-setupafterinstallsh--after-first-boot-as-root) ·
+[3. installDE](#3-installdesh--on-the-installed-system-as-root) ·
+[4. installApps](#4-installappssh--at-the-desktop-as-your-regular-user) ·
+[arch-manager](#arch-managersh--optional-dialog-menu) ·
+[Booting a snapshot](#booting-a-snapshot-after-a-bad-update) ·
+[Themes](#grub-themes) · [lib.sh](#libsh--shared-helpers) · [Notes](#notes)
+
 Four scripts that together take a machine from an Arch ISO boot to a
 fully configured, encrypted, snapshotted Arch install with GRUB (+
 theme), grub-btrfs, Snapper, a Plymouth boot theme, a desktop
@@ -491,103 +531,98 @@ cancels (nothing is installed on cancel).
    syntax error can never leave sudo broken. The drop-in is removed on every normal exit
    path (success, error, Ctrl+C); only a `kill -9` would leave it behind
    (then delete it by hand). Installs `dialog` itself if it's missing
-2. **Optional packages checklist** — defaults shown below (Enter
-   without touching anything gives you these):
+2. **Package checklists** — six `dialog` checklists, each a list of
+   *individual packages* (no all-or-nothing bundles). The tag of every row is
+   the package name, so what you tick is exactly what gets installed. `SPACE`
+   toggles a row; a list longer than the screen scrolls with
+   `UP`/`DOWN`/`PgUp`/`PgDn`, and the box widens up to the terminal width
+   because dialog clips a too-wide row instead of wrapping it. In order:
 
-   | Item | Package(s) | Default |
-   |------|-----------|---------|
-   | Lact (AMD GPU control/overclock) | `lact` (repo) | **on** only if an AMD GPU is detected, otherwise off |
-   | CoolerControl (fan/cooling control) | `coolercontrol-bin` (AUR) | **on** on a desktop, **off** on a laptop (battery / DMI chassis type) |
-   | Nautilus "Open as Administrator" | `nautilus-admin-gtk4` (AUR) | **on** — only listed if GNOME is detected |
-   | LibreOffice | `libreoffice-still` (repo) | off |
-   | Fingerprint for sudo | PAM line `pam_fprintd.so timeout=3` in `/etc/pam.d/sudo` (official `fprintd` module, no AUR) | **on** on a laptop, **off** on a desktop |
-   | WPS Office | `wps-office` + `ttf-wps-fonts` (AUR) | off |
-   | OnlyOffice | `onlyoffice-bin` (AUR) | off |
+   | Dialog | Rows | Defaults |
+   |--------|------|----------|
+   | Optional packages | `lact`, `coolercontrol-bin`, fingerprint for sudo, `nautilus-admin-gtk4` (listed only on GNOME), `libreoffice-still`, `wps-office` + fonts, `onlyoffice-bin` | LACT **on** with an AMD GPU; CoolerControl **on** on a desktop; fingerprint **on** on a laptop; Nautilus **on**; office suites off |
+   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-community-edition`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin`, `snx-rs` | all **off** |
+   | Printer and scanner | `hplip`, `cups`, `system-config-printer`, `python-pyqt5`, `avahi`, `nss-mdns`, `cups-pdf`, `simple-scan` | all **on** |
+   | Office and fonts | `hunspell-hr`, `libreoffice-still-hr`, `ttf-liberation`, `noto-fonts-emoji`, `ttf-jetbrains-mono-nerd`, `ttf-ms-fonts` | all **on** |
+   | Multimedia and utilities | `vlc`, `mpv`, `ffmpeg`, `flatpak`, `fastfetch`, `ncdu`, `localsend-bin`, `gnome-shell-extension-gsconnect` | all **on** |
+   | System maintenance | `fwupd`, `ntfs-3g`, `fstrim.timer` (a systemd unit, not a package), `ufw`, `gufw` | first three **on**; `ufw`/`gufw` off |
 
-3. **Work programs** yes/no box — defaults to **No**. The box lists the
-   exact packages so you know what you're agreeing to: `jdk11-openjdk`,
-   `meld`, `code` (open-source VS Code build), `remmina`,
-   `dbeaver` and `intellij-idea-community-edition` from the repos (the official `extra`
-   package; it may pull in a newer JDK as a dependency, which is harmless
-   because the work JDK is set as the default afterwards), plus `postman-bin`,
-   `f5vpn-ng`
-   (F5 BIG-IP APM VPN client — can occasionally need a library fix after
-   a libxml2/webkit2gtk update), `ferdium-bin`, `snx-rs` (Check Point
-   VPN client, slow Rust build) from AUR — useful for splitting a
-   personal machine from a work machine without editing the script
-4. **Printer and scanner** yes/no box — defaults to **Yes**. Lists its
-   packages one per line: `hplip`, `cups`, `system-config-printer`,
-   `python-pyqt5` (needed by `hp-setup`'s GUI), `avahi` + `nss-mdns`
-   (network printer discovery, `.local` name resolution), `cups-pdf` (print
-   to PDF) and `simple-scan` (pulls in `sane`). Answering No installs none
-   of them and skips the printing services below
-5. **Office and fonts** yes/no box — defaults to **Yes**: `hunspell-hr`,
-   `libreoffice-still-hr` (pulls in `libreoffice-still` as a dependency),
-   `ttf-liberation`, `noto-fonts-emoji`, `ttf-jetbrains-mono-nerd` from the
-   repos and `ttf-ms-fonts` from AUR. Independent of the LibreOffice / WPS /
-   OnlyOffice checklist items above
-6. **Multimedia and utilities** yes/no box — defaults to **Yes**: `vlc`,
-   `mpv`, `ffmpeg`, `flatpak`, `fastfetch`, `ncdu` from the repos and
-   `localsend-bin` from AUR (the prebuilt package; the source package
-   `localsend` needs `flutter-engine` and is slow and fragile to build)
-7. **System maintenance** yes/no box — defaults to **Yes**: `fwupd` and
-   `ntfs-3g`; also enables the weekly SSD TRIM timer (`fstrim.timer`, a
-   systemd unit rather than a package)
-8. **Extra packages** input box (space-separated, blank to skip) —
+   The *Fingerprint for sudo* row is not a package but the PAM line
+   `pam_fprintd.so timeout=3` in `/etc/pam.d/sudo` (official `fprintd` module,
+   no AUR); it also installs `fprintd`. A one-line-per-package list with
+   sources and descriptions is in the [package overview](#installappssh--package-overview).
+3. **Extra packages** input box (space-separated, blank to skip) —
    official-repo and AUR names both work. Only plain package names are
    accepted; anything starting with `-` (which pacman/yay would treat as
    an option, e.g. `--overwrite`) is ignored with a message; ESC aborts, as in every other dialog
-9. **Confirmation** box showing the final repo / AUR / extra lists;
-   answering No (or `ESC`) at any dialog above aborts cleanly
-10. Installs unattended, with live output in a dialog box (also saved to
+4. **Confirmation** — duplicates are removed first (an extra package that was
+   already ticked above is dropped). The box shows the final repo / AUR /
+   extra lists with their counts and a **System changes** section listing
+   everything that is not a package: services to enable, the
+   `/etc/nsswitch.conf` and `/etc/pam.d/sudo` edits, the firewall. If the text
+   is taller than the screen it is shown in a scrollable box first and a short
+   yes/no question follows (a plain yes/no box cannot scroll, so its buttons
+   would be pushed off the screen). Answering No (or `ESC`) at any dialog
+   above aborts cleanly
+5. Installs unattended, with live output in a dialog box (also saved to
    `~/installApps.log`):
    - bootstraps `yay` if missing (`base-devel` + `git` via `pacman`, then
      `yay` itself built from AUR with `makepkg`). If that build fails the
      run **continues** with the official-repo packages; the AUR packages
      are then listed as FAILED ("yay is not available") instead of the
      whole run stopping
-   - always-installed base set — **Repo:** `fprintd` + `imagemagick`
-     (fingerprint support, see the note below), `terminator`, `guake`,
-     `qmmp`, `kolourpaint`, `mission-center`, `stow`, `eza`, `peazip`
-     (printer support is no longer part of the base set — it is the
-     optional *Printer and scanner* group); **AUR:**
+   - always-installed base set — **Repo:** `terminator`, `guake`, `qmmp`,
+     `kolourpaint`, `mission-center`, `stow`, `eza`, `peazip`; **AUR:**
      `google-chrome`, `sublime-text-4`. Every entry in the package arrays
      at the top of the script carries a short inline comment saying what it
      is for
    - then whatever you picked above
-11. Every package — list-defined or typed in — is checked with
+6. Every package — list-defined or typed in — is checked with
    `pacman -Si` / `yay -Si` before install; unknown/typo'd names are
-   skipped with a warning instead of aborting the whole run. A package
-   listed as "repo" that is no longer in the official repos (packages do
-   move between the two: `peazip` is in `extra` now but used to be AUR-only)
-   is handed to `yay` instead of being skipped. Genuine
-   install failures (found, but errored) are collected and reported,
+   skipped with a warning instead of aborting the whole run. Which list a
+   package sits in does not matter: a name in the "repo" list that is only in
+   the AUR goes to `yay`, and a name in the "AUR" list that is in the
+   official repos goes to plain `pacman` (so it no longer needs `yay`).
+   Genuine install failures (found, but errored) are collected and reported,
    not fatal to the rest of the run
-12. Sets the work JDK as the default JVM (`archlinux-java set`) if it was
-   installed (part of the work bundle) — the package and its
-   `archlinux-java` name are the two variables `JAVA_PKG` / `JAVA_ENV` at
-   the top of the script (default `jdk11-openjdk` / `java-11-openjdk`),
-   enables the root daemons behind the GUIs if they were installed:
-   `lactd.service` (LACT) and `coolercontrold.service` (CoolerControl) —
-   the packages install them but don't start them. If the *Printer and
-   scanner* group was chosen it also enables `cups.service` and
-   `avahi-daemon.service` and adds `mdns_minimal [NOTFOUND=return]` to the
-   `hosts:` line of `/etc/nsswitch.conf` (before `resolve`/`dns`; without it
-   `nss-mdns` does nothing). The edit is made on a temp copy, verified, and
-   the original is kept as `/etc/nsswitch.conf.bak-mdns`. If the
-   *System maintenance* group was chosen, `fstrim.timer` is enabled too
-13. Final summary dialog: what was skipped/failed, and manual next steps
-   — each hint is shown only if the matching group/package was selected:
-   `hp-setup` for the actual printer and an mDNS note (if you also run
-   `systemd-resolved` with its own mDNS, disable one of the two), adding the
-   Flathub remote for `flatpak`, `fwupdmgr refresh && fwupdmgr get-updates`
-   for `fwupd`, opening port 53317 for LocalSend, the `snx-rs` build time
-   and `f5vpn-ng` library fixes
+7. Post-install steps, each shown in the progress window and each done only
+   for what was actually installed:
+   - sets the work JDK as the default JVM (`archlinux-java set`) — the
+     package and its `archlinux-java` name are the two variables `JAVA_PKG` /
+     `JAVA_ENV` at the top of the script (default `jdk11-openjdk` /
+     `java-11-openjdk`)
+   - **printing:** enables `cups.service` and `avahi-daemon.service`; adds
+     `mdns_minimal [NOTFOUND=return]` to the `hosts:` line of
+     `/etc/nsswitch.conf` (before `resolve`/`dns`) only when **both**
+     `nss-mdns` and `avahi` are installed — the edit is made on a temp copy,
+     verified, and the original is kept as `/etc/nsswitch.conf.bak-mdns`
+   - **hardware daemons:** `lactd.service` (LACT) and `coolercontrold.service`
+     (CoolerControl) — the packages install them but don't start them
+   - **sudo fingerprint:** the PAM line described below (backup `.bak-fprint`)
+   - **SSD TRIM:** `fstrim.timer`, if ticked
+   - **firewall (only if `ufw` or `gufw` was ticked):** installs `ufw`, sets
+     `deny incoming` / `allow outgoing`, allows `22/tcp` first when an SSH
+     server is running (so enabling the firewall cannot lock out a remote
+     session), runs `ufw enable` **and enables `ufw.service`** (`ufw enable`
+     alone only loads the rules for the running system; without the unit the
+     firewall would be gone after the next boot). Ports are then opened only
+     for packages that really got installed: GSConnect 1714-1764 tcp/udp,
+     LocalSend 53317 tcp/udp. Printing needs no rule (CUPS listens on
+     localhost only; mDNS discovery is accepted by the default ufw/firewalld
+     rules). If `ufw` (or `firewalld`) is already active its default
+     policies are left alone and only port rules are added; raw
+     nftables/iptables rules are never touched
+8. Final summary dialog (scrollable when long): what was skipped/failed, the
+   firewall state, and manual next steps — each hint appears only if the
+   matching package was selected: `hp-setup` for the actual printer, an mDNS
+   note (if you also run `systemd-resolved` with its own mDNS, disable one of
+   the two), adding the Flathub remote for `flatpak`,
+   `fwupdmgr refresh && fwupdmgr get-updates` for `fwupd`, enabling the
+   GSConnect extension, the `snx-rs` build time and `f5vpn-ng` library fixes
 
-**Fingerprint reader note:** `fprintd` and `imagemagick` are in the
-always-installed set, so they also land on a desktop that has no reader
-(harmless, just unused). The optional checklist item *Fingerprint for sudo*
-adds `auth sufficient pam_fprintd.so timeout=3` right under the
+**Fingerprint reader note:** `fprintd` is installed only together with the optional
+*Fingerprint for sudo* item (it is not in the base set, so a machine without a
+reader never gets it). The item adds `auth sufficient pam_fprintd.so timeout=3` right under the
 `#%PAM-1.0` header of `/etc/pam.d/sudo` (once only; the original is kept as
 `/etc/pam.d/sudo.bak-fprint`; `FPRINT_TIMEOUT` at the top of the script
 changes the 3 s). `sudo` then waits for a fingerprint for 3 seconds and
@@ -612,18 +647,16 @@ the dialogs every time.
 
 ### `installApps.sh` — package overview
 
-One row per package, grouped the way the dialogs ask for them (the same
-lists are shown inside each dialog). This is a snapshot of the arrays at
-the top of `installApps.sh`; if you change them there, update this table.
-Packages the script installs without asking: `base-devel`, `git` and `yay`
-(the build tools it needs itself).
+One row per package, grouped like the dialogs. Generated from the arrays and
+checklists in `installApps.sh` (also saved as `packages.md`); if you change them
+there, update this table. *Source* is where the package is expected — the script
+installs it from wherever it is actually found. `base-devel`, `git` and `yay` are
+installed without asking (the build tools the script itself needs).
 
 #### Base packages (always installed)
 
 | Package | Source | Description |
 |---|---|---|
-| fprintd | pacman | fingerprint daemon (login, sudo, polkit) - laptop only |
-| imagemagick | pacman | image conversion tools; listed with fprintd on the Arch wiki |
 | terminator | pacman | terminal emulator with split panes |
 | guake | pacman | drop-down terminal (toggle with F12) |
 | qmmp | pacman | lightweight audio player (Winamp-style) |
@@ -635,77 +668,79 @@ Packages the script installs without asking: `base-devel`, `git` and `yay`
 | google-chrome | AUR | Google Chrome web browser |
 | sublime-text-4 | AUR | Sublime Text 4 editor |
 
-#### Work programs (optional)
+#### Optional packages (checklist)
 
-| Package | Source | Description |
-|---|---|---|
-| jdk11-openjdk | pacman | work JDK (set as the default JVM afterwards) |
-| meld | pacman | visual diff and merge tool |
-| code | pacman | open-source VS Code |
-| remmina | pacman | remote desktop client (RDP, VNC, SSH) |
-| intellij-idea-community-edition | pacman | IntelliJ IDEA Community (official repo, extra) |
-| dbeaver | pacman | universal database client |
-| postman-bin | AUR | Postman API client (AUR) |
-| f5vpn-ng | AUR | F5 VPN client |
-| ferdium-bin | AUR | Ferdium messaging client |
-| snx-rs | AUR | VPN |
+| Package | Source | Default | Description |
+|---|---|---|---|
+| lact | pacman | on with an AMD GPU | Lact - AMD GPU control/overclock |
+| coolercontrol-bin | AUR | on on a desktop, off on a laptop | CoolerControl - fan/cooling control |
+| fprintd + sudo PAM line | pacman | on on a laptop, off on a desktop | Fingerprint for sudo: PAM line, 3 s timeout, then password |
+| nautilus-admin-gtk4 | AUR | on (offered only on GNOME) | Nautilus 'Open as Administrator' |
+| libreoffice-still | pacman | off | LibreOffice still |
+| wps-office + ttf-wps-fonts | AUR | off | WPS Office + fonts |
+| onlyoffice-bin | AUR | off | OnlyOffice |
 
-#### Printer and scanner (optional)
+#### Work programs (checklist)
 
-| Package | Source | Description |
-|---|---|---|
-| hplip | pacman | HP printer support |
-| cups | pacman | printing system |
-| system-config-printer | pacman | GUI printer management |
-| python-pyqt5 | pacman | for hp-setup's GUI |
-| avahi | pacman | mDNS/DNS-SD daemon (network printer discovery) |
-| nss-mdns | pacman | resolve .local hostnames via avahi |
-| cups-pdf | pacman | virtual printer: print to PDF |
-| simple-scan | pacman | simple scanning GUI (pulls in sane) |
+| Package | Source | Default | Description |
+|---|---|---|---|
+| jdk11-openjdk | pacman | off | work JDK, becomes the default java |
+| meld | pacman | off | visual diff and merge tool |
+| code | pacman | off | open-source VS Code |
+| remmina | pacman | off | remote desktop client RDP/VNC/SSH |
+| intellij-idea-community-edition | pacman | off | IntelliJ IDEA Community Edition |
+| dbeaver | pacman | off | universal database client |
+| postman-bin | AUR | off | Postman API client |
+| f5vpn-ng | AUR | off | F5 VPN client |
+| ferdium-bin | AUR | off | Ferdium messaging client |
+| snx-rs | AUR | off | Check Point VPN client |
 
-#### Office and fonts (optional)
+#### Printer and scanner (checklist)
 
-| Package | Source | Description |
-|---|---|---|
-| hunspell-hr | pacman | Croatian spellcheck dictionary |
-| libreoffice-still-hr | pacman | Croatian LibreOffice UI (pulls in libreoffice-still) |
-| ttf-liberation | pacman | metric-compatible Arial/Times/Courier replacements |
-| noto-fonts-emoji | pacman | emoji font |
-| ttf-jetbrains-mono-nerd | pacman | monospace font with icons for terminal and IDE |
-| ttf-ms-fonts | AUR | Microsoft core fonts (Arial, Times New Roman, ...) |
+| Package | Source | Default | Description |
+|---|---|---|---|
+| hplip | pacman | on | HP printer support |
+| cups | pacman | on | printing system |
+| system-config-printer | pacman | on | GUI printer management |
+| python-pyqt5 | pacman | on | Python Qt5 bindings, needed by hp-setup GUI |
+| avahi | pacman | on | mDNS/DNS-SD daemon for network printer discovery |
+| nss-mdns | pacman | on | resolve .local hostnames via Avahi |
+| cups-pdf | pacman | on | virtual printer: print to PDF |
+| simple-scan | pacman | on | simple scanning GUI |
 
-#### Multimedia and utilities (optional)
+#### Office and fonts (checklist)
 
-| Package | Source | Description |
-|---|---|---|
-| vlc | pacman | video player |
-| mpv | pacman | lightweight video player |
-| ffmpeg | pacman | audio/video conversion tools |
-| flatpak | pacman | Flatpak runtime and CLI |
-| fastfetch | pacman | system info in the terminal |
-| ncdu | pacman | disk usage analyzer (ncurses) |
-| localsend-bin | AUR | AirDrop-like file transfer (prebuilt; the source build needs flutter-engine) |
+| Package | Source | Default | Description |
+|---|---|---|---|
+| hunspell-hr | pacman | on | Croatian spellcheck dictionary |
+| libreoffice-still-hr | pacman | on | Croatian LibreOffice UI, pulls libreoffice-still |
+| ttf-liberation | pacman | on | metric-compatible Arial/Times/Courier |
+| noto-fonts-emoji | pacman | on | emoji font |
+| ttf-jetbrains-mono-nerd | pacman | on | monospace font with icons |
+| ttf-ms-fonts | AUR | on | Microsoft core fonts Arial/Times/... |
 
-#### System maintenance (optional)
+#### Multimedia and utilities (checklist)
 
-| Package | Source | Description |
-|---|---|---|
-| fwupd | pacman | firmware updates (LVFS) |
-| ntfs-3g | pacman | read/write NTFS (Windows partitions) |
+| Package | Source | Default | Description |
+|---|---|---|---|
+| vlc | pacman | on | video player |
+| mpv | pacman | on | lightweight video player |
+| ffmpeg | pacman | on | audio/video conversion tools |
+| flatpak | pacman | on | Flatpak runtime and CLI |
+| fastfetch | pacman | on | system info in the terminal |
+| ncdu | pacman | on | disk usage analyzer, ncurses |
+| localsend-bin | AUR | on | AirDrop-like file transfer |
+| gnome-shell-extension-gsconnect | pacman or AUR | on | GSConnect, phone integration for GNOME Shell |
 
-#### Checklist items (optional, "Optional packages" dialog)
+#### System maintenance (checklist)
 
-| Package | Source | Description |
-|---|---|---|
-| lact | pacman | AMD GPU control/overclock |
-| coolercontrol-bin | AUR | fan/cooling control |
-| fprint-pam | - | sudo fingerprint via PAM (no extra package) |
-| nautilus-admin-gtk4 | AUR | Nautilus "Open as Administrator" (GNOME only) |
-| libreoffice-still | pacman | LibreOffice |
-| wps-office, ttf-wps-fonts | AUR | WPS Office + fonts |
-| onlyoffice-bin | AUR | OnlyOffice |
-
-Not packages, but enabled by the script: cups, avahi-daemon (printer group), fstrim.timer (system group), lactd, coolercontrold.
+| Package | Source | Default | Description |
+|---|---|---|---|
+| fwupd | pacman | on | firmware updates via LVFS |
+| ntfs-3g | pacman | on | read/write NTFS Windows partitions |
+| fstrim.timer | systemd unit | on | weekly SSD TRIM (systemd unit, not a package) |
+| ufw | pacman | off | Uncomplicated Firewall, command-line only |
+| gufw | pacman | off | Graphical frontend for ufw, includes ufw |
 
 ### `arch-manager.sh` — optional dialog menu
 
@@ -961,6 +996,13 @@ Sourced by all five scripts so the dialog code lives in one place:
   at once** (no scrolling for a handful of disks) and the list only scrolls
   when it truly doesn't fit the terminal. (Passing `0 0 0` to dialog does
   *not* do this — it showed a large box with a single visible row.)
+- Text sizing and scrolling: `_text_lines` counts the lines of the text
+  *after word wrapping* (a `ceil(length / width)` estimate undercounts and the
+  last lines get cut off). `msg_box` and `ask_yes` use it: text that fits is
+  shown in a plain box, text that does not fit goes to a scrollable `--textbox`
+  (`UP`/`DOWN`/`PgUp`/`PgDn`), and `ask_yes` then asks a short yes/no question,
+  because a `--yesno` box cannot scroll and its buttons would fall off the
+  screen
 - `ui_init`, `dlg_capture`, `abort`, `ask_yes`, `msg_box` (never fails,
   so an ESC can't kill a `set -e` script), `ask_text`, `ask_password`
   (asks twice, loops until they match)
@@ -1013,8 +1055,10 @@ can run in either order.
   (a typed `WIPE`, deliberately kept — a typed word is a better failsafe
   than a default-Enter Yes/No). `setupAfterInstall.sh` and `installDE.sh`
   show a summary and ask before installing/changing anything.
-  `installApps.sh` doesn't touch disks/boot config at all, so it only
-  shows a confirmation dialog with the package list.
+  `installApps.sh` doesn't touch disks or the boot config; what it
+  changes besides packages (services, `/etc/pam.d/sudo`,
+  `/etc/nsswitch.conf`, the firewall) is listed in the confirmation dialog
+  under *System changes*, and only happens for the items you ticked.
 - All four scripts back up what they change (where relevant) and are
   safe to re-read before running (`bash -n script.sh` for a
   syntax-only check).
@@ -1138,14 +1182,23 @@ Fixed in the scripts:
   *Fingerprint for sudo* PAM step (3 s timeout, backup of the PAM file,
   laptop default on) and an explanatory comment to every entry of the
   package arrays.
-- `installApps.sh` (later pass) — printer support moved out of the base set
-  into an optional *Printer and scanner* group (adds `avahi`, `nss-mdns`,
-  `cups-pdf`, `simple-scan`; CUPS/Avahi are only enabled when chosen; the
-  `nss-mdns` entry in `/etc/nsswitch.conf` is added with a backup); new
-  yes/no groups *Office and fonts*, *Multimedia and utilities* and *System
-  maintenance* (incl. `fstrim.timer`); `dbeaver` added to the work programs;
-  final summary hints are shown only for what was actually selected.
-- `lib.sh` — `WARN_FILE` / `load_warn_file` (see above).
+- `installApps.sh` (later passes) — printer support moved out of the base set
+  into optional groups; every group (optional, work, printer, office/fonts,
+  multimedia, system) is now a per-package checklist that widens to the
+  longest row and scrolls; `dbeaver`, GSConnect, LocalSend, `ufw`/`gufw` and
+  more were added. Fixes: **`ufw.service` is now enabled** (the firewall
+  used to vanish after a reboot); SSH is allowed before the firewall is
+  enabled; the CUPS port rules were dropped (CUPS listens on localhost, mDNS
+  is covered by the default rules) and the mDNS edit needs `avahi` as well as
+  `nss-mdns`; a stale `99-installer-timestamp` sudoers drop-in from a killed
+  run is now removed (it used to stay and keep passwordless sudo active);
+  `JAVA_PKG` is used as the checklist tag (changing it no longer breaks the
+  mapping); duplicate packages are removed; names in the "AUR" list that
+  are in the official repos go through pacman; the confirmation lists
+  *System changes*; the progress tree shows the step that is really running.
+- `lib.sh` — `WARN_FILE` / `load_warn_file` (see above); `_text_lines` counts
+  wrapped lines, `msg_box` / `ask_yes` scroll tall texts instead of cutting
+  them off (a tall confirmation used to push the Yes/No buttons off the screen).
 - `arch-manager.sh` — reviewed, no changes needed.
 
 All six scripts pass `bash -n` and `shellcheck`.
