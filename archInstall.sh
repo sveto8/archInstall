@@ -36,7 +36,7 @@ ESP_SIZE="1GiB"
 BOOT_SIZE="4GiB"                # rest of the disk goes to the LUKS/Btrfs partition
 # Defaults only -- hostname, timezone and keymap are confirmed/changed in
 # dialogs below (a different hostname per machine, e.g. laptop vs desktop).
-NEW_HOSTNAME="monarch"
+NEW_HOSTNAME="blackbox"
 TIMEZONE="Europe/Zagreb"
 LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
 LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated (the primary one is always included)
