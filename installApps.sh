@@ -24,6 +24,7 @@ set -o errtrace
 # package (or unit) name -- no bundle prefix.
 # ============================================================
 
+# shellcheck disable=SC2034  # read by dlg() in lib.sh
 BACKTITLE="Arch Linux: application install"
 
 # Log location: prefer the script's own directory when it is writable,
@@ -156,7 +157,11 @@ if [[ ! -e "$SUDOERS_DROPIN" ]]; then
     fi
     rm -f "$_dropin_tmp"
 else
-    info "Existing sudoers drop-in found at $SUDOERS_DROPIN."
+    # Left behind by a run that was killed (kill -9, power loss). Leaving it
+    # would keep passwordless sudo active for good, so this run adopts it and
+    # removes it on exit like one of its own.
+    SUDOERS_DROPIN_CREATED=1
+    info "Stale sudoers drop-in found at $SUDOERS_DROPIN -- it will be removed on exit."
 fi
 
 # --- no keepalive needed: NOPASSWD means every subsequent sudo call
@@ -171,6 +176,49 @@ FW_STATUS_FILE="$(mktemp)"
 # ---------------- DIALOG SETUP ----------------
 
 ui_init
+
+# ---------------- DIALOG HELPERS ----------------
+
+# checklist_pick <title> <intro text> <tag> <description> <on|off> ...
+#
+# Wrapper around dlg_capture --checklist used by every package checklist
+# below. It widens the box to fit the longest "tag + description" row,
+# because dialog CLIPS a row that is too wide instead of wrapping it (a
+# 31-character package name plus a 50-character description does not fit the
+# default 80-column box), capped at the terminal width. It also adds the key
+# help line. dlg() sizes the list height itself: when there are more rows
+# than the terminal can show, the list scrolls with UP/DOWN and PgUp/PgDn.
+# Prints the selected tags, one per line; returns non-zero on ESC/Cancel.
+checklist_pick() {
+    local title="$1" intro="$2" w maxt=0 maxd=0 i
+    shift 2
+    local -a items=("$@")
+    for ((i = 0; i + 2 < ${#items[@]}; i += 3)); do
+        if (( ${#items[i]} > maxt )); then maxt=${#items[i]}; fi
+        if (( ${#items[i+1]} > maxd )); then maxd=${#items[i+1]}; fi
+    done
+    w=$(( maxt + maxd + 14 ))
+    if (( w < BOX_W )); then w=$BOX_W; fi
+    if (( w > TERM_COLS - 4 )); then w=$(( TERM_COLS - 4 )); fi
+    dlg_capture --title "$title" --separate-output \
+        --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel. UP/DOWN scrolls a long list.\n\n${intro}" \
+        0 "$w" 0 "${items[@]}"
+}
+
+# dedupe_array <array name>  -- removes duplicates, keeps the first occurrence.
+dedupe_array() {
+    local -n _ref="$1"
+    local -A _seen=()
+    local -a _out=()
+    local _e
+    for _e in "${_ref[@]}"; do
+        if [[ -z "${_seen[$_e]:-}" ]]; then
+            _seen[$_e]=1
+            _out+=("$_e")
+        fi
+    done
+    _ref=("${_out[@]}")
+}
 
 # ---------------- PACKAGE LISTS ----------------
 #
@@ -259,8 +307,8 @@ if is_laptop; then COOLER_STATE="off"; COOLER_NOTE=" -- laptop detected"; fi
 FPRINT_STATE="off"; FPRINT_NOTE=" -- no laptop detected"
 if is_laptop; then FPRINT_STATE="on"; FPRINT_NOTE=""; fi
 
-CHOICES="$(dlg_capture --title "Optional packages" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel." 0 "$BOX_W" 0 \
+CHOICES="$(checklist_pick "Optional packages" \
+    "Defaults depend on the detected hardware. Office suites are OFF." \
     lact                "Lact - AMD GPU control/overclock (pacman)${LACT_NOTE}" "$LACT_STATE" \
     coolercontrol-bin   "CoolerControl - fan/cooling control (AUR)${COOLER_NOTE}" "$COOLER_STATE" \
     fprint-pam          "Fingerprint for sudo - PAM, ${FPRINT_TIMEOUT}s timeout, then password${FPRINT_NOTE}" "$FPRINT_STATE" \
@@ -293,9 +341,9 @@ fi
 # into each tool they need. The tag of each entry is the package name
 # itself, so the case statement below is a plain name-for-name match.
 
-WORK_CHOICES="$(dlg_capture --title "Work programs" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nEverything here is OFF by default. Enable only the tools you need.\n\nOfficial repos (pacman) and AUR (yay) both listed." 0 "$BOX_W" 0 \
-    jdk11-openjdk                    "Java Development Kit 11 (pacman)" off \
+WORK_CHOICES="$(checklist_pick "Work programs" \
+    "Everything here is OFF by default. Enable only the tools you need.\n\nOfficial repos (pacman) and AUR (yay) both listed." \
+    "$JAVA_PKG"                      "work JDK, becomes the default java (pacman)" off \
     meld                             "visual diff and merge tool (pacman)" off \
     code                             "open-source VS Code (pacman)" off \
     remmina                          "remote desktop client RDP/VNC/SSH (pacman)" off \
@@ -308,7 +356,7 @@ WORK_CHOICES="$(dlg_capture --title "Work programs" --separate-output \
 
 while IFS= read -r tag; do
     case "$tag" in
-        jdk11-openjdk)                    REPO_PACKAGES+=("$JAVA_PKG") ;;
+        "$JAVA_PKG")                      REPO_PACKAGES+=("$JAVA_PKG") ;;
         meld)                             REPO_PACKAGES+=(meld) ;;
         code)                             REPO_PACKAGES+=(code) ;;
         remmina)                          REPO_PACKAGES+=(remmina) ;;
@@ -328,8 +376,8 @@ done <<< "$WORK_CHOICES"
 # enabled later ONLY for the packages the user actually selected --
 # deselecting e.g. cups means the printer service is not started.
 
-PRINTER_CHOICES="$(dlg_capture --title "Printer and scanner" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default. Services (CUPS, Avahi, nss-mdns) are enabled only for the packages you keep selected." 0 "$BOX_W" 0 \
+PRINTER_CHOICES="$(checklist_pick "Printer and scanner" \
+    "All items ON by default. Services (CUPS, Avahi, nss-mdns) are enabled only for the packages you keep selected." \
     hplip                   "HP printer support (pacman)" on \
     cups                    "printing system (pacman)" on \
     system-config-printer   "GUI printer management (pacman)" on \
@@ -358,8 +406,8 @@ done <<< "$PRINTER_CHOICES"
 # bundle). Croatian spellcheck, Croatian LibreOffice UI, and a small
 # set of commonly wanted fonts.
 
-OFFICE_CHOICES="$(dlg_capture --title "Office and fonts" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
+OFFICE_CHOICES="$(checklist_pick "Office and fonts" \
+    "All items ON by default." \
     hunspell-hr                "Croatian spellcheck dictionary (pacman)" on \
     libreoffice-still-hr       "Croatian LibreOffice UI, pulls libreoffice-still (pacman)" on \
     ttf-liberation             "metric-compatible Arial/Times/Courier (pacman)" on \
@@ -386,8 +434,8 @@ done <<< "$OFFICE_CHOICES"
 # unconditionally -- harmless if selected on a non-GNOME desktop, the
 # package is small and does nothing on its own.
 
-MEDIA_CHOICES="$(dlg_capture --title "Multimedia and utilities" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nAll items ON by default." 0 "$BOX_W" 0 \
+MEDIA_CHOICES="$(checklist_pick "Multimedia and utilities" \
+    "All items ON by default." \
     vlc             "video player (pacman)" on \
     mpv             "lightweight video player (pacman)" on \
     ffmpeg          "audio/video conversion tools (pacman)" on \
@@ -395,7 +443,7 @@ MEDIA_CHOICES="$(dlg_capture --title "Multimedia and utilities" --separate-outpu
     fastfetch       "system info in the terminal (pacman)" on \
     ncdu            "disk usage analyzer, ncurses (pacman)" on \
     localsend-bin   "AirDrop-like file transfer (AUR)" on \
-    gnome-shell-extension-gsconnect "GSConnect - phone integration for GNOME Shell (AUR)" on)" || abort
+    gnome-shell-extension-gsconnect "GSConnect, phone integration for GNOME Shell (repo/AUR)" on)" || abort
 
 while IFS= read -r tag; do
     case "$tag" in
@@ -425,8 +473,8 @@ done <<< "$MEDIA_CHOICES"
 # depends on ufw, so picking gufw alone still installs ufw; picking both
 # installs both. The firewall logic below treats them identically.
 
-SYSTEM_CHOICES="$(dlg_capture --title "System maintenance" --separate-output \
-    --checklist "SPACE = toggle, ENTER = confirm, ESC = cancel.\n\nTop three items ON by default.\n\nSelecting ufw OR gufw will also ENABLE the firewall (deny incoming, allow outgoing) and open ports for the services you picked in the other lists." 0 "$BOX_W" 0 \
+SYSTEM_CHOICES="$(checklist_pick "System maintenance" \
+    "Top three items ON by default.\n\nSelecting ufw OR gufw will also ENABLE the firewall (deny incoming, allow outgoing) and open ports for the services you picked in the other lists." \
     fwupd         "firmware updates via LVFS (pacman)" on \
     ntfs-3g       "read/write NTFS Windows partitions (pacman)" on \
     fstrim.timer  "weekly SSD TRIM (systemd unit, not a package)" on \
@@ -467,7 +515,41 @@ fi
 
 # ---------------- DIALOG: CONFIRMATION ----------------
 
-SUMMARY="Repo (pacman):\n  ${REPO_PACKAGES[*]}\n\nAUR (yay):\n  ${AUR_PACKAGES[*]}\n\nExtra:\n  ${EXTRA_PACKAGES[*]:-none}\n\nProceed with the installation?"
+# Remove duplicates (an extra package typed twice, or one already picked in a
+# checklist above) so nothing is counted or installed twice.
+dedupe_array REPO_PACKAGES
+dedupe_array AUR_PACKAGES
+dedupe_array EXTRA_PACKAGES
+_extra_new=()
+for _t in "${EXTRA_PACKAGES[@]}"; do
+    in_array "$_t" "${REPO_PACKAGES[@]}" "${AUR_PACKAGES[@]}" || _extra_new+=("$_t")
+done
+EXTRA_PACKAGES=("${_extra_new[@]}")
+
+# Besides packages, some choices change system files or services: list them
+# here so nothing happens that was not visible in the confirmation.
+_changes=""
+if in_array cups "${REPO_PACKAGES[@]}"; then
+    _changes+="  - enable cups.service\n"
+fi
+if in_array avahi "${REPO_PACKAGES[@]}"; then
+    _changes+="  - enable avahi-daemon.service\n"
+    if in_array nss-mdns "${REPO_PACKAGES[@]}"; then
+        _changes+="  - add mdns_minimal to /etc/nsswitch.conf (backup kept)\n"
+    fi
+fi
+if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
+    _changes+="  - add pam_fprintd to /etc/pam.d/sudo (backup kept)\n"
+fi
+if [[ "$ENABLE_FSTRIM" -eq 1 ]]; then
+    _changes+="  - enable fstrim.timer\n"
+fi
+if [[ "$ENABLE_UFW" -eq 1 ]]; then
+    _changes+="  - ENABLE the ufw firewall (deny incoming, allow outgoing)\n"
+fi
+if [[ -z "$_changes" ]]; then _changes="  - none\n"; fi
+
+SUMMARY="Repo (pacman, ${#REPO_PACKAGES[@]}):\n  ${REPO_PACKAGES[*]}\n\nAUR (yay, ${#AUR_PACKAGES[@]}):\n  ${AUR_PACKAGES[*]:-none}\n\nExtra (${#EXTRA_PACKAGES[@]}):\n  ${EXTRA_PACKAGES[*]:-none}\n\nSystem changes:\n${_changes}\nProceed with the installation?"
 
 ask_yes "Confirm" "$SUMMARY" yes || abort
 
@@ -512,6 +594,12 @@ install_repo() {
 
 install_aur() {
     local pkg="$1"
+    # Found in the official repos after all (it moved there from the AUR, or
+    # a list labels it wrongly): plain pacman is enough and needs no yay.
+    if pacman -Si "$pkg" >/dev/null 2>&1; then
+        install_repo "$pkg"
+        return 0
+    fi
     if ! command -v yay >/dev/null 2>&1; then
         warn "$pkg not installed -- yay is not available (see the yay build error in the log)."
         echo "$pkg" >> "$FAILED_FILE"
@@ -720,10 +808,15 @@ exec 1>>"$LOG_FILE"
     fi
 
     # ---- Phase 4: post-install tweaks ----
+    #
+    # Every step sets CUR_IDX and draws a frame first, so the phase tree always
+    # shows the step that is really running (also for steps that end up
+    # doing nothing because their packages were not selected).
     CUR_PHASE=4
     CUR_ITEMS=("Java default" "Printing services" "Hardware daemons" "Fingerprint PAM" "SSD TRIM timer" "Firewall / ports")
-    CUR_IDX=0
 
+    CUR_IDX=0
+    gauge_msg 99 "Checking the default Java..."
     if [[ -d "/usr/lib/jvm/${JAVA_ENV}" ]]; then
         if [[ "$(archlinux-java get 2>/dev/null)" != "$JAVA_ENV" ]]; then
             gauge_msg 99 "Setting ${JAVA_ENV} as the default JVM..."
@@ -731,7 +824,6 @@ exec 1>>"$LOG_FILE"
                 warn "Could not set default Java (sudo may have timed out)." >> "$log"
         fi
     fi
-    CUR_IDX=1
 
     # Printing: each service is enabled only if its PACKAGE was selected
     # in the printer checklist. This way deselecting cups means no
@@ -739,9 +831,12 @@ exec 1>>"$LOG_FILE"
     # avahi-daemon.service, and so on.
     #
     # nss-mdns does nothing until "mdns_minimal [NOTFOUND=return]" is in
-    # the hosts line of /etc/nsswitch.conf (it goes before resolve/dns).
-    # The edit is done on a temp copy, verified, and the original is kept
-    # as a .bak.
+    # the hosts line of /etc/nsswitch.conf (it goes before resolve/dns), and
+    # it needs the Avahi daemon, so the edit is made only when BOTH packages
+    # are installed. It is done on a temp copy, verified, and the original is
+    # kept as a .bak.
+    CUR_IDX=1
+    gauge_msg 99 "Enabling printing services (if selected)..."
     if pacman -Qq cups >/dev/null 2>&1; then
         gauge_msg 99 "Enabling CUPS (printing)..."
         sudo -n systemctl enable --now cups.service >> "$log" 2>&1 || \
@@ -751,7 +846,7 @@ exec 1>>"$LOG_FILE"
         sudo -n systemctl enable --now avahi-daemon.service >> "$log" 2>&1 || \
             warn "Could not enable avahi-daemon.service." >> "$log"
     fi
-    if pacman -Qq nss-mdns >/dev/null 2>&1 && [[ -f "$NSS_FILE" ]]; then
+    if pacman -Qq nss-mdns >/dev/null 2>&1 && pacman -Qq avahi >/dev/null 2>&1 && [[ -f "$NSS_FILE" ]]; then
         if grep -q 'mdns' "$NSS_FILE"; then
             echo "mdns already present in $NSS_FILE -- left unchanged." >> "$log"
         else
@@ -768,10 +863,10 @@ exec 1>>"$LOG_FILE"
             rm -f "$_nss_tmp"
         fi
     fi
-    CUR_IDX=2
 
     # LACT and CoolerControl are only GUIs: they talk to a root daemon that
     # the packages install but do not start.
+    CUR_IDX=2
     gauge_msg 99 "Enabling hardware daemons (LACT / CoolerControl)..."
     if pacman -Qq lact >/dev/null 2>&1 && unit_exists lactd.service; then
         sudo -n systemctl enable --now lactd.service >> "$log" 2>&1 || \
@@ -783,7 +878,6 @@ exec 1>>"$LOG_FILE"
                 warn "Could not enable coolercontrold.service." >> "$log"
         fi
     fi
-    CUR_IDX=3
 
     # Fingerprint for sudo. Only touched when the checklist item was chosen
     # AND fprintd really got installed. The pam_fprintd line goes right
@@ -792,6 +886,8 @@ exec 1>>"$LOG_FILE"
     # does not contain the line afterwards, the original is left alone.
     # Nothing is changed when no finger is enrolled: pam_fprintd then just
     # falls through to the password prompt.
+    CUR_IDX=3
+    gauge_msg 99 "Fingerprint for sudo (PAM)..."
     if [[ "$ENABLE_FPRINT_PAM" -eq 1 ]]; then
         gauge_msg 99 "Configuring fingerprint for sudo (PAM)..."
         if ! pacman -Qq fprintd >/dev/null 2>&1; then
@@ -817,17 +913,17 @@ exec 1>>"$LOG_FILE"
             rm -f "$_pam_tmp"
         fi
     fi
-    CUR_IDX=4
 
     # Weekly TRIM for SSD/NVMe drives (util-linux ships the unit). Only
     # enabled if the user kept the system-maintenance "fstrim.timer" item
     # selected.
+    CUR_IDX=4
+    gauge_msg 99 "SSD TRIM timer..."
     if [[ "$ENABLE_FSTRIM" -eq 1 ]]; then
         gauge_msg 99 "Enabling fstrim.timer (SSD TRIM)..."
         sudo -n systemctl enable --now fstrim.timer >> "$log" 2>&1 || \
             warn "Could not enable fstrim.timer (sudo may have timed out)." >> "$log"
     fi
-    CUR_IDX=5
 
     # ---------------- Firewall and service ports ----------------
     #
@@ -845,9 +941,14 @@ exec 1>>"$LOG_FILE"
     # policy, it silently blocks everything. So:
     #
     #   1. Set safe defaults first (deny incoming, allow outgoing).
-    #   2. Enable ufw (--force skips the "may disrupt existing ssh"
+    #   2. If an SSH server is running, allow port 22 BEFORE enabling, so
+    #      enabling the firewall cannot lock out a remote session.
+    #   3. Enable ufw (--force skips the "may disrupt existing ssh"
     #      prompt, which is meaningless in a non-interactive context).
-    #   3. Then open the ports the services we just installed need.
+    #   4. Enable ufw.service: "ufw enable" alone only loads the rules for
+    #      the running system; on Arch the unit is not enabled by default,
+    #      so without this the firewall would be gone after the next boot.
+    #   5. Then open the ports the services we just installed need.
     #
     # If ufw is NOT selected but the user already has it active (from a
     # previous run or manual setup), we do NOT touch its default
@@ -857,6 +958,13 @@ exec 1>>"$LOG_FILE"
     # firewalld is treated the same way if it happens to be the active
     # one. Raw nftables/iptables rulesets are deliberately left alone --
     # guessing their structure is more likely to break things than help.
+    #
+    # No rule is added for printing: CUPS only listens on localhost, and
+    # mDNS printer discovery is already accepted by the default ufw rules
+    # (multicast 224.0.0.251:5353 in before.rules) and by firewalld's
+    # default zone (service "mdns"). Opening 631/tcp would only matter when
+    # sharing a printer, and then it should be a conscious choice.
+    CUR_IDX=5
     gauge_msg 99 "Configuring firewall (if any)..."
 
     _fw=""
@@ -867,10 +975,16 @@ exec 1>>"$LOG_FILE"
             echo "ufw: not active -- setting defaults and enabling." >> "$log"
             sudo -n ufw default deny incoming  >> "$log" 2>&1 || warn "ufw: could not set incoming default." >> "$log"
             sudo -n ufw default allow outgoing >> "$log" 2>&1 || warn "ufw: could not set outgoing default." >> "$log"
+            if sudo -n systemctl is-active --quiet sshd.service 2>/dev/null; then
+                echo "ufw: sshd is running -- allowing 22/tcp before enabling." >> "$log"
+                sudo -n ufw allow 22/tcp >> "$log" 2>&1 || warn "ufw: could not allow 22/tcp (ssh)." >> "$log"
+            fi
             sudo -n ufw --force enable         >> "$log" 2>&1 || warn "ufw: could not enable." >> "$log"
         else
             echo "ufw: already active -- leaving default policies alone." >> "$log"
         fi
+        sudo -n systemctl enable ufw.service >> "$log" 2>&1 || \
+            warn "ufw: could not enable ufw.service -- the firewall will NOT start at boot." >> "$log"
         _fw="ufw"
     elif command -v ufw >/dev/null 2>&1 && sudo -n ufw status 2>/dev/null | grep -q '^Status: active'; then
         _fw="ufw"
@@ -887,10 +1001,6 @@ exec 1>>"$LOG_FILE"
     # selected, so a package that failed to install does not leave a
     # dangling firewall rule behind.
     if [[ "$_fw" == "ufw" ]]; then
-        if pacman -Qq cups >/dev/null 2>&1; then
-            sudo -n ufw allow 631/tcp  >> "$log" 2>&1 || true
-            sudo -n ufw allow 5353/udp >> "$log" 2>&1 || true
-        fi
         if pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1; then
             sudo -n ufw allow 1714:1764/udp >> "$log" 2>&1 || true
             sudo -n ufw allow 1714:1764/tcp >> "$log" 2>&1 || true
@@ -906,10 +1016,6 @@ exec 1>>"$LOG_FILE"
             echo "ufw-active" > "$FW_STATUS_FILE"
         fi
     elif [[ "$_fw" == "firewalld" ]]; then
-        if pacman -Qq cups >/dev/null 2>&1; then
-            sudo -n firewall-cmd --permanent --add-port=631/tcp  >> "$log" 2>&1 || true
-            sudo -n firewall-cmd --permanent --add-port=5353/udp >> "$log" 2>&1 || true
-        fi
         if pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1; then
             sudo -n firewall-cmd --permanent --add-port=1714-1764/udp >> "$log" 2>&1 || true
             sudo -n firewall-cmd --permanent --add-port=1714-1764/tcp >> "$log" 2>&1 || true
@@ -1029,10 +1135,11 @@ case "$_fw_state" in
         RESULT+="  - Firewall: ufw was enabled with 'deny incoming / allow outgoing'.\n"
         RESULT+="    Ports opened for the services you installed:"
         _fw_ports=""
-        pacman -Qq cups >/dev/null 2>&1 && _fw_ports+=" CUPS (631/tcp, 5353/udp),"
         pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1 && _fw_ports+=" GSConnect (1714-1764/udp+tcp),"
         pacman -Qq localsend-bin >/dev/null 2>&1 && _fw_ports+=" LocalSend (53317/udp+tcp),"
-        RESULT+="${_fw_ports%,}\n"
+        RESULT+="${_fw_ports%,}"
+        if [[ -z "$_fw_ports" ]]; then RESULT+=" none"; fi
+        RESULT+="\n    ufw.service is enabled, so the firewall also starts at boot. Printing needs no rule (CUPS listens on localhost only).\n"
         if pacman -Qq gufw >/dev/null 2>&1; then
             RESULT+="    GUI: run 'gufw' (or 'Firewall Configuration' from the app menu) to manage it.\n"
         fi
