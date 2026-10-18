@@ -555,6 +555,55 @@ else
     rm -rf "$CURSOR_TMP"
 fi
 
+# --- DeepinV20-dark cursor theme (all DEs, installed only -- not applied) ---
+#
+# Hosted in this project's own repo as cursor/DeepinV20-dark.tar. The tar has
+# NO top-level theme directory: it contains cursors/, cursors_scalable/ and
+# index.theme directly, so it is extracted into a temp dir first and copied to
+# /usr/share/icons/DeepinV20-dark/ (the directory name is the theme id). If the
+# archive is ever re-packed with a wrapper directory around those three items,
+# that is detected too.
+#
+# Catppuccin Mocha stays the cursor that is applied by default; this one is
+# just made available (GNOME Tweaks / KDE System Settings / XFCE Mouse and
+# Touchpad) so it can be picked, or set as default by changing
+# CURSOR_THEME_NAME above. A failure here only logs a warning.
+DEEPIN_THEME_NAME="DeepinV20-dark"
+DEEPIN_URL="${REPO_RAW_URL}/cursor/${DEEPIN_THEME_NAME}.tar"
+DEEPIN_DEST="/usr/share/icons/${DEEPIN_THEME_NAME}"
+
+if [[ -f "${DEEPIN_DEST}/index.theme" ]]; then
+    info "Cursor theme '${DEEPIN_THEME_NAME}' is already installed -- skipping download."
+else
+    gauge_msg 60 "Installing ${DEEPIN_THEME_NAME} cursor theme..."
+    log "Installing ${DEEPIN_THEME_NAME} cursor theme..."
+
+    DEEPIN_TMP="$(mktemp -d)"
+    mkdir -p "$DEEPIN_TMP/x"
+    if curl -fsSL -o "$DEEPIN_TMP/theme.tar" "$DEEPIN_URL"; then
+        if bsdtar -xf "$DEEPIN_TMP/theme.tar" -C "$DEEPIN_TMP/x"; then
+            DEEPIN_SRC="$DEEPIN_TMP/x"
+            if [[ ! -f "$DEEPIN_SRC/index.theme" ]]; then
+                DEEPIN_SRC="$(find "$DEEPIN_TMP/x" -mindepth 2 -maxdepth 2 -name index.theme -printf '%h\n' | head -n1 || true)"
+            fi
+            if [[ -n "$DEEPIN_SRC" && -f "$DEEPIN_SRC/index.theme" && -d "$DEEPIN_SRC/cursors" ]]; then
+                install -d -m 755 "$DEEPIN_DEST"
+                cp -r --no-preserve=ownership "$DEEPIN_SRC"/. "$DEEPIN_DEST"/
+                chmod -R u=rwX,go=rX "$DEEPIN_DEST"
+                info "${DEEPIN_THEME_NAME} cursor theme installed."
+            else
+                warn "${DEEPIN_THEME_NAME}.tar has an unexpected layout (need index.theme + cursors/) -- not installed."
+            fi
+        else
+            warn "Could not extract ${DEEPIN_THEME_NAME}.tar."
+        fi
+    else
+        warn "Could not download ${DEEPIN_URL}"
+        warn "The ${DEEPIN_THEME_NAME} cursor theme will not be available."
+    fi
+    rm -rf "$DEEPIN_TMP"
+fi
+
 set_phase 2
 gauge_msg 65 "Enabling $DM_SERVICE..."
 log "Enabling $DM_SERVICE..."
