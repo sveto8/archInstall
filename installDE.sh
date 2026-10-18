@@ -555,7 +555,7 @@ else
     rm -rf "$CURSOR_TMP"
 fi
 
-# --- DeepinV20-dark cursor theme (all DEs, installed only -- not applied) ---
+# --- DeepinV20-dark cursor theme (all DEs, installed AND applied by default) ---
 #
 # Hosted in this project's own repo as cursor/DeepinV20-dark.tar. The tar has
 # NO top-level theme directory: it contains cursors/, cursors_scalable/ and
@@ -564,10 +564,11 @@ fi
 # archive is ever re-packed with a wrapper directory around those three items,
 # that is detected too.
 #
-# Catppuccin Mocha stays the cursor that is applied by default; this one is
-# just made available (GNOME Tweaks / KDE System Settings / XFCE Mouse and
-# Touchpad) so it can be picked, or set as default by changing
-# CURSOR_THEME_NAME above. A failure here only logs a warning.
+# This is the cursor that is APPLIED by default on every desktop (gsettings /
+# dconf for GNOME, kcminputrc for KDE, xsettings.xml for XFCE -- see below).
+# Catppuccin Mocha is still installed next to it and can be picked in the
+# desktop's cursor settings. If this download fails, the desktop falls back to
+# its built-in cursor (a warning is logged).
 DEEPIN_THEME_NAME="DeepinV20-dark"
 DEEPIN_URL="${REPO_RAW_URL}/cursor/${DEEPIN_THEME_NAME}.tar"
 DEEPIN_DEST="/usr/share/icons/${DEEPIN_THEME_NAME}"
@@ -691,7 +692,7 @@ gsettings set org.gnome.desktop.interface clock-format '24h'
 gsettings set org.gtk.Settings.FileChooser sort-directories-first true 2>/dev/null || true
 gsettings set org.gnome.shell always-show-log-out true 2>/dev/null || true
 gsettings set org.gnome.desktop.interface icon-theme 'Reversal' 2>/dev/null || true
-gsettings set org.gnome.desktop.interface cursor-theme 'catppuccin-mocha-dark-cursors' 2>/dev/null || true
+gsettings set org.gnome.desktop.interface cursor-theme 'DeepinV20-dark' 2>/dev/null || true
 GSETTINGS_EOF
         then
             _user_gsettings_ok=0
@@ -726,7 +727,7 @@ color-scheme='prefer-dark'
 gtk-theme='Adwaita-dark'
 accent-color='slate'
 icon-theme='Reversal'
-cursor-theme='catppuccin-mocha-dark-cursors'
+cursor-theme='DeepinV20-dark'
 clock-format='24h'
 
 [org/gtk/settings/file-chooser]
@@ -765,7 +766,7 @@ fi
 #   ~/.config/kdeglobals         -- Breeze Dark as the default look & feel
 #   ~/.config/plasma-localerc    -- regional formats (dates/numbers/...)
 #                                   independent of the UI language
-#   ~/.config/kcminputrc         -- cursor theme (Catppuccin Mocha)
+#   ~/.config/kcminputrc         -- cursor theme (DeepinV20-dark)
 #
 # The files are created with the target user's ownership -- KDE refuses
 # to read a user config file that is owned by root, which is why the
@@ -807,8 +808,8 @@ if [[ "$DE_CHOICE" == "2" ]]; then
     fi
     chown "$TARGET_USER:$TARGET_GROUP" "$_kdeglobals"
 
-    # Cursor theme (Catppuccin Mocha). KDE reads the mouse cursor from
-    # ~/.config/kcminputrc, [Mouse] section. Without this the Catppuccin
+    # Cursor theme (DeepinV20-dark). KDE reads the mouse cursor from
+    # ~/.config/kcminputrc, [Mouse] section. Without this the DeepinV20-dark
     # cursors would be installed but not used until the user picked them
     # in System Settings -> Appearance -> Cursors.
     _kcminputrc="${_kde_config_dir}/kcminputrc"
@@ -817,9 +818,9 @@ if [[ "$DE_CHOICE" == "2" ]]; then
         printf '\n[Mouse]\n' >> "$_kcminputrc"
     fi
     if grep -q '^cursorTheme=' "$_kcminputrc"; then
-        sed -i 's|^cursorTheme=.*|cursorTheme=catppuccin-mocha-dark-cursors|' "$_kcminputrc"
+        sed -i 's|^cursorTheme=.*|cursorTheme=DeepinV20-dark|' "$_kcminputrc"
     else
-        sed -i '/^\[Mouse\]/a cursorTheme=catppuccin-mocha-dark-cursors' "$_kcminputrc"
+        sed -i '/^\[Mouse\]/a cursorTheme=DeepinV20-dark' "$_kcminputrc"
     fi
     chown "$TARGET_USER:$TARGET_GROUP" "$_kcminputrc"
 
@@ -851,7 +852,7 @@ fi
 # Three files under ~/.config/xfce4/xfconf/xfce-perchannel-xml/:
 #
 #   xsettings.xml     -> GTK theme (Adwaita-dark) + Adwaita icons +
-#                        Catppuccin Mocha cursor
+#                        DeepinV20-dark cursor
 #   xfwm4.xml         -> window manager theme. "Default" follows the GTK
 #                        color scheme on XFCE 4.16+, so with Adwaita-dark
 #                        set above the title bars come up dark as well.
@@ -885,7 +886,7 @@ if [[ "$DE_CHOICE" == "3" ]]; then
   <property name="Net" type="empty">
     <property name="ThemeName" type="string" value="Adwaita-dark"/>
     <property name="IconThemeName" type="string" value="Adwaita"/>
-    <property name="CursorThemeName" type="string" value="catppuccin-mocha-dark-cursors"/>
+    <property name="CursorThemeName" type="string" value="DeepinV20-dark"/>
     <property name="CursorThemeSize" type="int" value="24"/>
   </property>
   <property name="Gtk" type="empty">
@@ -960,7 +961,7 @@ PANEL_EOF
         "${_xfce_conf_dir}/xsettings.xml" \
         "${_xfce_conf_dir}/xfwm4.xml" \
         "${_xfce_conf_dir}/xfce4-panel.xml"
-    info "XFCE Adwaita-dark theme + Catppuccin Mocha cursor + 24h clock panel set for $TARGET_USER."
+    info "XFCE Adwaita-dark theme + DeepinV20-dark cursor + 24h clock panel set for $TARGET_USER."
 fi
 
 # ---------------- BLUETOOTH (GNOME, full KDE) ----------------
@@ -1039,16 +1040,16 @@ echo " NEXT STEPS"
 echo "============================================================"
 echo "Log out and back in (or reboot) to get to the $DM_SERVICE login screen."
 if [[ "$DE_CHOICE" == "1" ]]; then
-    echo "GNOME dark theme + Catppuccin Mocha cursor were pre-set."
+    echo "GNOME dark theme + DeepinV20-dark cursor were pre-set."
 fi
 if [[ "$DE_CHOICE" == "2" ]]; then
-    echo "KDE Breeze Dark + Catppuccin Mocha cursor were pre-set."
+    echo "KDE Breeze Dark + DeepinV20-dark cursor were pre-set."
 fi
 if [[ "$DE_CHOICE" == "3" ]]; then
     echo "XFCE defaults were pre-set for first login:"
     echo "  - Adwaita-dark GTK theme + Adwaita icons"
     echo "  - Dark window decorations (Default xfwm4 follows the GTK scheme)"
-    echo "  - Catppuccin Mocha cursor"
+    echo "  - DeepinV20-dark cursor"
     echo "  - Panel clock: Time then Date, 24h (%H:%M), date '%d %b %Y'"
     echo "LightDM greeter was set to lightdm-gtk-greeter; if the login screen"
     echo "looks wrong, check /etc/lightdm/lightdm.conf's [Seat:*] line."
