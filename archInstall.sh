@@ -53,6 +53,7 @@ LUKS_ALLOW_DISCARDS="yes"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
+LIB_FILE="$SCRIPT_DIR/lib.sh"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     # Download to a temporary file FIRST (never write a partial file
     # directly next to the script -- the folder may be a read-only or
@@ -67,13 +68,14 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
         "${_repo_url}/lib.sh" 2>/dev/null || true)"
     if [[ -s "$_lib_tmp" ]]; then
+        chmod 644 "$_lib_tmp" 2>/dev/null || true
         if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
             :
         else
             _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
             mv "$_lib_tmp" "$_lib_fallback"
             echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
-            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+            LIB_FILE="$_lib_fallback"
         fi
     else
         rm -f "$_lib_tmp"
@@ -84,7 +86,7 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     fi
 fi
 # shellcheck source=lib.sh
-source "$SCRIPT_DIR/lib.sh"
+source "$LIB_FILE"
 
 # The primary locale must always be generated.
 in_array "$LOCALE" "${LOCALES[@]}" || LOCALES+=("$LOCALE")
@@ -1070,7 +1072,7 @@ if [[ -n "$DE_CHOICE" ]]; then
     if [[ -n "$DE_SCRIPT" ]]; then
         mkdir -p /mnt/root/arch-setup-tmp
         install -m 755 "$DE_SCRIPT" /mnt/root/arch-setup-tmp/installDE.sh
-        install -m 644 "$SCRIPT_DIR/lib.sh" /mnt/root/arch-setup-tmp/lib.sh
+        install -m 644 "$LIB_FILE" /mnt/root/arch-setup-tmp/lib.sh
 
         # Same FIFO trick as pacstrap: the loop must run in the current
         # shell so CUR_IDX updates persist across iterations.
@@ -1179,7 +1181,7 @@ else
 fi
 
 cp -f "$SCRIPT_DIR"/*.sh /mnt/archInstall/scripts/ 2>/dev/null || true
-cp -f "$SCRIPT_DIR/lib.sh" /mnt/archInstall/lib.sh
+cp -f "$LIB_FILE" /mnt/archInstall/lib.sh
 for s in lib.sh setupAfterInstall.sh installDE.sh installApps.sh; do
     if [[ ! -f "/mnt/archInstall/scripts/$s" ]]; then
         fetch_repo_file "$s" "/mnt/archInstall/scripts/$s" || warn "Could not fetch $s for /archInstall/scripts."
