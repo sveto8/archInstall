@@ -42,6 +42,7 @@ fi
 
 SCRIPT_DIR="$_script_dir"
 _repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
+LIB_FILE="$SCRIPT_DIR/lib.sh"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     # Download to a temporary file FIRST (never write a partial file
     # directly next to the script -- the folder may be a read-only or
@@ -55,13 +56,14 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
         "${_repo_url}/lib.sh" 2>/dev/null || true)"
     if [[ -s "$_lib_tmp" ]]; then
+        chmod 644 "$_lib_tmp" 2>/dev/null || true
         if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
             :
         else
             _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
             mv "$_lib_tmp" "$_lib_fallback"
             echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
-            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+            LIB_FILE="$_lib_fallback"
         fi
     else
         rm -f "$_lib_tmp"
@@ -72,7 +74,7 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     fi
 fi
 # shellcheck source=lib.sh
-source "$SCRIPT_DIR/lib.sh"
+source "$LIB_FILE"
 
 FAILED_FILE=""
 SKIPPED_FILE=""
@@ -249,6 +251,10 @@ AUR_PACKAGES=(
 
 # JDK used for work. Package + the name `archlinux-java` knows it by: change
 # both here (e.g. jdk17-openjdk / java-17-openjdk) and nothing else.
+# NOTE: in [extra] the package "intellij-idea-community-edition" was renamed to
+# "intellij-idea-oss" (the old name is only a "provides"/"replaces" now, and
+# `pacman -Si <old name>` does not find a provided name -- so the script would
+# have skipped it). The checklist therefore uses the new name.
 # NOTE: the IntelliJ package may pull in a NEWER JDK as a dependency (it
 # ships its own JetBrains runtime, but the package metadata can still list
 # one). That is harmless: after all installs this script runs
@@ -347,7 +353,7 @@ WORK_CHOICES="$(checklist_pick "Work programs" \
     meld                             "visual diff and merge tool (pacman)" on \
     code                             "open-source VS Code (pacman)" on \
     remmina                          "remote desktop client RDP/VNC/SSH (pacman)" on \
-    intellij-idea-community-edition  "IntelliJ IDEA Community Edition (pacman)" on \
+    intellij-idea-oss                "IntelliJ IDEA open-source build, formerly Community Edition (pacman)" on \
     dbeaver                          "universal database client (pacman)" on \
     postman-bin                      "Postman API client (AUR)" on \
     f5vpn-ng                         "F5 VPN client (AUR)" on \
@@ -359,7 +365,7 @@ while IFS= read -r tag; do
         meld)                             REPO_PACKAGES+=(meld) ;;
         code)                             REPO_PACKAGES+=(code) ;;
         remmina)                          REPO_PACKAGES+=(remmina) ;;
-        intellij-idea-community-edition)  REPO_PACKAGES+=(intellij-idea-community-edition) ;;
+        intellij-idea-oss)                REPO_PACKAGES+=(intellij-idea-oss) ;;
         dbeaver)                          REPO_PACKAGES+=(dbeaver) ;;
         postman-bin)                      AUR_PACKAGES+=(postman-bin) ;;
         f5vpn-ng)                         AUR_PACKAGES+=(f5vpn-ng) ;;
@@ -556,7 +562,7 @@ EXTRA_PACKAGES=("${_extra_new[@]}")
 
 # Besides packages, some choices change system files or services: list them
 # here so nothing happens that was not visible in the confirmation.
-_changes=""
+_changes="  - full system upgrade (pacman -Syu) before the packages are installed\n"
 if in_array cups "${REPO_PACKAGES[@]}"; then
     _changes+="  - enable cups.service\n"
 fi
@@ -748,22 +754,21 @@ exec 1>>"$LOG_FILE"
 
     gauge_msg $((current * 100 / total)) "Installing base-devel, git..."
 
-    # Refresh the pacman sync databases before installing anything.
+    # Bring the system up to date BEFORE installing anything.
     #
-    # Without this, a stale local database can reference a package version
-    # the mirrors no longer carry -- Arch does not keep old package files
-    # once a new version is pushed, so pacman gets 404 on every mirror and
-    # the transaction fails with "failed to retrieve some files".
-    #
-    # Refreshing alone (without a full -Syu) is normally discouraged as a
-    # "partial upgrade", but here it is followed immediately by installing
-    # the packages the user selected, plus their dependencies, in the same
-    # run -- so nothing is left half-upgraded. This is the standard pattern
-    # for an installer that needs to fetch packages the local DB may not
-    # know about yet.
-    gauge_msg $((current * 100 / total)) "Refreshing package databases..."
-    if ! sudo -n pacman -Sy --noconfirm >> "$log" 2>&1; then
-        warn "pacman -Sy failed -- continuing with the existing databases." >> "$log"
+    # A stale local database can reference a package version the mirrors no
+    # longer carry -- Arch does not keep old package files once a new version
+    # is pushed, so pacman gets 404 on every mirror ("failed to retrieve some
+    # files"). Refreshing the databases alone (-Sy) is NOT a fix: it is a
+    # partial upgrade. A package installed afterwards can be built against a
+    # newer library than the one installed, and every other package that still
+    # uses the old library breaks. So refresh AND upgrade in one transaction
+    # (-Syu); if that fails, install nothing rather than risk a half-upgraded
+    # system.
+    gauge_msg $((current * 100 / total)) "Updating the system (pacman -Syu)..."
+    if ! sudo -n pacman -Syu --noconfirm --noprogressbar >> "$log" 2>&1; then
+        warn "pacman -Syu failed -- nothing was installed (a partial upgrade could break the system)." >> "$log"
+        die "pacman -Syu failed -- see $LOG_FILE. Fix the problem (network, mirrors, keyring) and run the script again."
     fi
 
     if ! sudo -n pacman -S --needed --noconfirm --noprogressbar base-devel git >> "$log" 2>&1; then
