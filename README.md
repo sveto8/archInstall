@@ -453,8 +453,9 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    repo), unpacked with `bsdtar` into `/usr/share/icons/` and skipped if it is
    already there; a failed download only warns. The **DeepinV20-dark** cursor
    theme is installed for every desktop too, from `cursor/DeepinV20-dark.tar`
-   **in this repo** (installed only — Catppuccin Mocha remains the applied
-   default, pick Deepin in the desktop's cursor settings)
+   **in this repo**, into `/usr/share/icons/DeepinV20-dark/` (system-wide, not
+   `~/.icons`). **It is the cursor applied by default** on every desktop;
+   Catppuccin Mocha is still installed and can be picked in the cursor settings
 8. Enables the matching display manager/greeter (`gdm.service` /
    `sddm.service` / `lightdm.service`)
 9. **GNOME only:** sets the dark color scheme
@@ -499,7 +500,7 @@ rest. Testing the chroot path in a VM is the first thing to do after
 changing this part.
 
 **KDE:** the target user's `kdeglobals` (Breeze Dark), `kcminputrc`
-(Catppuccin Mocha cursor) and `plasma-localerc` (regional formats + UI
+(DeepinV20-dark cursor) and `plasma-localerc` (regional formats + UI
 language, read from `LANG` in `/etc/locale.conf`) are written with the
 user's ownership — KDE ignores config files owned by root. Existing files
 are merged in place, not overwritten.
@@ -507,7 +508,7 @@ are merged in place, not overwritten.
 **XFCE:** there is no way to preset settings through a session bus from a
 chroot, so they are written as the user's own xfconf channel files, which
 XFCE reads on first login: `xsettings.xml` (Adwaita-dark, Adwaita icons,
-Catppuccin Mocha cursor), `xfwm4.xml` and `xfce4-panel.xml` (a panel whose
+DeepinV20-dark cursor), `xfwm4.xml` and `xfce4-panel.xml` (a panel whose
 clock shows time then date, 24 h).
 
 You can re-run this later to install a different desktop environment or
@@ -1005,7 +1006,7 @@ to different desktops:
 |------|-----------|---------------|
 | Reversal icon theme | `icons/Reversal-icon-theme-master.tar.xz` **in this repo** ([upstream](https://github.com/yeyushengfan258/Reversal-icon-theme)) | GNOME only |
 | Catppuccin Mocha cursor (`catppuccin-mocha-dark-cursors`) | `releases/latest/download/…zip` of [catppuccin/cursors](https://github.com/catppuccin/cursors) — **not** in this repo | every desktop |
-| DeepinV20-dark cursor | `cursor/DeepinV20-dark.tar` **in this repo** | every desktop (installed, not applied) |
+| DeepinV20-dark cursor | `cursor/DeepinV20-dark.tar` **in this repo** | every desktop (installed **and applied by default**) |
 
 **Reversal.** The archive ships its own `install.sh`, which is run once per
 colour variant to produce the `yellow` (default), `orange`, `black` and `grey`
@@ -1026,9 +1027,12 @@ for KDE, `xsettings.xml` for XFCE. The AUR package is not used because
 `cursors/`, `cursors_scalable/` and `index.theme`), so it is extracted to a temp
 dir and copied to `/usr/share/icons/DeepinV20-dark/` (a wrapper directory
 around those items is detected as well; an archive without `index.theme` +
-`cursors/` is rejected with a warning). To make it the *applied* cursor instead
-of Catppuccin, change `catppuccin-mocha-dark-cursors` to `DeepinV20-dark` in
-the `gsettings`, `kcminputrc` and `xsettings.xml` parts of `installDE.sh`.
+`cursors/` is rejected with a warning). It is applied through each desktop's own
+mechanism (`gsettings` + system dconf default for GNOME, `kcminputrc` for KDE,
+`xsettings.xml` for XFCE). To go back to Catppuccin as the applied cursor,
+replace `DeepinV20-dark` with `catppuccin-mocha-dark-cursors` in those four
+places of `installDE.sh`. If the Deepin download fails, a warning is logged and
+the desktop falls back to its built-in cursor.
 
 ## `lib.sh` — shared helpers
 
@@ -1172,8 +1176,8 @@ can run in either order.
   issues include black screens on login with some GPU/driver
   combinations), so X11 is the stable, working choice there.
 - The Reversal icon theme is GNOME-only (it is applied via `gsettings`). The
-  Catppuccin Mocha cursor is installed for every desktop and applied with
-  each desktop's own mechanism (gsettings/dconf, `kcminputrc`,
+  DeepinV20-dark cursor (Catppuccin Mocha is installed too) is installed for
+  every desktop and applied with each desktop's own mechanism (gsettings/dconf, `kcminputrc`,
   `xsettings.xml`).
 - `arch-manager.sh` is a convenience wrapper, not a replacement for
   understanding what each script does — it just saves typing
@@ -1227,8 +1231,8 @@ can run in either order.
   partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
   run stops (installing nothing) if it fails.
 - **`installDE.sh` — DeepinV20-dark cursor** — installed from
-  `cursor/DeepinV20-dark.tar` in this repo next to Catppuccin Mocha (installed,
-  not applied).
+  `cursor/DeepinV20-dark.tar` in this repo, next to Catppuccin Mocha; Deepin is
+  the cursor applied by default.
 - **`installApps.sh` — HP discovery under ufw** — added the ufw rules described under
   *Things to know* (found while testing: HP Scan only found the printer with ufw off).
 - README: default hostname is `blackbox`, installApps log location, state-aware
