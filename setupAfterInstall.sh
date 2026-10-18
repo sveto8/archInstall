@@ -112,6 +112,7 @@ STRIP_EFI_BOOTNEXT_ENTRIES="yes"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 _repo_url="${ARCH_REPO_URL:-https://raw.githubusercontent.com/sveto8/archInstall/main}"
+LIB_FILE="$SCRIPT_DIR/lib.sh"
 if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     # Download to a temporary file FIRST (never write a partial file
     # directly next to the script -- the folder may be a read-only or
@@ -125,13 +126,14 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     _code="$(curl -fsSL -o "$_lib_tmp" -w '%{http_code}' \
         "${_repo_url}/lib.sh" 2>/dev/null || true)"
     if [[ -s "$_lib_tmp" ]]; then
+        chmod 644 "$_lib_tmp" 2>/dev/null || true
         if mv "$_lib_tmp" "$SCRIPT_DIR/lib.sh" 2>/dev/null; then
             :
         else
             _lib_fallback="${TMPDIR:-/tmp}/archInstall-lib.sh"
             mv "$_lib_tmp" "$_lib_fallback"
             echo "NOTE: $SCRIPT_DIR is not writable; using $_lib_fallback instead." >&2
-            SCRIPT_DIR="$(dirname "$_lib_fallback")"
+            LIB_FILE="$_lib_fallback"
         fi
     else
         rm -f "$_lib_tmp"
@@ -142,7 +144,7 @@ if [[ ! -f "$SCRIPT_DIR/lib.sh" ]]; then
     fi
 fi
 # shellcheck source=lib.sh
-source "$SCRIPT_DIR/lib.sh"
+source "$LIB_FILE"
 
 # Theme archives live next to the scripts in the same repository.
 PLYMOUTH_THEMES_BASE_URL="${REPO_RAW_URL}/plymouth-themes"
