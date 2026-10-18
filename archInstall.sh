@@ -283,7 +283,7 @@ while true; do
         _km_items=()
         for _k in "${_km_ok[@]}"; do _km_items+=("$_k" ""); done
         KEYMAP_PRIMARY="$(dlg_capture --title "Primary keymap" \
-            --default-item "${_km_ok[-1]}" \
+            --default-item "${_km_ok[0]}" \
             --menu "$(_state_summary)Which keymap should be the PRIMARY layout (active by default at boot)?" \
             0 "$BOX_W" 0 "${_km_items[@]}")" || abort
         KEYMAP_TOGGLE=""
