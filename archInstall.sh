@@ -338,7 +338,8 @@ for _i in "${!_fmt_tags[@]}"; do
     fi
 done
 
-FORMAT_LOCALE="$(dlg_capture --title "Regional formats" --default-item "$LOCALE" \
+#FORMAT_LOCALE="$(dlg_capture --title "Regional formats" --default-item "$LOCALE" \
+FORMAT_LOCALE="$(dlg_capture --title "Regional formats" --default-item "hr_HR.UTF-8" \
     --menu "$(_state_summary)How should dates, numbers, times and currency be formatted?\n\nThis is independent of the interface language." \
     0 "$BOX_W" 0 "${FORMAT_ITEMS[@]}")" || abort
 
