@@ -581,6 +581,9 @@ fi
 if [[ "$ENABLE_UFW" -eq 1 ]]; then
     _changes+="  - ENABLE the ufw firewall (deny incoming, allow outgoing)\n"
 fi
+if in_array hplip "${REPO_PACKAGES[@]}"; then
+    _changes+="  - if ufw is active: allow HP printer discovery replies (UDP source ports 161, 3702, 427 from private ranges)\n"
+fi
 if [[ -z "$_changes" ]]; then _changes="  - none\n"; fi
 
 SUMMARY="Repo (pacman, ${#REPO_PACKAGES[@]}):\n  ${REPO_PACKAGES[*]}\n\nAUR (yay, ${#AUR_PACKAGES[@]}):\n  ${AUR_PACKAGES[*]:-none}\n\nExtra (${#EXTRA_PACKAGES[@]}):\n  ${EXTRA_PACKAGES[*]:-none}\n\nSystem changes:\n${_changes}\nProceed with the installation?"
@@ -992,11 +995,20 @@ exec 1>>"$LOG_FILE"
     # one. Raw nftables/iptables rulesets are deliberately left alone --
     # guessing their structure is more likely to break things than help.
     #
-    # No rule is added for printing: CUPS only listens on localhost, and
-    # mDNS printer discovery is already accepted by the default ufw rules
-    # (multicast 224.0.0.251:5353 in before.rules) and by firewalld's
-    # default zone (service "mdns"). Opening 631/tcp would only matter when
-    # sharing a printer, and then it should be a conscious choice.
+    # Printing: CUPS only listens on localhost, and mDNS printer discovery is
+    # already accepted by the default ufw rules (multicast 224.0.0.251:5353 in
+    # before.rules) and by firewalld's default zone (service "mdns").
+    # Opening 631/tcp would only matter when sharing a printer, and then it
+    # should be a conscious choice.
+    #
+    # HPLIP is the exception (ufw only): its network search sends SNMP /
+    # WS-Discovery / SLP broadcasts, and the printers' unicast replies are not
+    # "established" traffic, so ufw drops them -- the printer is only found
+    # when its IP is typed in. The rules below allow replies from the three
+    # discovery SOURCE ports, restricted to the private ranges (RFC 1918), so
+    # they work on any home/office network without knowing its subnet.
+    # Nothing on this machine listens on those ports; no inbound service is
+    # opened.
     CUR_IDX=5
     gauge_msg 99 "Configuring firewall (if any)..."
 
@@ -1041,6 +1053,14 @@ exec 1>>"$LOG_FILE"
         if pacman -Qq localsend-bin >/dev/null 2>&1; then
             sudo -n ufw allow 53317/udp >> "$log" 2>&1 || true
             sudo -n ufw allow 53317/tcp >> "$log" 2>&1 || true
+        fi
+        if pacman -Qq hplip >/dev/null 2>&1; then
+            for _net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16; do
+                for _port in 161 3702 427; do
+                    sudo -n ufw allow proto udp from "$_net" port "$_port" to any >> "$log" 2>&1 || \
+                        warn "ufw: could not allow HP discovery replies from $_net port $_port." >> "$log"
+                done
+            done
         fi
         echo "firewall: ufw -- ports opened for installed services." >> "$log"
         if [[ "$ENABLE_UFW" -eq 1 ]]; then
@@ -1180,6 +1200,7 @@ case "$_fw_state" in
         _fw_ports=""
         pacman -Qq gnome-shell-extension-gsconnect >/dev/null 2>&1 && _fw_ports+=" GSConnect (1714-1764/udp+tcp),"
         pacman -Qq localsend-bin >/dev/null 2>&1 && _fw_ports+=" LocalSend (53317/udp+tcp),"
+        pacman -Qq hplip >/dev/null 2>&1 && _fw_ports+=" HP discovery replies (udp src 161/3702/427, private ranges),"
         RESULT+="${_fw_ports%,}"
         if [[ -z "$_fw_ports" ]]; then RESULT+=" none"; fi
         RESULT+="\n    ufw.service is enabled, so the firewall also starts at boot. Printing needs no rule (CUPS listens on localhost only).\n"
