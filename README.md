@@ -165,7 +165,7 @@ Questions, in this order:
    exist, it offers to unmount them and close `cryptroot`
 2. **Hostname, timezone, console keymap(s), language, regional formats**
    — input boxes pre-filled with the defaults from the config block
-   (`monarch`, `Europe/Zagreb`, `us`) and validated (hostname syntax, the
+   (`blackbox`, `Europe/Zagreb`, `us`) and validated (hostname syntax, the
    timezone must exist in `/usr/share/zoneinfo`, every keymap must be in
    `localectl list-keymaps`), so the same script gives each machine
    (laptop, desktop) its own name. Several keymaps can be given
@@ -268,7 +268,10 @@ Then, unattended:
 8. Copies `arch-manager.sh`, `lib.sh` and all scripts to `/archInstall/`
    on the new system (`/archInstall/scripts/` for the phase scripts;
    missing ones are fetched from the repo)
-9. Closing dialog with the next steps and *"Unmount everything and reboot
+9. Writes `/root/arch-install-state.conf` (user, hostname, desktop, keymap,
+   language, formats, timezone, time; `%q`-quoted shell assignments) on the new
+   system, which `arch-manager.sh` shows in its status block
+10. Closing dialog with the next steps and *"Unmount everything and reboot
    now?"* (default Yes)
 
 On a system that is not the live ISO it asks (default No) before doing
@@ -541,7 +544,7 @@ cancels (nothing is installed on cancel).
    | Dialog | Rows | Defaults |
    |--------|------|----------|
    | Optional packages | `lact`, `coolercontrol-bin`, fingerprint for sudo, `nautilus-admin-gtk4` (listed only on GNOME), `libreoffice-still`, `wps-office` + fonts, `onlyoffice-bin` | LACT **on** with an AMD GPU; CoolerControl **on** on a desktop; fingerprint **on** on a laptop; Nautilus **on**; office suites off |
-   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-community-edition`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin` | all **on** |
+   | Work programs | `jdk11-openjdk`, `meld`, `code`, `remmina`, `intellij-idea-oss`, `dbeaver`, `postman-bin`, `f5vpn-ng`, `ferdium-bin` | all **on** |
    | VPN | `wireguard-tools`, `networkmanager-openconnect` (Cisco AnyConnect, F5), `networkmanager-vpnc` (legacy Cisco IPsec), `networkmanager-openvpn`, `snx-rs` (Check Point, native client, no NetworkManager plugin) | all **on** |
    | Printer and scanner | `hplip`, `cups`, `system-config-printer`, `python-pyqt5`, `avahi`, `nss-mdns`, `cups-pdf`, `simple-scan` | all **on** |
    | Office and fonts | `hunspell-hr`, `libreoffice-still-hr`, `ttf-liberation`, `noto-fonts-emoji`, `ttf-jetbrains-mono-nerd`, `ttf-ms-fonts` | all **on** |
@@ -566,7 +569,12 @@ cancels (nothing is installed on cancel).
    would be pushed off the screen). Answering No (or `ESC`) at any dialog
    above aborts cleanly
 5. Installs unattended, with live output in a dialog box (also saved to
-   `~/installApps.log`):
+   `installApps.log` next to the script when that folder is writable, e.g.
+   `~/arch-setup/downloads/installApps.log` when started via the manager;
+   otherwise `~/installApps.log`):
+   - first runs a **full system upgrade** (`pacman -Syu`; shown under *System
+     changes* in the confirmation). A bare `-Sy` would be a partial upgrade. If
+     the upgrade fails, nothing is installed and the script stops
    - bootstraps `yay` if missing (`base-devel` + `git` via `pacman`, then
      `yay` itself built from AUR with `makepkg`). If that build fails the
      run **continues** with the official-repo packages; the AUR packages
@@ -691,7 +699,7 @@ installed without asking (the build tools the script itself needs).
 | meld | pacman | on | visual diff and merge tool |
 | code | pacman | on | open-source VS Code |
 | remmina | pacman | on | remote desktop client RDP/VNC/SSH |
-| intellij-idea-community-edition | pacman | on | IntelliJ IDEA Community Edition |
+| intellij-idea-oss | pacman | on | IntelliJ IDEA open-source build (the former `intellij-idea-community-edition`, renamed in `[extra]`) |
 | dbeaver | pacman | on | universal database client |
 | postman-bin | AUR | on | Postman API client |
 | f5vpn-ng | AUR | on | F5 VPN client |
@@ -758,24 +766,31 @@ installed without asking (the build tools the script itself needs).
 
 Not part of the numbered phases — a convenience front-end that downloads
 `lib.sh` and the four scripts from the repo and lets you run them from a
-menu instead of typing filenames. A status line (Arch? Live ISO? root?
-Btrfs? Snapper?) is shown above the menu every time.
+menu instead of typing filenames. A status block (Arch? Live ISO? root? Btrfs? Snapper? installed desktop, plus
+the configuration from `/root/arch-install-state.conf` when it exists) is shown
+above the menu every time.
 
-Menu:
+The menu is **state-aware**: the numbers never change, but entries that make no
+sense in the current state are prefixed `[N/A -- reason]` and only show an
+explanation when selected (dialog has no real "disabled" item).
 
-1. **Install Arch** — runs `archInstall.sh`. If you're *not* on the live
-   ISO it asks first (default No), since that script wipes a disk. On
-   success the manager exits so you can reboot; `archInstall.sh` itself
-   already put the manager and all scripts into `/archInstall/` on the new
-   system
-2. Run `setupAfterInstall.sh` only
-3. Run `installDE.sh` only
-4. Run `installApps.sh` only
+1. **Install Arch** — runs `archInstall.sh`. Only on the live ISO; on an installed
+   system it shows an explanation instead (it never starts the disk wipe from
+   there). On success the manager exits so you can reboot; `archInstall.sh`
+   itself already put the manager and all scripts into `/archInstall/` on the
+   new system. (Running `archInstall.sh` *directly* on a non-live system asks
+   first, default No.)
+2. Run `setupAfterInstall.sh` only (not on the live ISO)
+3. Run `installDE.sh` only (not on the live ISO; labelled "Reinstall / change"
+   when a desktop is already installed)
+4. Run `installApps.sh` only (not on the live ISO)
 5. **Install all after reboot:** `setupAfterInstall.sh` → `installDE.sh` →
    `installApps.sh`. `installDE.sh` is skipped (with a question, default
    No) if a desktop is already installed — e.g. you chose one in
-   `archInstall.sh`. If a step fails it asks whether to continue
-6. Download / update all scripts now
+   `archInstall.sh`. If a step fails it asks whether to continue; cancelling a
+   step stops the whole sequence
+6. Download / update `lib.sh` and the four scripts now (the manager itself,
+   `arch-manager.sh`, is not updated by this)
 
 Details:
 
@@ -791,7 +806,7 @@ Details:
   real non-root user even if the manager itself is root (drops privileges
   via `runuser`)
 - CLI shortcuts: `./arch-manager.sh --download` (fetch everything),
-  `--install` (fetch + run **only** `archInstall.sh`), or
+  `--install` (fetch + run **only** `archInstall.sh`), `--help`, or
   `./arch-manager.sh <script-name.sh>` to run one script directly
 - To use your own fork/branch set `ARCH_REPO_URL` (see "Getting the
   scripts onto the Arch ISO") — one variable instead of editing
@@ -905,6 +920,14 @@ allows, protect it first so cleanup cannot delete it:
 - **Disk use in `/boot`:** roughly 15 MB for a kernel plus 30–60 MB for an
   initramfs per archived version; with Snapper's default retention that is
   well within the 4 GiB `/boot`.
+- **Bulk installs create many snapshots.** `installApps.sh` installs packages
+  one by one, i.e. one pacman/yay transaction per package. Each transaction gets a
+  snap-pac `[pre]`/`[post]` pair and runs `arch-grub-refresh` (which includes
+  os-prober), so a full app run adds dozens of snapshot pairs and noticeably
+  slows down. With `NUMBER_LIMIT=20` Snapper's cleanup later removes the oldest
+  ones, including the initial snapshot. Protect a snapshot you want to keep with
+  `sudo snapper -c root modify -c "" <number>` (see snap-pac's documentation for
+  skipping snapshots for one transaction).
 - **Snapshots older than the setup** (made before `arch-kernel-archive` first
   ran) have no archived kernel and therefore no entry; the script says so on
   stderr during `grub-mkconfig`.
@@ -1044,7 +1067,8 @@ Sourced by all five scripts so the dialog code lives in one place:
   logged; result in `$RUN_TTY_RC`
 
 Each script finds `lib.sh` next to itself and downloads it from the repo
-if it's missing, so a single script can still be fetched and run on its
+if it's missing (if the folder is not writable it keeps the copy in
+`$TMPDIR/archInstall-lib.sh` and sources it from there), so a single script can still be fetched and run on its
 own.
 
 ## Requirements between the scripts
@@ -1139,7 +1163,8 @@ can run in either order.
   strips them from `grub.cfg` once, right after generating it. But
   `grub-btrfsd` regenerates `grub.cfg` whenever a snapshot is created or
   deleted, and a plain `grub-mkconfig` does too, so on GRUB versions that
-  emit those entries they can reappear. Remove them again with
+  emit those entries they can reappear (the `zzz-grub-refresh` pacman hook strips
+  them again after the next pacman transaction). Remove them again with
   `sudo grub-mkconfig -o /boot/grub/grub.cfg` followed by deleting the
   `(EFI BootNext)` menuentry blocks, or re-run `setupAfterInstall.sh`.
 - **PXE / "USB HDD" entries are not os-prober results.** Those names are
@@ -1163,6 +1188,31 @@ can run in either order.
   time) and leave the os-prober mode at **internal** in `setupAfterInstall.sh`.
   The temporary read-only mount of the Windows ESP (`/mnt/win-esp`) used for
   detection is released on every exit path, including a failed run.
+
+## Revision notes (review pass, October 2026)
+
+- **`lib.sh` bootstrap fallback (`archInstall.sh`, `installDE.sh`,
+  `setupAfterInstall.sh`, `installApps.sh`)** — when the script folder was not
+  writable, `SCRIPT_DIR` was switched to `/tmp` but the file is called
+  `archInstall-lib.sh`, so `source "$SCRIPT_DIR/lib.sh"` failed with *No such
+  file*. The scripts now keep `SCRIPT_DIR` and use a separate `LIB_FILE`
+  (`archInstall.sh` also copies that file to the new system). The downloaded
+  `lib.sh` is `chmod 644` before it is moved into place (`mktemp` makes it 0600,
+  which a different user could not read).
+- **`installApps.sh` — IntelliJ** — `intellij-idea-community-edition` is now only
+  a `provides`/`replaces` name of `intellij-idea-oss` in `[extra]`; `pacman -Si`
+  does not find a provided name, so the script reported it as not found and
+  skipped it. The checklist uses `intellij-idea-oss`.
+- **`installApps.sh` — partial upgrade** — `pacman -Sy` followed by installs is a
+  partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
+  run stops (installing nothing) if it fails.
+- README: default hostname is `blackbox`, installApps log location, state-aware
+  menu and status block of `arch-manager.sh` (option 1 does not ask on a
+  non-live system, it refuses), `/root/arch-install-state.conf`, a note on the
+  snapshot/hook load of bulk installs.
+- Checked, no change: `bash -n` and `shellcheck` clean; the other scripts' logic
+  (partitioning, LUKS/Btrfs, GRUB cmdline, snapshot tooling) read through without
+  finding further bugs. Not run on real hardware.
 
 ## Revision notes (bug-fix pass)
 
@@ -1220,4 +1270,4 @@ Fixed in the scripts:
   them off (a tall confirmation used to push the Yes/No buttons off the screen).
 - `arch-manager.sh` — reviewed, no changes needed.
 
-All six scripts pass `bash -n` and `shellcheck`.
+All six scripts pass `bash -n` and `shellcheck` (re-checked in the October 2026 pass).
