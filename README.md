@@ -920,6 +920,14 @@ allows, protect it first so cleanup cannot delete it:
 - **Disk use in `/boot`:** roughly 15 MB for a kernel plus 30–60 MB for an
   initramfs per archived version; with Snapper's default retention that is
   well within the 4 GiB `/boot`.
+- **HP printer discovery behind ufw.** When `hplip` is installed and ufw is the
+  active firewall, `installApps.sh` allows UDP replies with source port 161
+  (SNMP), 3702 (WS-Discovery) and 427 (SLP) from the private ranges `10/8`,
+  `172.16/12` and `192.168/16`. Without them HP's network search finds nothing
+  while adding the printer by IP works. They are source-port rules, so no
+  service on the machine is exposed. Not done for firewalld. Printers in a
+  different subnet/VLAN are still not found by any broadcast search -- add them
+  by IP/hostname.
 - **Bulk installs create many snapshots.** `installApps.sh` installs packages
   one by one, i.e. one pacman/yay transaction per package. Each transaction gets a
   snap-pac `[pre]`/`[post]` pair and runs `arch-grub-refresh` (which includes
@@ -1206,6 +1214,8 @@ can run in either order.
 - **`installApps.sh` — partial upgrade** — `pacman -Sy` followed by installs is a
   partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
   run stops (installing nothing) if it fails.
+- **`installApps.sh` — HP discovery under ufw** — added the ufw rules described under
+  *Things to know* (found while testing: HP Scan only found the printer with ufw off).
 - README: default hostname is `blackbox`, installApps log location, state-aware
   menu and status block of `arch-manager.sh` (option 1 does not ask on a
   non-live system, it refuses), `/root/arch-install-state.conf`, a note on the
