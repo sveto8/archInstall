@@ -40,7 +40,7 @@ NEW_HOSTNAME="blackbox"
 TIMEZONE="Europe/Zagreb"
 LOCALE="en_US.UTF-8"             # primary locale -> goes into /etc/locale.conf as LANG
 LOCALES=("en_US.UTF-8" "hr_HR.UTF-8")   # all locales generated (the primary one is always included)
-KEYMAP="us"
+KEYMAP="us,croat"
 # 'ssd' is appended automatically when the target disk is non-rotational.
 MOUNT_OPTS="rw,noatime,compress=zstd:3,space_cache=v2"
 # TRIM only reaches the SSD through dm-crypt when discards are explicitly
