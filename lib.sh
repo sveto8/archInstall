@@ -275,14 +275,25 @@ _text_height() {
 #
 # A --yesno box cannot scroll: when the text is taller than the screen the
 # buttons would be pushed off it and the question could not be answered. In
-# that case the full text is shown first in a scrollable box (msg_box) and
-# only a short question is asked afterwards.
+# that case the SAME screen is drawn as a scrollable --textbox whose two
+# buttons are relabelled "Yes" (exit code 0) and "No" (the extra button, exit
+# code 3), so the long text and the question are one dialog. ESC counts as No.
 ask_yes() {
-    local opts=() text="$2"
-    [[ "${3:-yes}" == "no" ]] && opts+=(--defaultno)
+    local opts=() tbopts=() text="$2" wrapped tmp rc=0
+    if [[ "${3:-yes}" == "no" ]]; then
+        opts+=(--defaultno)
+        tbopts+=(--default-button extra)
+    fi
     if (( $(_text_lines "$text") + 8 > TERM_LINES - 2 )); then
-        msg_box "$1" "$text"
-        text="Continue? (the details were shown on the previous screen)"
+        wrapped="$(_wrap_text "$text")"
+        tmp="$(mktemp)"
+        printf '%s\n' "$wrapped" > "$tmp"
+        clear
+        dlg --title "$1 (UP/DOWN, PgUp/PgDn to scroll)" \
+            --ok-label "Yes" --extra-button --extra-label "No" "${tbopts[@]}" \
+            --textbox "$tmp" "$LOG_H" "$LOG_W" || rc=$?
+        rm -f "$tmp"
+        return $(( rc == 0 ? 0 : 1 ))
     fi
     dlg --title "$1" --no-collapse --cr-wrap "${opts[@]}" \
         --yesno "$text" "$(_text_height "$text")" "$BOX_W"
