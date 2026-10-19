@@ -573,6 +573,13 @@ fi
 DEEPIN_THEME_NAME="DeepinV20-dark"
 DEEPIN_URL="${REPO_RAW_URL}/cursor/${DEEPIN_THEME_NAME}.tar.xz"
 DEEPIN_DEST="/usr/share/icons/${DEEPIN_THEME_NAME}"
+# The archive also contains cursors_scalable/ (SVG cursors for GNOME 51+/Plasma).
+# On the tested GNOME 51.1 that SVG layer makes the pointer fail to show, while
+# the Xcursor layer (cursors/) works -- GNOME 51.1 restored Xcursor support
+# (51.0 did not: there the pointer fell back to Adwaita). So by default the SVG
+# layer is dropped. Set to "yes" to keep it (e.g. for GNOME 51.0 or Plasma, if
+# the SVG layer has been fixed upstream).
+DEEPIN_KEEP_SCALABLE="no"
 
 if [[ -f "${DEEPIN_DEST}/index.theme" ]]; then
     info "Cursor theme '${DEEPIN_THEME_NAME}' is already installed -- skipping download."
@@ -591,6 +598,9 @@ else
             if [[ -n "$DEEPIN_SRC" && -f "$DEEPIN_SRC/index.theme" && -d "$DEEPIN_SRC/cursors" ]]; then
                 install -d -m 755 "$DEEPIN_DEST"
                 cp -r --no-preserve=ownership "$DEEPIN_SRC"/. "$DEEPIN_DEST"/
+                if [[ "$DEEPIN_KEEP_SCALABLE" != "yes" ]]; then
+                    rm -rf "${DEEPIN_DEST}/cursors_scalable"
+                fi
                 chmod -R u=rwX,go=rX "$DEEPIN_DEST"
                 info "${DEEPIN_THEME_NAME} cursor theme installed."
             else
