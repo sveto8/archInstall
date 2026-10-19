@@ -452,7 +452,7 @@ environment; doesn't touch partitioning, LUKS, Snapper, or GRUB.
    [catppuccin/cursors](https://github.com/catppuccin/cursors) (not from this
    repo), unpacked with `bsdtar` into `/usr/share/icons/` and skipped if it is
    already there; a failed download only warns. The **DeepinV20-dark** cursor
-   theme is installed for every desktop too, from `cursor/DeepinV20-dark.tar`
+   theme is installed for every desktop too, from `cursor/DeepinV20-dark.tar.xz`
    **in this repo**, into `/usr/share/icons/DeepinV20-dark/` (system-wide, not
    `~/.icons`). **It is the cursor applied by default** on every desktop;
    Catppuccin Mocha is still installed and can be picked in the cursor settings
@@ -1007,7 +1007,7 @@ to different desktops:
 |------|-----------|---------------|
 | Reversal icon theme | `icons/Reversal-icon-theme-master.tar.xz` **in this repo** ([upstream](https://github.com/yeyushengfan258/Reversal-icon-theme)) | GNOME only |
 | Catppuccin Mocha cursor (`catppuccin-mocha-dark-cursors`) | `releases/latest/download/…zip` of [catppuccin/cursors](https://github.com/catppuccin/cursors) — **not** in this repo | every desktop |
-| DeepinV20-dark cursor | `cursor/DeepinV20-dark.tar` **in this repo** | every desktop (installed **and applied by default**) |
+| DeepinV20-dark cursor | `cursor/DeepinV20-dark.tar.xz` **in this repo** | every desktop (installed **and applied by default**) |
 
 **Reversal.** The archive ships its own `install.sh`, which is run once per
 colour variant to produce the `yellow` (default), `orange`, `black` and `grey`
@@ -1232,7 +1232,7 @@ can run in either order.
   partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
   run stops (installing nothing) if it fails.
 - **`installDE.sh` — DeepinV20-dark cursor** — installed from
-  `cursor/DeepinV20-dark.tar` in this repo, next to Catppuccin Mocha; Deepin is
+  `cursor/DeepinV20-dark.tar.xz` in this repo, next to Catppuccin Mocha; Deepin is
   the cursor applied by default.
 - **`lib.sh` — `ask_yes`** — a confirmation text taller than the screen is now one
   scrollable screen with **Yes / No** buttons instead of a text box with a single
