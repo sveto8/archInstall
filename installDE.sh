@@ -557,7 +557,8 @@ fi
 
 # --- DeepinV20-dark cursor theme (all DEs, installed AND applied by default) ---
 #
-# Hosted in this project's own repo as cursor/DeepinV20-dark.tar. The tar has
+# Hosted in this project's own repo as cursor/DeepinV20-dark.tar.xz (bsdtar
+# detects the xz compression by itself). The archive has
 # NO top-level theme directory: it contains cursors/, cursors_scalable/ and
 # index.theme directly, so it is extracted into a temp dir first and copied to
 # /usr/share/icons/DeepinV20-dark/ (the directory name is the theme id). If the
@@ -570,7 +571,7 @@ fi
 # desktop's cursor settings. If this download fails, the desktop falls back to
 # its built-in cursor (a warning is logged).
 DEEPIN_THEME_NAME="DeepinV20-dark"
-DEEPIN_URL="${REPO_RAW_URL}/cursor/${DEEPIN_THEME_NAME}.tar"
+DEEPIN_URL="${REPO_RAW_URL}/cursor/${DEEPIN_THEME_NAME}.tar.xz"
 DEEPIN_DEST="/usr/share/icons/${DEEPIN_THEME_NAME}"
 
 if [[ -f "${DEEPIN_DEST}/index.theme" ]]; then
@@ -581,8 +582,8 @@ else
 
     DEEPIN_TMP="$(mktemp -d)"
     mkdir -p "$DEEPIN_TMP/x"
-    if curl -fsSL -o "$DEEPIN_TMP/theme.tar" "$DEEPIN_URL"; then
-        if bsdtar -xf "$DEEPIN_TMP/theme.tar" -C "$DEEPIN_TMP/x"; then
+    if curl -fsSL -o "$DEEPIN_TMP/theme.tar.xz" "$DEEPIN_URL"; then
+        if bsdtar -xf "$DEEPIN_TMP/theme.tar.xz" -C "$DEEPIN_TMP/x"; then
             DEEPIN_SRC="$DEEPIN_TMP/x"
             if [[ ! -f "$DEEPIN_SRC/index.theme" ]]; then
                 DEEPIN_SRC="$(find "$DEEPIN_TMP/x" -mindepth 2 -maxdepth 2 -name index.theme -printf '%h\n' | head -n1 || true)"
@@ -593,10 +594,10 @@ else
                 chmod -R u=rwX,go=rX "$DEEPIN_DEST"
                 info "${DEEPIN_THEME_NAME} cursor theme installed."
             else
-                warn "${DEEPIN_THEME_NAME}.tar has an unexpected layout (need index.theme + cursors/) -- not installed."
+                warn "${DEEPIN_THEME_NAME}.tar.xz has an unexpected layout (need index.theme + cursors/) -- not installed."
             fi
         else
-            warn "Could not extract ${DEEPIN_THEME_NAME}.tar."
+            warn "Could not extract ${DEEPIN_THEME_NAME}.tar.xz."
         fi
     else
         warn "Could not download ${DEEPIN_URL}"
