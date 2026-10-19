@@ -1024,7 +1024,12 @@ with each desktop's own mechanism: `gsettings`/dconf for GNOME, `kcminputrc`
 for KDE, `xsettings.xml` for XFCE. The AUR package is not used because
 `installDE.sh` runs as root and `yay`/`makepkg` refuse to.
 
-**DeepinV20-dark cursor.** The tar has no top-level theme directory (it holds
+**DeepinV20-dark cursor.** The archive also carries an SVG layer
+(`cursors_scalable/`); on the tested GNOME 51.1 it made the pointer invisible
+while the Xcursor layer works (51.1 restored Xcursor support; 51.0 had dropped
+it). `installDE.sh` therefore **removes `cursors_scalable/` after extracting**
+(`DEEPIN_KEEP_SCALABLE="no"`; set it to `"yes"` to keep it). On GNOME 51.0 this
+theme would fall back to Adwaita. The tar has no top-level theme directory (it holds
 `cursors/`, `cursors_scalable/` and `index.theme`), so it is extracted to a temp
 dir and copied to `/usr/share/icons/DeepinV20-dark/` (a wrapper directory
 around those items is detected as well; an archive without `index.theme` +
@@ -1231,6 +1236,8 @@ can run in either order.
 - **`installApps.sh` — partial upgrade** — `pacman -Sy` followed by installs is a
   partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
   run stops (installing nothing) if it fails.
+- **`installDE.sh` — Deepin SVG layer dropped** — `cursors_scalable/` is removed after
+  extraction (see the DeepinV20-dark note above).
 - **`installDE.sh` — DeepinV20-dark cursor** — installed from
   `cursor/DeepinV20-dark.tar.xz` in this repo, next to Catppuccin Mocha; Deepin is
   the cursor applied by default.
