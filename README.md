@@ -568,10 +568,11 @@ cancels (nothing is installed on cancel).
    extra lists with their counts and a **System changes** section listing
    everything that is not a package: services to enable, the
    `/etc/nsswitch.conf` and `/etc/pam.d/sudo` edits, the firewall. If the text
-   is taller than the screen it is shown in a scrollable box first and a short
-   yes/no question follows (a plain yes/no box cannot scroll, so its buttons
-   would be pushed off the screen). Answering No (or `ESC`) at any dialog
-   above aborts cleanly
+   is taller than the screen it is shown as ONE scrollable screen whose two
+   buttons are **Yes** and **No** (a plain yes/no box cannot scroll, so its
+   buttons would be pushed off the screen; `ask_yes` in `lib.sh` switches to a
+   scrollable text box with relabelled buttons). Answering No (or `ESC`) at any
+   dialog above aborts cleanly
 5. Installs unattended, with live output in a dialog box (also saved to
    `installApps.log` next to the script when that folder is writable, e.g.
    `~/arch-setup/downloads/installApps.log` when started via the manager;
@@ -1233,6 +1234,10 @@ can run in either order.
 - **`installDE.sh` — DeepinV20-dark cursor** — installed from
   `cursor/DeepinV20-dark.tar` in this repo, next to Catppuccin Mocha; Deepin is
   the cursor applied by default.
+- **`lib.sh` — `ask_yes`** — a confirmation text taller than the screen is now one
+  scrollable screen with **Yes / No** buttons instead of a text box with a single
+  *Exit* button followed by a separate *Continue?* question. Affects every
+  script's confirmation dialogs.
 - **`installApps.sh` — HP discovery under ufw** — added the ufw rules described under
   *Things to know* (found while testing: HP Scan only found the printer with ufw off).
 - README: default hostname is `blackbox`, installApps log location, state-aware
