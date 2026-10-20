@@ -990,6 +990,13 @@ set -Eeuo pipefail
 
 systemctl enable NetworkManager
 
+# Network time sync. Arch does not enable any NTP client by default, so the
+# desktop's "Automatic Date & Time" switch stays off and the clock drifts.
+# systemd-timesyncd ships with systemd; enabling the unit is enough (timedated
+# then reports NTP=yes, which is what GNOME Settings shows). The hardware clock
+# choice (UTC / local) above is independent of this.
+systemctl enable systemd-timesyncd
+
 if [[ "$ENABLE_WOL" == "yes" ]]; then
     cat > /etc/systemd/system/wol@.service <<'WOL_EOF'
 [Unit]
