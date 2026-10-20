@@ -248,7 +248,9 @@ Then, unattended:
    `hr_HR.UTF-8`; `LOCALE` is the primary one and is always generated),
    keymap, hardware-clock mode (a missing RTC in a VM is a warning, not an
    error), `/etc/hosts`, enables
-   NetworkManager, zram swap, a templated `wol@.service`
+   NetworkManager, `systemd-timesyncd` (NTP; the *hardware clock* dialog
+   only chooses UTC vs local for the RTC and is independent of NTP), zram swap,
+   a templated `wol@.service`
    (`ethtool -s %i wol g`, re-applied on **every** boot because most NIC
    drivers reset it) enabled for the detected interface, a minimal
    systemd + `sd-encrypt` `mkinitcpio.conf`, GRUB install + config (the
@@ -1236,6 +1238,10 @@ can run in either order.
 - **`installApps.sh` — partial upgrade** — `pacman -Sy` followed by installs is a
   partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
   run stops (installing nothing) if it fails.
+- **`archInstall.sh` — NTP** — nothing enabled a time-sync service, so GNOME's
+  *Automatic Date & Time* was off. `systemd-timesyncd` is now enabled in the new
+  system. *Automatic Time Zone* stays off on purpose (it needs location services
+  and would override the timezone chosen in the installer).
 - **`installDE.sh` — Deepin SVG layer dropped** — `cursors_scalable/` is removed after
   extraction (see the DeepinV20-dark note above).
 - **`installDE.sh` — DeepinV20-dark cursor** — installed from
