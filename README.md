@@ -248,7 +248,8 @@ Then, unattended:
    `hr_HR.UTF-8`; `LOCALE` is the primary one and is always generated),
    keymap, hardware-clock mode (a missing RTC in a VM is a warning, not an
    error), `/etc/hosts`, enables
-   NetworkManager, `systemd-timesyncd` (NTP; the *hardware clock* dialog
+   NetworkManager, `pacman.conf` tweaks (`VerbosePkgLists`, `ILoveCandy`),
+   `systemd-timesyncd` (NTP; the *hardware clock* dialog
    only chooses UTC vs local for the RTC and is independent of NTP), zram swap,
    a templated `wol@.service`
    (`ethtool -s %i wol g`, re-applied on **every** boot because most NIC
@@ -1238,6 +1239,8 @@ can run in either order.
 - **`installApps.sh` — partial upgrade** — `pacman -Sy` followed by installs is a
   partial upgrade. It is now `pacman -Syu`, listed in the confirmation, and the
   run stops (installing nothing) if it fails.
+- **`archInstall.sh` — pacman.conf** — `VerbosePkgLists` is uncommented and
+  `ILoveCandy` added to `[options]` on the new system (`Color` is left as it is).
 - **`archInstall.sh` — NTP** — nothing enabled a time-sync service, so GNOME's
   *Automatic Date & Time* was off. `systemd-timesyncd` is now enabled in the new
   system. *Automatic Time Zone* stays off on purpose (it needs location services
