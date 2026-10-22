@@ -990,6 +990,11 @@ set -Eeuo pipefail
 
 systemctl enable NetworkManager
 
+# pacman cosmetics: verbose package lists (name + version + size in a table)
+# and the "ILoveCandy" Pac-Man progress bar. Both idempotent.
+sed -i -E 's/^#[[:space:]]*(VerbosePkgLists)/\1/' /etc/pacman.conf
+grep -q '^ILoveCandy' /etc/pacman.conf || sed -i '/^\[options\]/a ILoveCandy' /etc/pacman.conf
+
 # Network time sync. Arch does not enable any NTP client by default, so the
 # desktop's "Automatic Date & Time" switch stays off and the clock drifts.
 # systemd-timesyncd ships with systemd; enabling the unit is enough (timedated
